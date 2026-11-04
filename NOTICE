@@ -1,0 +1,8 @@
+PACE
+Copyright (c) 2026 PACE contributors
+
+PACE is distributed under the Apache License, Version 2.0.
+
+PACE includes code derived from nl-proof-codex-agent and Conjecturer,
+reorganized and modified for PACE. The inherited MIT copyright and
+permission notices are retained in LICENSES/MIT-inherited.txt.

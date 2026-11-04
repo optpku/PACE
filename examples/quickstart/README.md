@@ -1,0 +1,18 @@
+# Quickstart: parity of a square
+
+[Examples](../README.md)
+
+Input: [EVEN_SQUARE.md](EVEN_SQUARE.md).
+
+Complete [installation and environment checks](../../docs/installation.md#4-verify-the-installation-without-inference) first, including `pace doctor`. Both modes finish with automatic report and paper delivery; install PDF tools and run `pace doctor --pdf`. Run the following command from the `main` repository root with the PACE environment active.
+
+```bash
+pace run --problem examples/quickstart/EVEN_SQUARE.md --problem-id even-square \
+  --output outputs --mode proof \
+  --model gpt-6.1-sol --reasoning-effort high \
+  --web-search-mode on
+```
+
+This command calls the configured model. Use a model/effort pair available to your account. It runs one initial Survey followed by direct proving and independent verification, without Director or SMI. Writing is explicitly requested after research or proof. Read `outputs/even-square/work/turn001/outcome.md` and `final_report.json` in the same turn directory, then the linked verification records. The Web application supplies reader briefs and downloads. A small example is not a guarantee of a particular model's success or cost.
+
+For continuation, recovery, and batch execution of the same input, see the [user guide](../../docs/user-guide.md).

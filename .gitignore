@@ -1,0 +1,45 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+
+# Internal debugging material is not part of the public source edition.
+/tests/
+/AGENTS.md
+/src/resources/skills/reasatlas-query/
+
+# Local execution records and unpublished exports.
+outputs/
+exports/
+logs/
+state/
+runs/
+run_records/
+.codex_calls/
+.nl-proof-runs/
+*.log
+screenlog.*
+profile.json
+
+# User configuration and credentials; the templates contain no secrets.
+.env
+.env.*
+config.local.json
+credentials*.json
+*service-account*.json
+api-config*.json
+api_config*.json
+*.pem
+*.key
+
+# Public results must be deliberately curated, not copied from test fixtures.
+# docs/results contains the curated case pages.

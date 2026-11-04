@@ -1,0 +1,39 @@
+{
+  "schema_version": "pace_batch/v1",
+  "dataset": {
+    "name": "PACE_quickstart",
+    "problem_dir": ".",
+    "problem_glob": "EVEN_SQUARE.md",
+    "expected_problem_count": 1,
+    "problem_ids": [
+      "EVEN_SQUARE"
+    ]
+  },
+  "codex": {
+    "cli_path": "codex",
+    "authentication_mode": "existing_codex_login",
+    "base_url": "",
+    "api_key": "",
+    "provider_name": "pace",
+    "wire_api": "responses",
+    "requires_openai_auth": false,
+    "model": "gpt-6.1-sol",
+    "reasoning_effort": "high"
+  },
+  "pipeline": {
+    "provider": "codex",
+    "mode": "proof",
+    "web_search_mode": "on",
+    "profile": true,
+    "timeout_seconds": 7200,
+    "transport_max_retries": 2
+  },
+  "batch": {
+    "output_dir": "outputs",
+    "log_dir": "logs",
+    "state_dir": "state",
+    "parallel": 1,
+    "resume_incomplete": true,
+    "skip_terminal": true
+  }
+}

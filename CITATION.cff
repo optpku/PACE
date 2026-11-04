@@ -1,0 +1,8 @@
+cff-version: 1.2.0
+type: software
+title: PACE
+version: 0.1.0
+message: If you use PACE in your research, please cite this software.
+authors:
+  - name: PACE contributors
+license: Apache-2.0

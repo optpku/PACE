@@ -1,0 +1,11 @@
+{
+  "schema_version": "pace_batch_suite/v1",
+  "description": "Run PACE on the single included parity example.",
+  "problem_id_pattern": "[A-Z][A-Z0-9_]*",
+  "problem_suffixes": [
+    ".md"
+  ],
+  "example_ids": [
+    "EVEN_SQUARE"
+  ]
+}
