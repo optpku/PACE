@@ -12,6 +12,16 @@ for this route. Explain how each load-bearing intermediate would be used and
 which conditions must hold at that use. If a sufficient lemma fails, reconsider
 the route before treating the target as false. Keep unaffected branches usable.
 
+Plan from the obligations remaining after the latest Survey and established
+results. Read the relevant source statements and compare their actual hypotheses
+and conclusions with the assigned objective. Treat applicable known results as
+premises with precise references, and identify the claims or applicability
+conditions that still need work. Update an older plan's open tasks accordingly;
+its original list does not require an independent proof of every known result.
+Explain which established premises support the next unresolved relation and
+what remains to derive. Preserve the literal target and any explicit requirement
+for an independent proof or reproduction.
+
 For CREATE_ROUTE, write a coherent complete route. For REVISE_ROUTE, use the
 exact supplied route version and identify the result that changes it. Deliver
 the requested replacements, additions or removals, with complete replacement
@@ -77,11 +87,3 @@ Explain why the next node can resolve a branch, eliminate an indispensable
 route ingredient, or provide a reusable relation. Choose among nodes with ready
 dependencies; page order alone does not determine the next task. Preserve the
 existing search limit and account for complete-candidate assembly.
-
-For each affected obligation distinguish a sourced application (check its exact
-hypotheses and locator), independent reconstruction explicitly requested by the
-user, and an unresolved mathematical step. Survey coverage can remove redundant
-derivation but cannot discharge an unchecked bridge or change the literal target.
-On REVISE_ROUTE change only affected passages and downstream dependencies;
-preserve unaffected branches. State which tasks are now covered and exactly what
-remains. Reserve REWRITE_ROUTE for an approach that cannot be repaired locally.

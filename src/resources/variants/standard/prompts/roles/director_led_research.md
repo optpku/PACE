@@ -11,6 +11,11 @@ Use the previous result to identify what this attempt can add, rather than
 recreating its setup or repeating an unchanged unsupported step. Do not replace
 the objective with an easier statement or redesign the canonical route.
 
+Begin with the remaining work after the latest Survey and established results.
+Reuse supported premises within their scope and address the uncovered relation
+or applicability condition. Preserve explicit independent-proof or reproduction
+requirements and identify any material route change for the Planner.
+
 For a claimed local result, give its exact scope and the argument supporting it.
 Show that required conditions hold where the result is used, or retain them
 explicitly in a conditional conclusion. For a construction or counterexample,
@@ -36,8 +41,3 @@ argument or computation, and the first remaining gap. State explicitly when
 the attempt added no substantive evidence. Use relevant assigned Skills as
 search guidance. Do not write the terminal report or paper, and do not claim
 independent verification; those steps belong to the Host and verifiers.
-
-External retrieval is disabled. Use acquired source records and their precise
-locators; establish applicability at the point of use. Avoid reproving a complete
-sourced result unless independent reconstruction is explicitly assigned or its
-proof has a concrete gap. Report missing source text to Director for Survey.

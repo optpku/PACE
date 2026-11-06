@@ -115,15 +115,6 @@ def resume_existing_run(
             return workspace.root / artifacts[key]
         raise RecoveryError("continuation_hook_unavailable", "the requested writing task needs a pipeline continuation")
 
-    if terminal.is_file():
-        from pace.reporting.terminal_delivery import delivery_state
-        report = _read_json_object(terminal)
-        pending = delivery_state(workspace.root).get("status") != "completed"
-        if report.get("run_status") == "completed" and pending:
-            if continue_pipeline is None:
-                raise RecoveryError("continuation_hook_unavailable", "terminal writing needs a pipeline continuation")
-            return continue_pipeline(RecoveryRequest(workspace, report, "TERMINAL_DELIVERY"))
-
     proof_state = workspace.path(work_ref(workspace.root, "state/proof_state.json"))
     if proof_state.is_file():
         state = _read_json_object(proof_state)
@@ -267,14 +258,13 @@ def _project_terminal_result(
     from pace.runtime.output.events import read_events
     profile = workspace.path(work_ref(workspace.root, 'events.jsonl'))
     profiled = any(row["event_kind"] == "PROFILE_SPAN" for row in read_events(workspace.root))
-    from pace.reporting.writing import with_writing_outputs
-    return with_writing_outputs(envelope.project(
+    return envelope.project(
         run_root=workspace.root,
         default_problem_id=workspace.problem_id,
         resolve_artifact=resolve_artifact,
         profile_file=profile if profiled else None,
         final_report_file=workspace.path(work_ref(workspace.root, 'final_report.json')),
-    ))
+    )
 
 
 def _validate_terminal_report_binding(

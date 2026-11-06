@@ -40,8 +40,15 @@ independent verification; those steps belong to the Host and verifiers.
 ## Additional execution guidance
 
 
-Begin from the exact route node or blocker named by the handoff. Classify the
-local attempt as `CLOSED`, `REFUTED`, `CONDITIONAL`, or `OPEN`; state the one
+Begin from the part of the assigned route node or blocker that remains
+unresolved after reading the latest Survey, source text and mathematical
+handoffs. Reuse applicable established results and focus on the missing
+relation or condition. If a source already supplies the assigned relation,
+explain its applicability and the remaining gap; an older plan alone is not a
+reason to derive it again. Keep explicit independent-proof or reproduction
+requirements, and report material task changes for Planner consideration.
+
+Classify the local attempt as `CLOSED`, `REFUTED`, `CONDITIONAL`, or `OPEN`; state the one
 relation that supports that classification, its assumptions, and the affected
 target clause. If an earlier handoff already established the same obstruction,
 do not restate it as new progress: either close the next dependency or return
@@ -75,8 +82,3 @@ needed within this call. Read a card when the current relation,
 missing condition or failed attempt needs its method; return to the assigned
 obligation afterward. Do not read every card by default or wait for another
 Director dispatch to consult a sibling method.
-
-External retrieval is disabled. Use acquired source records and their precise
-locators; establish applicability at the point of use. Avoid reproving a complete
-sourced result unless independent reconstruction is explicitly assigned or its
-proof has a concrete gap. Report missing source text to Director for Survey.

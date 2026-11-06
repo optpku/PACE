@@ -71,7 +71,7 @@ def _verify_candidate(
 ) -> dict[str, str]:
     """Persist independent reports once and return references to their outcome."""
 
-    state_dir = f"{work_ref(root)}/stages/{round_index:04d}/verification"
+    state_dir = f"{work_ref(root)}/round{round_index}/verification"
     verification_ref = f"{state_dir}/verification_report.json"
     workspace = RunWorkspace(root=root, problem_id=root.name)
     proof_id = ""
@@ -476,7 +476,7 @@ def _existing_ref(
 
 
 def _state_dir(root: Path, context: Mapping[str, Any], result_ref: str, round_index: int) -> str:
-    expected = f"{work_ref(root, 'stages')}/{int(round_index):04d}/verification"
+    expected = f"{work_ref(root)}/round{int(round_index)}/verification"
     explicit = _string(
         context.get("verification_dir") or context.get("state_dir") or ""
     ).replace("\\", "/")

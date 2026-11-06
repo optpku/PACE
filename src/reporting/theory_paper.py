@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 import logging
-from pace.reporting.editorial import review_draft
+from pace.runtime.math_format import require_math_format
 import shutil
 from pathlib import Path
 from typing import Any
@@ -179,14 +179,11 @@ class TheoryPaperWriter:
                     status="completed",
                     publication_refs=paper_artifacts(self.workdir, snapshots=True),
                 )
-            return outline or paper_build_status(self.workdir) == "COMPLETE"
+            return True
         state_ref = (
             paper_outline_state_ref(self.workdir) if outline else paper_state_ref(self.workdir)
         )
         state = read_state(self.workdir, state_ref)
-        if state.get("draft_ref"):
-            self._publish_draft(state, outline=outline)
-            return outline or paper_build_status(self.workdir) == "COMPLETE"
         attempt = self._attempt("outline" if outline else "paper")
         name = "theory_paper_outline" if outline else "theory_paper_writer"
         output_ref = f"{attempt}/paper_outline.md" if outline else f"{attempt}/paper/main.tex"
@@ -219,7 +216,7 @@ class TheoryPaperWriter:
         if outline:
             task += "Deliver only the paper outline. Use Markdown links relative to the exact output file.\n"
         else:
-            task += f"Selected outline snapshot (read-only): `{state['outline_ref']}`.\nWrite the whole paper and its complete supplied proofs in `{Path(output_ref).parent}`. Keep main.tex and all required assets together using relative paths. Include bibliography files when cited; an uncited paper needs no bibliography file. The Host compiles with XeLaTeX and BibTeX. For Chinese use ctex with the installed Fandol fonts. Keep compilation logs and PDF text exports outside the delivered source directory. Complete the initial manuscript in this author task. The Host will independently review it and schedule bounded revisions if needed.\nNeurIPS template: `{resources}/templates/neurips2026/neurips_2026.sty`; use this NeurIPS preprint style and copy it unchanged into the output directory. Do not generate a checklist or submission questionnaire.\nYou may compile and fix concrete formatting errors within this task. The Host builds the delivered source and records build status separately from source delivery.\n"
+            task += f"Selected outline snapshot (read-only): `{state['outline_ref']}`.\nWrite the whole paper and its complete supplied proofs in `{Path(output_ref).parent}`. Keep main.tex and all required assets together using relative paths. Include bibliography files when cited; an uncited paper needs no bibliography file. The Host compiles with XeLaTeX and BibTeX. For Chinese use ctex with the installed Fandol fonts. Keep compilation logs and PDF text exports outside the delivered source directory. Complete all prose in this single author task; no independent editorial review or revision loop.\nNeurIPS template: `{resources}/templates/neurips2026/neurips_2026.sty`; use this NeurIPS preprint style and copy it unchanged into the output directory. Do not generate a checklist or submission questionnaire.\nYou may compile and fix concrete formatting errors within this task. The Host builds the delivered source and records build status separately from source delivery.\n"
         publish_progress(self.workdir, task_id=task_id, stage="reporter", status="started")
         handle = None
         try:
@@ -261,16 +258,21 @@ class TheoryPaperWriter:
             if handle.transport_status != "SUCCESS":
                 raise ValueError(f"Paper transport failed: {handle.error_code}")
             source = self.workdir / output_ref
-            if not source.read_text(encoding="utf-8").strip():
+            body = source.read_text(encoding="utf-8")
+            require_math_format(body, markdown=outline)
+            if not body.strip():
                 raise ValueError("Paper output file is empty")
-            state.update(draft_ref=output_ref, draft_inputs=list(refs))
+            if outline:
+                destination = self.workdir / PAPER_OUTLINE_REF
+                _write_text_atomic(destination, relocate_links(body, source, destination))
+                state["outline_ref"] = output_ref
+                publications = {"paper_outline": output_ref}
+            else:
+                self._build_delivery(output_ref, state)
             _write_json_atomic(self.workdir / state_ref, state)
-            accepted_handle, handle = handle, None
-            commit_artifact_call_success(accepted_handle, workdir=self.workdir, artifact_ref=output_ref)
-            self._publish_draft(state, outline=outline)
-            publications = (paper_outline_artifacts(self.workdir, snapshots=True) if outline
-                            else paper_artifacts(self.workdir, snapshots=True))
-
+            commit_artifact_call_success(handle, workdir=self.workdir, artifact_ref=output_ref)
+            if not outline:
+                publications = paper_artifacts(self.workdir, snapshots=True)
         except Exception as exc:
             logger.warning("Theory paper writing failed", exc_info=True)
             diagnostic = f"{attempt}/failure.json"
@@ -298,25 +300,7 @@ class TheoryPaperWriter:
             status="completed",
             publication_refs=publications,
         )
-        return outline or paper_build_status(self.workdir) == "COMPLETE"
-
-    def _publish_draft(self, state, *, outline):
-        state_ref = paper_outline_state_ref(self.workdir) if outline else paper_state_ref(self.workdir)
-        ref = review_draft(llm=self.llm, root=self.workdir, state=state,
-                           state_ref=state_ref, source_ref=state["draft_ref"],
-                           input_refs=tuple(state["draft_inputs"]), markdown=outline,
-                           independent=not outline)
-        if outline:
-            source = self.workdir / ref
-            destination = self.workdir / PAPER_OUTLINE_REF
-            _write_text_atomic(destination, relocate_links(source.read_text(encoding="utf-8"), source, destination))
-            state["outline_ref"] = ref
-        else:
-            # Commit accepted source before the optional PDF toolchain runs.
-            state["paper_ref"] = ref
-            _write_json_atomic(self.workdir / state_ref, state)
-            self._build_delivery(ref, state)
-        _write_json_atomic(self.workdir / state_ref, state)
+        return True
 
     def _build_delivery(self, source_ref: str, state: dict[str, Any]) -> None:
         directory = (self.workdir / source_ref).parent

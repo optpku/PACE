@@ -412,7 +412,6 @@ class CodexLLM:
         resolved = workdir.resolve()
         call_id = str(ledger_context["call_id"])
         role = str(ledger_context.get("role") or "model_call")
-        search_enabled = self.web_search and role == "SURVEY"
         stage = str(ledger_context.get("stage") or call_name)
         record_ref = str(ledger_context["call_ref"])
         invocation_dir = call_directory(resolved, record_ref)
@@ -423,10 +422,10 @@ class CodexLLM:
             schema_file = invocation_dir / "output_schema.json"
             _write_json_atomic(schema_file, output_schema)
         if ledger_context.get("inline_task") is True:
-            instruction = _search_instruction(search_enabled) + prompt
+            instruction = _search_instruction(self.web_search) + prompt
         else:
             instruction = _build_file_driven_cli_instruction(
-                web_search=search_enabled,
+                web_search=self.web_search,
                 call_name=call_name,
                 workdir=resolved,
                 prompt_file=prompt_file,
@@ -489,7 +488,7 @@ class CodexLLM:
             cmd.extend(
                 [
                     "-c",
-                    'web_search="live"' if search_enabled else 'web_search="disabled"',
+                    'web_search="live"' if self.web_search else 'web_search="disabled"',
                 ]
             )
             if self.reasoning_effort == "none":
@@ -709,7 +708,7 @@ class CodexLLM:
                 "request_max_retries": 8,
                 "stream_max_retries": 20,
                 "outer_max_retries": effective_max_retries,
-                "web_search": search_enabled,
+                "web_search": self.web_search,
             }
             _write_json_atomic(policy_path, policy_result)
             record_transport_attempt_finished(
@@ -1494,10 +1493,7 @@ def _search_instruction(enabled: bool) -> str:
         return (
             "External source retrieval is disabled for this call. Use the supplied workspace "
             "materials; do not acquire external sources using web tools, shell commands, or "
-            "retrieval clients. This restriction is role-local: Survey has a separate Host-controlled "
-            "retrieval setting. Do not infer that Survey is unavailable from your own restriction. "
-            "In research mode, request missing sources through the Director; in proof mode, use "
-            "the initial Survey and identify any remaining source gap.\n\n"
+            "retrieval clients.\n\n"
         )
     return (
         "External Search is available for this call. Use it when needed to check sources "
@@ -1547,7 +1543,7 @@ def _build_file_driven_cli_instruction(
         base += (
             f"Read `{prompt_file}` for your task. The current exploration is `{turn_dir}/`. "
             f"The user request is `{turn_dir}/input/request.md`; the current problem is "
-            f"`{turn_dir}/input/problem.md`; committed task results are under `{turn_dir}/stages/`.\n\n"
+            f"`{turn_dir}/input/problem.md`; committed task results are under `{turn_dir}/round*/`.\n\n"
             "You may list and search this problem directory and read relevant existing files on demand, "
             "including earlier work/turn*/ explorations and results/findings/ for this same problem. "
             "Do not read global Codex memories, unrelated problem workspaces, developer test records, "

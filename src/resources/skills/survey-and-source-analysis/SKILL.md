@@ -23,11 +23,15 @@ quantifiers, desired conclusion, and already acquired sources.
    and constant dependencies. Distinguish direct applicability, a missing
    bridge, a useful analogy, and an actual contradiction.
 5. Save the acquired material and source report in the assigned locations.
-   Identify the strongest supported claim and the next unresolved question.
+   Preserve the actual bibliographic identity and version; keep unknown details
+   explicit. Explain what the sources cover and the next unresolved question.
 
-Every role may retrieve external sources when the run permits it and use this
-analysis method within its assigned task. If access fails, preserve the source
-lead and the missing passage; do not infer novelty or falsity from failed retrieval.
+Use this analysis method within the assigned task. External retrieval requires
+both the Host's permission and the role's authority: Survey acquires missing
+external sources during mathematical research; other mathematical roles request
+that source work through Survey. Manuscript roles follow their writing task's
+limits on citation checks. If access fails, preserve the source lead and missing
+passage; do not infer novelty or falsity from failed retrieval.
 
 ## Output and handoff
 

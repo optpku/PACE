@@ -967,7 +967,7 @@ class SmiPipeline:
                     "For local example or citation changes, audit the delta and its dependency impact. "
                     "If assumptions, core claims, derivation, or dependencies changed, perform a full review. You decide the mathematical scope, not the Host."
                 ),
-                base_dir=state.root / "mechanisms" / mechanism_id / "critic",
+                base_dir=state.root / mechanism_id / "critic",
                 routing_context={"mechanism_id": mechanism_id},
                 skill_card_refs=(_MECHANISM_INTERFACE_CARD,)
                 if previous_review_refs
@@ -1397,7 +1397,7 @@ class SmiPipeline:
         children: list[_Candidate] = []
         for child_ref in child_refs:
             child = self._new_candidate(
-                artifact_root=state.root.parents[1],
+                artifact_root=state.root.parent,
                 lineage=state.lineage,
                 split_generation=state.split_generation + 1,
             )
@@ -1417,7 +1417,7 @@ class SmiPipeline:
     ) -> list[dict[str, Any]]:
         if len(open_tasks) == 1 and not prior_accepted_refs:
             return list(open_tasks)
-        call_dir = artifact_root / "portfolio" / "semantic_dedup" / "call_01"
+        call_dir = artifact_root / "semantic_dedup"
         result = self.phase_runner.run(
             round_index=self.round_index,
             phase="SEMANTIC_DEDUP",
@@ -1639,7 +1639,7 @@ class SmiPipeline:
             round_index=self.round_index,
             phase=phase,
             workdir=workdir,
-            call_dir=phase_dir / f"call_{ordinal:02d}",
+            call_dir=phase_dir if ordinal == 1 else phase_dir.with_name(f"{phase_dir.name}_{ordinal:02d}"),
             target_contract_id=target_contract_id,
             input_refs=input_refs,
             prompt_seed=prompt_seed,
@@ -1659,7 +1659,7 @@ class SmiPipeline:
         candidate_id = f"candidate_{self._candidate_ordinal:02d}"
         return _Candidate(
             candidate_id=candidate_id,
-            root=artifact_root / "candidates" / candidate_id,
+            root=artifact_root / candidate_id,
             lineage=lineage,
             split_generation=split_generation,
         )
@@ -1670,7 +1670,7 @@ class SmiPipeline:
         state: _Candidate,
         exc: Exception,
     ) -> str:
-        path = state.root / "failures" / "call_01.json"
+        path = state.root / "failure.json"
         _write_json(path, _failure_payload(exc))
         return _relative_ref(path, workdir)
 
@@ -1680,7 +1680,7 @@ class SmiPipeline:
         artifact_root: Path,
         exc: Exception,
     ) -> str:
-        path = artifact_root / "portfolio" / "failures" / "call_01.json"
+        path = artifact_root / "portfolio_failure.json"
         _write_json(path, _failure_payload(exc))
         return _relative_ref(path, workdir)
 

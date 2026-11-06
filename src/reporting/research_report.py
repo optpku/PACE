@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 import logging
-from pace.reporting.editorial import review_draft
+from pace.runtime.math_format import require_math_format
 from pathlib import Path
 from typing import Any
 from pace.reporting.writing import read_state
@@ -107,9 +107,6 @@ class ResearchReportOutliner:
         if not read_state(self.workdir, outline_state_ref(self.workdir)):
             self.request("根据原始问题、用户历次输入及已有研究，为完整研究报告生成提纲。")
         state = read_state(self.workdir, outline_state_ref(self.workdir))
-        if state.get("draft_ref"):
-            self._publish_draft(state)
-            return True
         attempt = self._attempt()
         output_ref = f"{attempt}/outline.md"
         task_id = f"reporter-artifacts-outline-{Path(attempt).name}"
@@ -182,14 +179,15 @@ class ResearchReportOutliner:
             if handle.transport_status != "SUCCESS":
                 raise ValueError(f"Outline transport failed: {handle.error_code}")
             source = self.workdir / output_ref
-            if not source.read_text(encoding="utf-8").strip():
-                raise ValueError("Writing output is empty")
-            state.update(draft_ref=output_ref, draft_inputs=list(refs))
+            body = source.read_text(encoding="utf-8")
+            require_math_format(body)
+            if not body.strip():
+                raise ValueError("Outline file is empty")
+            destination = self.workdir / RESEARCH_OUTLINE_REF
+            _write_text_atomic(destination, relocate_links(body, source, destination))
+            state["outline_ref"] = output_ref
             _write_json_atomic(self.workdir / outline_state_ref(self.workdir), state)
-            accepted_handle, handle = handle, None
-            commit_artifact_call_success(accepted_handle, workdir=self.workdir, artifact_ref=output_ref)
-            self._publish_draft(state)
-
+            commit_artifact_call_success(handle, workdir=self.workdir, artifact_ref=output_ref)
         except Exception as exc:
             logger.warning("Research outline generation failed", exc_info=True)
             diagnostic = f"{attempt}/failure.json"
@@ -225,18 +223,6 @@ class ResearchReportOutliner:
             publication_refs={"research_outline": output_ref},
         )
         return True
-
-
-    def _publish_draft(self, state):
-        ref = review_draft(llm=self.llm, root=self.workdir, state=state,
-                           state_ref=outline_state_ref(self.workdir), source_ref=state["draft_ref"],
-                           input_refs=tuple(state["draft_inputs"]), markdown=True,
-                           independent=False)
-        source = self.workdir / ref
-        destination = self.workdir / RESEARCH_OUTLINE_REF
-        _write_text_atomic(destination, relocate_links(source.read_text(encoding="utf-8"), source, destination))
-        state["outline_ref"] = ref
-        _write_json_atomic(self.workdir / outline_state_ref(self.workdir), state)
 
 
 class ResearchReportWriter:
@@ -312,9 +298,6 @@ class ResearchReportWriter:
         if report_artifacts(self.workdir):
             return True
         state = report_request(self.workdir)
-        if state.get("draft_ref"):
-            self._publish_draft(state)
-            return True
         attempt = self._attempt()
         output_ref = f"{attempt}/research_report.md"
         task_id = f"reporter-artifacts-report-{Path(attempt).name}"
@@ -386,14 +369,15 @@ class ResearchReportWriter:
             if handle.transport_status != "SUCCESS":
                 raise ValueError(f"Report transport failed: {handle.error_code}")
             source = self.workdir / output_ref
-            if not source.read_text(encoding="utf-8").strip():
-                raise ValueError("Writing output is empty")
-            state.update(draft_ref=output_ref, draft_inputs=list(refs))
+            body = source.read_text(encoding="utf-8")
+            require_math_format(body)
+            if not body.strip():
+                raise ValueError("Research report file is empty")
+            destination = self.workdir / RESEARCH_REPORT_REF
+            _write_text_atomic(destination, relocate_links(body, source, destination))
+            state["report_ref"] = output_ref
             _write_json_atomic(self.workdir / report_state_ref(self.workdir), state)
-            accepted_handle, handle = handle, None
-            commit_artifact_call_success(accepted_handle, workdir=self.workdir, artifact_ref=output_ref)
-            self._publish_draft(state)
-
+            commit_artifact_call_success(handle, workdir=self.workdir, artifact_ref=output_ref)
         except Exception as exc:
             logger.warning("Research report generation failed", exc_info=True)
             diagnostic = f"{attempt}/failure.json"
@@ -437,14 +421,3 @@ class ResearchReportWriter:
             },
         )
         return True
-
-    def _publish_draft(self, state):
-        ref = review_draft(llm=self.llm, root=self.workdir, state=state,
-                           state_ref=report_state_ref(self.workdir), source_ref=state["draft_ref"],
-                           input_refs=tuple(state["draft_inputs"]), markdown=True,
-                           independent=True)
-        source = self.workdir / ref
-        destination = self.workdir / RESEARCH_REPORT_REF
-        _write_text_atomic(destination, relocate_links(source.read_text(encoding="utf-8"), source, destination))
-        state["report_ref"] = ref
-        _write_json_atomic(self.workdir / report_state_ref(self.workdir), state)

@@ -192,7 +192,7 @@ class ProofPipeline:
                 provider=self.config.provider,
                 model=self.config.model,
                 reasoning_effort=self.config.reasoning_effort,
-                web_search=False,
+                web_search=self.config.web_search_mode != "off",
                 timeout_seconds=self.config.timeout_seconds,
             )
         self._core_llm_instance.profile = self.config.profile
@@ -218,7 +218,7 @@ class ProofPipeline:
                 reasoning_effort="none"
                 if self.config.reasoning_effort == "none"
                 else "low",
-                web_search=False,
+                web_search=self.config.web_search_mode != "off",
                 timeout_seconds=self.config.timeout_seconds,
             )
         self._director_llm_instance.profile = self.config.profile
@@ -337,20 +337,11 @@ class ProofPipeline:
                         ws, problem, allow_research_continuation=allow_research_continuation,
                         research_context=research_context,
                     )
-                    result = self._terminal_writing(ws, result)
             except BaseException:
                 ws.finish_turn("interrupted")
                 raise
             ws.finish_turn("completed")
             return result
-
-    def _terminal_writing(self, ws, result):
-        if isinstance(result, PipelineResult) and result.run_status == "completed":
-            from pace.reporting.terminal_delivery import complete_terminal_delivery
-            complete_terminal_delivery(self, ws)
-            from pace.reporting.writing import with_writing_outputs
-            return with_writing_outputs(result)
-        return result
 
     def _outliner(self, ws: RunWorkspace) -> ResearchReportOutliner:
         return ResearchReportOutliner(
@@ -512,7 +503,7 @@ class ProofPipeline:
                         on_mode_selected=select_mode,
                     )
                 ws.write_json(
-                    ws.work_ref("stages/orientation/problem_orientation_result.json"),
+                    ws.work_ref("orientation/problem_orientation_result.json"),
                     orientation,
                 )
                 if (
@@ -648,7 +639,6 @@ class ProofPipeline:
                     result = self._resume(
                         workspace, checkpoint, continuation_action, **kwargs
                     )
-                    result = self._terminal_writing(workspace, result)
             except BaseException:
                 workspace.finish_turn("interrupted")
                 raise
@@ -664,10 +654,6 @@ class ProofPipeline:
         allow_research_continuation: bool = True,
         finalize: bool = False,
     ) -> PipelineResult:
-        if continuation_action == "TERMINAL_DELIVERY":
-            from pace.orchestrator.recovery import _project_terminal_result
-            report = json.loads(workspace.path(workspace.work_ref("final_report.json")).read_text())
-            return _project_terminal_result(workspace, report)
         if finalize and continuation_action in {"WRITING", "PROOF", "SETUP"}:
             from pace.orchestrator.recovery import RecoveryError
 
@@ -958,7 +944,7 @@ class ProofPipeline:
                 target_contract_ref=ws.work_ref("input/target_contract.json"),
                 problem_brief_ref=orientation_result.get("problem_brief_ref", ""),
                 orientation_ref=ws.work_ref(
-                    "stages/orientation/problem_orientation_result.json"
+                    "orientation/problem_orientation_result.json"
                 ),
             ),
         )
@@ -1019,9 +1005,7 @@ class ProofPipeline:
                 input_refs=kwargs.get("input_refs") or (),
                 control_context=(
                     str(kwargs.get("control_context") or "")
-                    + "\nExternal retrieval for Director: disabled. Survey retrieval: "
-                    + ("enabled" if self.config.web_search_mode == "on" else "disabled")
-                    + ". Role-local restrictions do not disable Survey.\nRemaining shared proof states: "
+                    + "\nRemaining shared proof states: "
                     + str(kwargs["proof_states_remaining"])
                 ),
                 host_metadata={
@@ -1088,7 +1072,7 @@ class ProofPipeline:
         state["failure_refs"].append(ref)
         state["last_failure_ref"] = ref
         save_setup(ws.root, state)
-        note = ws.work_ref("stages/orientation/setup_failure.md")
+        note = ws.work_ref("orientation/setup_failure.md")
         ws.write_text_atomic(
             note,
             "# Initialization interrupted\n\n"

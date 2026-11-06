@@ -69,7 +69,7 @@ PACE does not load `.env` automatically. Export optional shell variables as desc
 
 ## 3. Prepare paper PDF tools when needed
 
-Automatic terminal paper delivery and explicit `paper` tasks require `xelatex`, `bibtex`, and `pdffonts` on PATH. Install a [TeX distribution](https://tug.org/texlive/) and [Poppler](https://poppler.freedesktop.org/). The bundled NeurIPS preprint style needs its LaTeX dependencies, including T1 fonts and courier; Chinese prose uses ctex and Fandol fonts.
+The research/proof quickstart needs no TeX or Poppler. Explicit `paper` tasks require `xelatex`, `bibtex`, and `pdffonts` on PATH. Install a [TeX distribution](https://tug.org/texlive/) and [Poppler](https://poppler.freedesktop.org/). The bundled NeurIPS preprint style needs its LaTeX dependencies, including T1 fonts and courier; Chinese prose uses ctex and Fandol fonts.
 
 ```bash
 xelatex --version
@@ -95,7 +95,7 @@ pace problems --output outputs --json
 
 These commands do not call a model. `pace doctor` checks Python, POSIX utilities and Codex compatibility. An executable that exists but cannot run, or exits without a recognizable version, fails the check. These checks do not verify model access or service availability.
 
-Before running the quickstart, also check the PDF toolchain:
+Before an explicit paper task, also check the PDF toolchain:
 
 ```bash
 pace doctor --pdf
@@ -148,5 +148,5 @@ uv sync --locked --no-editable --extra math
 
 An environment created by uv may not include pip. PACE supplies the current
 Python executable and optional tool availability to roles; missing optional
-packages do not imply that a theorem is false. Both modes complete mathematical work before automatic manuscript delivery;
-missing TeX pauses only PDF delivery.
+packages do not imply that a theorem is false. A proof-mode run does not require
+TeX unless a paper task is explicitly requested.

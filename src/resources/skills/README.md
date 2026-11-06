@@ -7,7 +7,7 @@ Director may recommend a method in `prompt_brief` or name its file in
 
 | Skill | Use when | Typical role |
 | --- | --- | --- |
-| [Survey and source analysis](survey-and-source-analysis/SKILL.md) | Locate a theorem and determine what its proof actually supplies. | Survey |
+| [Survey and source analysis](survey-and-source-analysis/SKILL.md) | Check relevant existing results and acquire the source passages needed to assess their coverage. | Survey |
 | [Evidence reuse](evidence-reuse/SKILL.md) | Carry an earlier result into a changed candidate or condition profile. | Planner, Research, Prover |
 | [SMI investigation](smi-investigation/SKILL.md) | Develop conjectures and mechanisms through support, coverage, and challenge. | Director, SMI |
 | [Failure diagnosis](failure-diagnosis/SKILL.md) | Turn a failed attempt or review into a precise next obligation. | Planner, Research, Prover |
@@ -23,10 +23,13 @@ Director may recommend a method in `prompt_brief` or name its file in
 | [Claim preservation](mathematical-claim-preservation/SKILL.md) | Check a draft against the exact source claims and conditions. | Writer, Editor |
 | [Paper composition](theory-paper-composition/SKILL.md) | Organize supplied mathematics into the assigned paper. | Writer, Editor |
 
-Role labels are reading suggestions, not new agents. Every role may retrieve
-external sources when the run enables Web Search. Use sources within the
-assigned role and preserve exact URLs and locators. ReasAtlas, when separately
-configured, is a source retrieval option; it is not bundled here.
+Role labels are reading suggestions, not new agents. External retrieval follows
+the Host's setting and the assigned role's instructions. Survey acquires missing
+external sources during mathematical research; other mathematical roles use
+acquired material and request Survey for additional source work. Manuscript
+roles follow their writing task's limits on citation checks. Preserve exact URLs,
+versions and locators. ReasAtlas, when separately configured, is a source
+retrieval option; it is not bundled here.
 
 Both prompt variants use this library. Skills and their illustrative examples
 remain search context. They cannot change the target, certify novelty, or

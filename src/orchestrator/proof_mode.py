@@ -68,7 +68,7 @@ def run_proof(pipeline, ws, problem):
         state.update(phase="FINALIZE", stop_reason=budget_exhausted(ws.root))
         save()
     if state["phase"] == "SURVEY":
-        output = ws.work_ref("stages/orientation/survey.md")
+        output = ws.work_ref("orientation/survey.md")
         _run_task(
             pipeline,
             ws,
@@ -91,7 +91,7 @@ def run_proof(pipeline, ws, problem):
             save()
             break
         index = state["loop_index"]
-        directory = ws.work_ref(f"stages/{index:04d}")
+        directory = ws.work_ref(f"round{index}")
         output = f"{directory}/proof.md"
         result_ref = f"{directory}/agent_result.json"
         if state["phase"] == "PROVE":
@@ -105,7 +105,7 @@ def run_proof(pipeline, ws, problem):
                 output,
                 index,
                 f"Proof loop {index}/{state['max_loops']}. Write one complete proof of the same target. "
-                "Use the initial Survey and supplied sources only; external retrieval is disabled. On later loops revise the current proof "
+                "Use the initial Survey and retrieve additional sources when needed. On later loops revise the current proof "
                 "using its verifier feedback; preserve sound arguments and repair the actual gap. "
                 "Do not produce independent alternatives or a candidate pool.",
                 target_id,
@@ -339,5 +339,5 @@ def _finish(pipeline, ws, state, target_id):
     report = json.loads(ws.path(report_ref).read_text())
     outcome = ws.work_ref("outcome.md")
     ws.write_text_atomic(outcome, "# Mathematical outcome\n\n" + json.dumps(report, ensure_ascii=False, indent=2) + "\n")
-    publish_progress(ws.root, task_id='proof-finished', stage='mathematical_result', status='completed', final_report=report, execution_mode='proof', proof_loops_used=state['loops_started'], max_proof_loops=state['max_loops'])
+    publish_progress(ws.root, task_id='proof-finished', stage='run', status='finished', final_report=report, execution_mode='proof', proof_loops_used=state['loops_started'], max_proof_loops=state['max_loops'])
     return _project_terminal_result(ws, report)

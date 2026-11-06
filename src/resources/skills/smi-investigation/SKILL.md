@@ -31,7 +31,7 @@ to the current phase. The phase prompt owns the requested files and receipt.
    candidate, or decomposition in response to the actual failed relation.
    Read [challenge review](references/multi_mechanism/semi_open_audit.md).
 
-SMI uses acquired sources; only Survey can retrieve external sources.
+SMI may retrieve and analyze external sources when the run enables Web Search.
 Blind phases use their supplied probe statement for independent searches;
 their local workspace inputs remain limited to the probe task and static
 methods. Never consult hidden candidate mechanisms, source leads, reviews,

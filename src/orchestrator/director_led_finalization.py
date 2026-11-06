@@ -313,7 +313,7 @@ def finalize_director_led(
     from pace.runtime.output.events import publish_progress
     envelope = FinalReportEnvelope.validate(report)
 
-    publish_progress(root, task_id=f"final-{report['director_state']['round_index']}-{envelope.result}", stage='mathematical_result', status='completed', final_report=report)
+    publish_progress(root, task_id=f"final-{report['director_state']['round_index']}-{envelope.result}", stage='run', status='finished', final_report=report)
 
     def resolve_artifact(name: str) -> Path | None:
         ref = str(envelope.artifact_refs.get(name) or "")
@@ -524,7 +524,7 @@ def _resolve_chain(
     if not _is_safe_ref(verification_observation_ref):
         raise DirectorLedFinalizationError("Director-led verification reference is invalid")
     expected_verification_ref = (
-        f"{work_ref(ws.root, 'stages')}/{int(state.round_index):04d}/verification/verification.json"
+        f"{work_ref(ws.root)}/round{int(state.round_index)}/verification/verification.json"
     )
     if verification_observation_ref != expected_verification_ref:
         raise DirectorLedFinalizationError(
@@ -675,8 +675,8 @@ def _safe_round_existing_path(
     try:
         expected_root = (
             Path(root).resolve()
-            / work_ref(root, 'stages')
-            / f"{int(round_index):04d}"
+            / work_ref(root)
+            / f"round{int(round_index)}"
         ).resolve()
         resolved.relative_to(expected_root)
     except (OSError, RuntimeError, ValueError):

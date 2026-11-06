@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
 from pace.runtime.output.workspace import work_ref
 
-from .workspace import _write_json_atomic, _write_text_atomic, stage_ref
+from .workspace import _write_json_atomic, _write_text_atomic, artifact_attempt, stage_ref
 
 
 def begin_call(
@@ -60,6 +61,41 @@ def begin_call(
 
 def call_directory(workdir: Path, record_ref: str) -> Path:
     return (Path(workdir) / record_ref).parent
+
+
+def select_reader_attempts(
+    workdir: Path, records: Iterable[dict[str, Any]], *, publication_refs: Iterable[str] = (),
+) -> tuple[dict[str, dict[str, Any]], dict[Path, Path]]:
+    """Select committed call attempts; mathematical iterations keep their own task IDs."""
+    root = Path(workdir)
+    records = tuple(records)
+    attempt_tasks = {(row["stage_ref"], row["agent_id"], row["task_id"])
+                     for row in records if row["task_id"] and row["deliverable_ref"]
+                     and artifact_attempt(root / row["deliverable_ref"]) is not None}
+
+    def key(row):
+        task = row["task_id"]
+        name = re.sub(r"-attempt-\d+$", "", task)
+        name = "/".join(part for part in Path(name).parts if not re.fullmatch(r"attempt[-_]\d+", part))
+        return ((row["stage_ref"], row["agent_id"], name)
+                if name != task or (row["stage_ref"], row["agent_id"], task) in attempt_tasks
+                else row["call_id"])
+
+    chosen = {}
+    for row in records:
+        identity = key(row)
+        previous = chosen.get(identity)
+        if previous is None or row["status"] == "SUCCEEDED" or previous["status"] != "SUCCEEDED":
+            chosen[identity] = row
+    aliases = {row["call_id"]: chosen[key(row)] for row in records}
+    attempts = {}
+    refs = [row["deliverable_ref"] for row in records
+            if aliases[row["call_id"]] is row and row["status"] == "SUCCEEDED" and row["deliverable_ref"]]
+    for ref in (*refs, *publication_refs):
+        attempt = artifact_attempt(root / ref)
+        if attempt is not None:
+            attempts[attempt.parent] = attempt
+    return aliases, attempts
 
 
 def attempt_directory(workdir: Path, record_ref: str, attempt_index: int) -> Path:
@@ -167,7 +203,7 @@ def update_agent_call_deliverable(
     deliverable_ref: str,
 ) -> bool:
     """Attach a file committed after the structured response was accepted."""
-    records = list(Path(workdir).glob(f"{work_ref(workdir)}/stages/*/calls/{call_id}/record.json"))
+    records = list(Path(workdir).glob(f"{work_ref(workdir)}/*/calls/{call_id}/record.json"))
     if not records:
         return False
     (path,) = records

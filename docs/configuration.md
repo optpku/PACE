@@ -13,14 +13,14 @@
 | `--mode` | omitted | The first target-location call selects `proof` for direct proving, or `research` for mechanism exploration or uncertainty. Explicit `proof` / `research` overrides selection. A new `continue` turn also selects when omitted; `resume` keeps the saved mode. There is no `auto` value. |
 | `--max-calls` / `--max-seconds` | unset | Soft total-call / cumulative active-time research budget, checked at dispatch boundaries; terminal delivery is separate. |
 | `--max-proof-states` | 5 in proof; analysis-derived in research | Maximum successive proof loops for one target in proof; an upper bound on Orientation's allocation in research. A proof loop writes or revises one complete proof and independently checks it. |
-| `--web-search-mode` | `on` | `on`: enable Survey retrieval only; `off`: disable it. All other roles always have retrieval disabled; there is no per-role enable option. |
+| `--web-search-mode` | `on` | `on`: each role may search within its assigned task; `off`: disable external retrieval. Blind probes retain their statement-only local context. |
 | `--web-search-model` | primary model | Model for source-search calls. |
 | `--web-search-reasoning-effort` | primary effort | Effort for source-search calls. |
 | `--timeout-seconds` | `7200` | Shared timeout in seconds for core, Director, Survey, verifier, and writing calls. |
 | `--output` | `outputs` | Root for new problem workspaces. |
 | `--json` / `--profile` | off | Machine event output / timing records. |
 
-Each Research or Prover dispatch consumes one proof state, including a partial or mathematically failed attempt. Other roles, fixed Auditor/Kernel checks, and reporting consume calls and time but do not consume this proof-state budget. The cap does not limit total calls, tokens, time, or cost. Only research mode uses the validated difficulty and dependency levels to allocate the budget; an explicit cap can reduce it. Proof mode writes a short brief and uses its saved loop limit, with no research-budget assessment. Survey uses the same configured timeout as other roles. Director calls use low reasoning effort except when the configured effort is `none`. Only Survey may retrieve external sources when enabled. Roles preserve the exact source URLs and locators; retrieved material does not change the literal target or verification authority. Each Codex invocation pins search to live or disabled, rather than inheriting Codex defaults. Switching search off does not make model inference offline. A timed-out model call is stopped without automatic transport replay. After resolving the cause, `resume` retries the saved task with its existing budget and preserved partial artifacts. Operational failures pause before further model-based reporting; optional assessment content errors may use the default budget, while assessment transport failures remain resumable initialization steps.
+Each Research or Prover dispatch consumes one proof state, including a partial or mathematically failed attempt. Other roles, fixed Auditor/Kernel checks, and reporting consume calls and time but do not consume this proof-state budget. The cap does not limit total calls, tokens, time, or cost. Only research mode uses the validated difficulty and dependency levels to allocate the budget; an explicit cap can reduce it. Proof mode writes a short brief and uses its saved loop limit, with no research-budget assessment. Survey uses the same configured timeout as other roles. Director calls use low reasoning effort except when the configured effort is `none`. Every role may search when needed and enabled. Roles preserve the exact source URLs and locators; retrieved material does not change the literal target or verification authority. Each Codex invocation pins search to live or disabled, rather than inheriting Codex defaults. Switching search off does not make model inference offline. A timed-out model call is stopped without automatic transport replay. After resolving the cause, `resume` retries the saved task with its existing budget and preserved partial artifacts. Operational failures pause before further model-based reporting; optional assessment content errors may use the default budget, while assessment transport failures remain resumable initialization steps.
 
 Mode selection is committed with target extraction before budget allocation. Invalid routing receipts or service failures pause initialization without starting Survey, research or terminal writing. An uncertain but valid recommendation selects research. Batch `pipeline.mode` may be omitted or null; only explicit values emit `--mode`. Omitting batch `pipeline.web_search_mode` defaults to `on`, matching the CLI; set `off` to disable external retrieval.
 
@@ -97,9 +97,7 @@ Ctrl-C stops the owned model/tool processes, preserves partial output and marks 
 
 ## Writing tasks
 
-Each completed proof/research turn automatically runs one saved sequence: Chinese outline, Chinese report with independent review and necessary revision, English paper outline, English paper with independent review and necessary revision, and PDF build. Transport or initialization failures do not start this sequence. Missing PDF tools pause delivery while preserving reviewed source. `resume` continues the saved stage without rerunning completed research, writing or review. Formatting errors repair the saved draft rather than restarting full authorship. Up to two revisions are attempted per invocation before a resumable pause.
-
-The core also exposes `outline`, `report`, `paper-outline` and `paper` over saved research evidence for new explicit versions. Report and paper branches are independent. Each request saves the complete writing requirements, resource snapshot and selected outline version. `resume` continues the selected writing task; writing status and PDF build status are separate from the mathematical `result`.
+The core exposes `outline`, `report`, `paper-outline` and `paper` over saved research evidence. Report and paper branches are independent. Each request saves the complete writing requirements, resource snapshot and selected outline version. `resume` continues the selected writing task; writing status and PDF build status are separate from the mathematical `result`.
 
 The Web application controls user-facing updates, reading copies and download packaging. Core completion does not depend on a generated reader brief.
 
@@ -115,8 +113,8 @@ export PACE_REASATLAS_SKILL_DIR="/absolute/path/to/reasatlas-query"
 
 The directory must contain `SKILL.md` and `scripts/query.py`; its supporting
 Markdown, JSON, Python and YAML files must be regular files. PACE copies those
-files into the new turn's resource snapshot. Survey may retrieve sources when `--web-search-mode on` enables it. Without a
-configured Skill, Survey uses other scholarly and web sources. `off` disables
+files into the new turn's resource snapshot. Roles may retrieve sources when `--web-search-mode on` enables it. Without a
+configured Skill, they use other scholarly and web sources. `off` disables
 external retrieval even when the Skill is present.
 
 Ordinary `resume` uses the saved snapshot; changing the environment does not

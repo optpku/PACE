@@ -10,7 +10,7 @@ from pathlib import Path
 
 from pace.runtime.context_state import empty_search_progress
 from .results import FINDINGS_ARCHIVE_REF, FINDINGS_INDEX_REF, relocate_links
-from .workspace import RunWorkspace, work_ref
+from .workspace import RunWorkspace, stage_directories, work_ref
 
 logger = logging.getLogger(__name__)
 
@@ -122,10 +122,13 @@ def refresh_memory_index(root: Path) -> None:
         lines.append(f"- [{label}]({link})")
     lines.extend(["", "既往核验关系保留原始目标引用；跨轮使用需要重新检查范围与应用条件。"])
     latest_plan = ""
-    for path in sorted(root.glob("work/turn*/stages/*/agent_result.json")):
-        result = json.loads(path.read_text(encoding="utf-8"))
-        if result["agent_id"] == "planner" and result["status"] == "SUCCEEDED":
-            latest_plan = result["deliverable_ref"]
+    for turn in sorted((root / "work").glob("turn*")):
+        for directory in stage_directories(root, turn_id=turn.name):
+            path = directory / "agent_result.json"
+            if path.is_file():
+                result = json.loads(path.read_text(encoding="utf-8"))
+                if result["agent_id"] == "planner" and result["status"] == "SUCCEEDED":
+                    latest_plan = result["deliverable_ref"]
     if latest_plan:
         link = Path(os.path.relpath(root / latest_plan, root / "memory")).as_posix()
         lines.extend(["", f"最近 Planner 交付物（适用范围见原稿）：[{latest_plan}]({link})"])

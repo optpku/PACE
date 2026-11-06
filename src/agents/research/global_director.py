@@ -125,7 +125,7 @@ def run_global_director(
     # Current-turn execution receipts own the acquisition budget.
     survey_calls = sum(
         json.loads(path.read_text()).get("agent_id") == "survey"
-        for path in (Path(workdir) / work_ref(workdir, 'stages')).glob('*/agent_result.json')
+        for path in (Path(workdir) / work_ref(workdir)).glob('*/agent_result.json')
     )
     survey_remaining = max(0, 4 - survey_calls)
     final_prompt += (

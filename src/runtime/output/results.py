@@ -18,6 +18,7 @@ from .workspace import (
     _write_json_atomic,
     _write_text_atomic,
     current_turn,
+    stage_ref,
     work_ref,
 )
 
@@ -43,11 +44,11 @@ def stage_finding_review_refs(
 ) -> tuple[str, ...]:
     """Navigate all latest-round verdicts, including unpublished rejections."""
     root = Path(workdir)
-    prefix = Path(work_ref(root, "stages")).parts
+    prefix = Path(work_ref(root)).parts
     results = [Path(ref) for ref in completed_result_refs
                if Path(ref).name == "agent_result.json"
                and Path(ref).parts[:len(prefix)] == prefix]
-    directories = {root / work_ref(root, f"stages/{round_index:04d}/findings")}
+    directories = {root / stage_ref(round_index, workdir=root) / "findings"}
     if results:
         latest = results[-1].parts[:len(prefix) + 1]
         # Both committed workers of one batch share the outer round directory.
@@ -95,7 +96,11 @@ def relocate_links(
     """Rebase ordinary Markdown file links without editing code or equations."""
 
     def link(match: re.Match) -> str:
-        raw = match[2]
+        if match["code"]:
+            return match[0]
+        prefix = match["inline_prefix"] or match["reference_prefix"]
+        raw = match["inline_target"] or match["reference_target"]
+        suffix = match["inline_suffix"] or match["reference_suffix"]
         target = raw[1:-1] if raw.startswith("<") else raw
         parsed = urlsplit(target)
         if (
@@ -110,27 +115,27 @@ def relocate_links(
         if resolve is not None:
             public = resolve(path.resolve())
             if public is None:
-                return match[1].lstrip("!")[1:-2] if match[1].endswith("](") else ""
+                return match["label"] or ""
             path, anchor = public
         relative = Path(os.path.relpath(path, destination.parent)).as_posix()
         target = urlunsplit(("", "", relative, parsed.query, parsed.fragment or anchor))
         if raw.startswith("<") or " " in target:
             target = f"<{target}>"
-        return match[1] + target + match[3]
+        return prefix + target + suffix
 
     # Reports use ordinary inline links and reference links. Code examples are
-    # literal text, including examples that happen to contain Markdown links.
-    parts = re.split(r"(```[^\n]*\n[\s\S]*?```|~~~[^\n]*\n[\s\S]*?~~~|`[^`\n]+`)", body)
+    # literal text. Match whole links before inline code inside their labels.
+    token = re.compile(
+        r"(?P<code>`[^`\n]+`)"
+        r"|(?P<inline_prefix>!?\[(?P<label>[^\]\n]*)\]\([ \t]*)"
+        r"(?P<inline_target><[^>\n]+>|[^\s)]+)(?P<inline_suffix>[^\n)]*\))"
+        r"|(?P<reference_prefix>^\s*\[[^\]\n]+\]:\s*)"
+        r"(?P<reference_target><[^>\n]+>|\S+)(?P<reference_suffix>[^\n]*)",
+        re.MULTILINE,
+    )
+    parts = re.split(r"(```[^\n]*\n[\s\S]*?```|~~~[^\n]*\n[\s\S]*?~~~)", body)
     for index in range(0, len(parts), 2):
-        parts[index] = re.sub(
-            r"(!?\[[^\]\n]*\]\()(<[^>\n]+>|[^\s)]+)([^\n)]*\))", link, parts[index]
-        )
-        parts[index] = re.sub(
-            r"(^\s*\[[^\]\n]+\]:\s*)(<[^>\n]+>|\S+)([^\n]*)",
-            link,
-            parts[index],
-            flags=re.MULTILINE,
-        )
+        parts[index] = token.sub(link, parts[index])
     return "".join(parts)
 
 

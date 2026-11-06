@@ -31,7 +31,7 @@ def pending_finding_checks(workdir: Path) -> bool:
     accepted = state.get("candidate_ref") if state.get("terminal_result") == "PASS" else ""
     completed = {str(Path(ref).parent) for ref in state.get("completed_result_refs", [])
                  if Path(ref).name == "agent_result.json"}
-    for path in (Path(workdir) / work_ref(workdir, "stages")).glob("*/findings/*.verification.json"):
+    for path in (Path(workdir) / work_ref(workdir)).glob("*/findings/*.verification.json"):
         if path.parent.parent.relative_to(workdir).as_posix() not in completed:
             continue
         result_path = path.parent.parent / "agent_result.json"

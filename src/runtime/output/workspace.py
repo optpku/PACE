@@ -46,11 +46,50 @@ def stage_ref(round_index: int = 0, *, workdir: Path, final: bool = False) -> st
     name = (
         "finalization"
         if final
-        else f"{round_index:04d}"
+        else f"round{round_index}"
         if round_index
         else "orientation"
     )
-    return f"{work_ref(workdir, 'stages')}/{name}"
+    return f"{work_ref(workdir)}/{name}"
+
+
+def stage_directories(root: Path, *, turn_id: str | None = None) -> tuple[Path, ...]:
+    turn = Path(root) / work_ref(root, turn_id=turn_id)
+    rounds = sorted(
+        (path for path in turn.glob("round*") if path.is_dir() and path.name[5:].isdigit()),
+        key=lambda path: int(path.name[5:]),
+    )
+    return tuple(path for path in (turn / "orientation", *rounds, turn / "finalization") if path.is_dir())
+
+
+def reader_artifact_path(run_dir: Path, output_dir: Path, relative: Path) -> Path:
+    """Keep round materials in the run; readers publish call pages and indexes.
+
+    The delivery consumer links these originals from its generated pages rather
+    than copying receipts, memory drafts or mathematical files into each round.
+    """
+    parts = list(relative.parts)
+    for index in range(len(parts) - 2):
+        if parts[index] != "work" or re.fullmatch(r"turn\d+", parts[index + 1]) is None:
+            continue
+        stage = parts[index + 2]
+        if re.fullmatch(r"round\d+", stage) and len(parts) > index + 3:
+            return Path(run_dir) / relative
+        trigger = "final" if stage == "finalization" else stage
+        tail = parts[index + 3:]
+        if tail[:2] == ["reports", trigger]:
+            del tail[:2]
+        for attempt, part in enumerate(tail[:-1]):
+            if re.fullmatch(r"attempt[-_]\d+", part):
+                del tail[attempt]
+                break
+        return Path(output_dir) / Path(*parts[:index + 3], *tail)
+    return Path(output_dir) / relative
+
+
+def artifact_attempt(path: Path) -> Path | None:
+    return next((parent for parent in path.parents
+                 if re.fullmatch(r"attempt[-_]\d+", parent.name)), None)
 
 
 def path_has_symlink_component(root: Path, path: Path) -> bool:
@@ -75,7 +114,7 @@ def path_has_symlink_component(root: Path, path: Path) -> bool:
 
 def is_call_path(path: Path) -> bool:
     """Call traces are provenance, never mathematical artifact inputs."""
-    return "calls" in path.parts and "stages" in path.parts
+    return "calls" in path.parts
 
 
 def sanitize_id(raw: str) -> str:
@@ -126,7 +165,7 @@ class RunWorkspace:
         index = int(current_turn(self.root)[4:]) + 1 if record.is_file() else 1
         turn_id = f"turn{index:03d}"
         self.path("work", turn_id).mkdir(exist_ok=False)
-        for relative in ("input", "state", "stages"):
+        for relative in ("input", "state"):
             self.path("work", turn_id, relative).mkdir()
         self.write_json(CURRENT_TURN_REF, {"turn_id": turn_id, "status": "running", "updated_at": utc_now()})
 

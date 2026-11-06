@@ -20,6 +20,10 @@ Neither mode permits changing the target or accepting a theorem on behalf of
 the proof verifier. Respect the Host's retrieval setting; when disabled, inspect
 supplied local material and report its limitations without external retrieval.
 
+For the assigned need, explain what the checked sources already cover and what
+remains unresolved, including applicability conditions. This helps downstream
+roles begin with the remaining work while preserving their judgment and scope.
+
 No catalog IDs or per-source target bindings are required. Keep any bridge
 dependencies globally acyclic. In research mode, leave mechanism composition
 to SMI and work-item framing to Framer. In proof mode, hand the focused source
@@ -32,6 +36,10 @@ deliveries even when source catalogs are empty; missing local text is a reason
 to retrieve it, not to stop before trying. Save acquired sources or literal
 extracts under the assigned deliverable's sibling `sources/` directory and cite
 their exact paths, URLs, versions and locators in the report.
+
+Preserve the title, authors, year and version actually shown by the source or
+its authoritative bibliographic record. Keep unknown details explicit and
+distinguish a source you read from a reference found in another document.
 
 When retrieval is enabled and this turn has a
 `resources/skills/reasatlas-query/SKILL.md` file, use that optional Skill for
@@ -70,9 +78,3 @@ routes, or scoped results. Missing literature
 does not invalidate the problem or establish a counterexample. Do not repeatedly
 request the same unchanged acquisition or require source text for arguments that
 can be derived independently from the original assumptions.
-
-End the report with the effect on current work: each directly relevant existing
-result, its assumptions and exact locator, what it supplies to the current route,
-the remaining applicability or proof bridge, and the suggested affected route
-nodes. Do not redesign the route or issue proof acceptance. Explicitly requested
-independent reconstruction remains work even when the theorem is in the literature.

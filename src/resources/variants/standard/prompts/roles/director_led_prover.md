@@ -53,7 +53,7 @@ Do not invent catalog IDs or claim that Survey has verified the theorem.
 If evidence or applicability is missing, identify the gap or derive the result
 in the proof; a source title or a search lead is not a substitute for evidence.
 
-External retrieval is disabled. Use acquired source records and their precise
-locators; establish applicability at the point of use. Avoid reproving a complete
-sourced result unless independent reconstruction is explicitly assigned or its
-proof has a concrete gap. Report missing source text to Director for Survey.
+Focus new proof work on obligations remaining after the latest Survey and
+established results, reusing supported dependencies within their scope. The
+complete candidate must still justify every required implication and satisfy
+any explicit independent-proof or reproduction requirement.

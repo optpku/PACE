@@ -79,7 +79,7 @@ def build_default_specialist_handlers(
 
     ``output_ref_factory`` may be supplied by the engine to bind its round
     artifact layout.  The default layout is deterministic and remains below
-    ``work/<current-turn>/stages``.
+    ``work/<current-turn>/roundN``.
     """
 
     root = Path(workdir)
@@ -118,7 +118,7 @@ def build_specialist_prompt_assembly(
         )
         inputs = (*inputs, dependency_ref)
     revision_task = ""
-    route_state = workdir / Path(output_ref).parent / "route_context.json"
+    route_state = workdir / work_ref(workdir, "state/current_route.json")
     if (
         decision.agent_id == "planner"
         and decision.prompt_brief.startswith("REVISE_ROUTE")
@@ -126,9 +126,7 @@ def build_specialist_prompt_assembly(
     ):
         from pace.runtime.text_revisions import revision_instruction
 
-        base = json.loads(route_state.read_text())["route_ref"]
-        if not base:
-            raise ValueError("REVISE_ROUTE requires a frozen route base")
+        base = json.loads(route_state.read_text())["ref"]
         inputs = (*inputs, base)
         revision_task = revision_instruction(
             base, str(Path(output_ref).parent / "revision.json")
@@ -361,13 +359,13 @@ def run_default_specialist(
         )
 
     if normalized_agent == "planner":
-        route_state = destination.parent / "route_context.json"
+        route_state = root / work_ref(root, "state/current_route.json")
         patch = destination.parent / "revision.json"
         if patch.is_file() and route_state.is_file():
             from pace.runtime.text_revisions import apply_revision
 
             try:
-                base_ref = json.loads(route_state.read_text())["route_ref"]
+                base_ref = json.loads(route_state.read_text())["ref"]
                 apply_revision(
                     root,
                     patch.relative_to(root).as_posix(),
@@ -542,10 +540,10 @@ def _write_failure(
     failure_class: str,
     call_id: str,
 ) -> dict[str, Any]:
-    # Keep adapter artifacts in the same four-digit round layout as the
+    # Keep adapter artifacts in the same roundN layout as the
     # Director-led engine.  A single canonical path is required for resume
     # and for promoting failure diagnostics into the next public snapshot.
-    ref = f"{work_ref(root)}/stages/{max(1, int(round_index or 1)):04d}/specialist_failure.json"
+    ref = f"{work_ref(root)}/round{max(1, int(round_index or 1))}/specialist_failure.json"
     payload = {
         "schema_version": "director_led_specialist_failure/v1",
         "agent_id": agent_id,

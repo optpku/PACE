@@ -7,7 +7,7 @@ from pathlib import Path
 from pace.agents.research.smi.phase_runner import SmiPhaseRunner
 from pace.agents.research.smi.pipeline import SmiPipeline
 from pace.orchestrator.director_led_adapters import SpecialistAdapterResult
-from pace.runtime.output.workspace import work_ref
+from pace.runtime.output.workspace import stage_ref, work_ref
 from pace.runtime.output.results import relocate_links
 
 
@@ -40,9 +40,7 @@ def build_smi_handler(*, llm, workdir, phase_runner=None):
                     attempt / f"failed_outcome_{len(failures) + 1:03d}.json"
                 )
             previous_attempts = [prior for prior in attempts if prior != attempt]
-            assignment_ref = (
-                f"{work_ref(workdir)}/stages/{index:04d}/assignment/task.json"
-            )
+            assignment_ref = f"{stage_ref(index, workdir=root)}/assignment/task.json"
             # Director-selected evidence is distinct from Host navigation and budgets.
             excluded = {work_ref(root, "input/target_contract.json"),
                         work_ref(root, "input/problem.md"), work_ref(root, "input/request.md"),
@@ -157,8 +155,8 @@ def build_smi_handler(*, llm, workdir, phase_runner=None):
             refs.extend(value for key, value in receipt.items()
                         if key.endswith("_ref") and isinstance(value, str)
                         and value and (root / value).is_file())
-            if path.parent.parent.name == "frontier_explorer":
-                changes[path.parent.parent.parent] = receipt["change_ref"]
+            if path.parent.name.startswith("frontier_explorer"):
+                changes[path.parent.parent] = receipt["change_ref"]
         refs.extend(path.relative_to(root).as_posix()
                     for path in sorted((output.parent / "findings").glob("*.md")))
         if outcome["task_batch_ref"]:

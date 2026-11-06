@@ -98,8 +98,8 @@ summary or workspace pointer cannot replace a missing paper proof.
 
 Keep necessary evidence references exact. Use source paths, record identifiers,
 and recorded values rather than invented validation claims. Do not generate
-or repeat checksum claims in manuscript prose. Check already acquired sources and retain exact URLs and locators.
-External retrieval is disabled for editorial roles. New experiments,
+or repeat checksum claims in manuscript prose. When Web Search is enabled,
+check cited sources and retain exact URLs and locators. New experiments,
 proofs, and changes to targets or mathematical verdicts belong outside this
 editorial task.
 

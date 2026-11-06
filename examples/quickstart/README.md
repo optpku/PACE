@@ -4,7 +4,7 @@
 
 Input: [EVEN_SQUARE.md](EVEN_SQUARE.md).
 
-Complete [installation and environment checks](../../docs/installation.md#4-verify-the-installation-without-inference) first, including `pace doctor`. Both modes finish with automatic report and paper delivery; install PDF tools and run `pace doctor --pdf`. Run the following command from the `main` repository root with the PACE environment active.
+Complete [installation and environment checks](../../docs/installation.md#4-verify-the-installation-without-inference) first, including `pace doctor`. This proof-mode example needs no TeX or Poppler. Run the following command from the `main` repository root with the PACE environment active.
 
 ```bash
 pace run --problem examples/quickstart/EVEN_SQUARE.md --problem-id even-square \

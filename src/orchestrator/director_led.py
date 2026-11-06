@@ -492,14 +492,14 @@ class DirectorLedEngine:
             )
         normalized_round_root = _safe_relative_ref(
             round_root,
-            default=work_ref(workdir, 'stages'),
+            default=work_ref(workdir),
         )
-        if normalized_round_root != work_ref(workdir, 'stages'):
+        if normalized_round_root != work_ref(workdir):
             raise ValueError(
-                f"Director-led round_root must be {work_ref(workdir, 'stages')}"
+                f"Director-led round_root must be {work_ref(workdir)}"
             )
         self.state_ref = work_ref(workdir, 'state/director_state.json')
-        self.round_root = work_ref(workdir, 'stages')
+        self.round_root = work_ref(workdir)
         self.commit_progress = True
         self.verifier = verifier
         self.parent_task_id = ""
@@ -887,7 +887,7 @@ class DirectorLedEngine:
         recovering: bool = False,
     ) -> DirectorLedState:
         round_index = state.round_index + 1
-        round_dir = self.workdir / self.round_root / f"{round_index:04d}"
+        round_dir = self.workdir / self.round_root / f"round{round_index}"
         try:
             batch_path = round_dir / "batch.json"
             if recovering and batch_path.is_file():
@@ -917,7 +917,6 @@ class DirectorLedEngine:
                 )
                 allowed_entries = {
                     "director_context.json",
-                    "route_context.json",
                     "director_decision.json",
                     "assignment/task.json",
                     "progress_snapshot.json",
@@ -965,7 +964,6 @@ class DirectorLedEngine:
             # checkpoint. Surface it through the same committed diagnostic
             # boundary as other Host failures instead of leaking an I/O error.
             return self._fail_round(state, round_index, "DIRECTOR", exc)
-        self._freeze_route_context(state, round_index)
         context = {
             "schema_version": DIRECTOR_LED_ROUND_SCHEMA_VERSION,
             "round_index": round_index,
@@ -995,7 +993,7 @@ class DirectorLedEngine:
                         "workdir": self.workdir,
                         "round_index": round_index,
                         "target_contract_id": context["target_contract_id"],
-                        "input_refs": _unique_strings((*self._director_input_refs(state), *self._route_context_refs(round_index))),
+                        "input_refs": self._director_input_refs(state),
                         "completed_result_refs": state.completed_result_refs,
                         "proof_states_remaining": state.max_proof_states - state.proof_states_used,
                         "control_context": str(control_context or ""),
@@ -1119,32 +1117,6 @@ class DirectorLedEngine:
                 refs.append(repair_ref)
         return _unique_strings(ref for ref in refs if isinstance(ref, str) and ref)
 
-    def _freeze_route_context(self, state: DirectorLedState, round_index: int) -> None:
-        path = self.workdir / self._round_ref(round_index, "route_context.json")
-        if path.is_file():
-            return
-        current = self.workdir / work_ref(self.workdir, "state/current_route.json")
-        route = _read_json(current).get("ref", "") if current.is_file() else ""
-        sources = []
-        for ref in reversed(state.completed_result_refs):
-            if not ref.endswith("agent_result.json"):
-                continue
-            record = _read_json(self.workdir / ref)
-            if record.get("agent_id") == "survey" and record.get("status") == "SUCCEEDED":
-                sources = [ref, record["deliverable_ref"], *record.get("published_refs", ())]
-                break
-        refs = _unique_strings(ref for ref in (route, *sources) if ref)
-        for ref in refs:
-            self._require_run_local_file_ref(ref, field="route/source context")
-        _write_json(path, {"route_ref": route, "input_refs": list(refs)})
-
-    def _route_context_refs(self, round_index: int) -> tuple[str, ...]:
-        ref = self._round_ref(round_index, "route_context.json")
-        path = self.workdir / ref
-        if not path.is_file():
-            return ()
-        return (ref, *_read_json(path)["input_refs"])
-
     def _progress_snapshot_ref(self, round_index: int) -> str:
         return self._round_ref(round_index, "progress_snapshot.json")
 
@@ -1162,7 +1134,6 @@ class DirectorLedEngine:
               if (self.workdir / work_ref(self.workdir, "input/handoff.md")).is_file() else ()),
             work_ref(self.workdir, "state/proof_loop_budget.json"),
             *((progress_ref,) if (self.workdir / progress_ref).is_file() else ()),
-            *self._route_context_refs(round_index),
             *(ref for ref in decision.input_refs if ref != "memory/verified_progress.json"),
         ))
 
@@ -2145,7 +2116,7 @@ class DirectorLedEngine:
         # not satisfy the round binding in that case.
         try:
             expected_root = (
-                self.workdir / self.round_root / f"{int(round_index):04d}"
+                self.workdir / self.round_root / f"round{int(round_index)}"
             ).resolve()
             canonical = (self.workdir / normalized).resolve()
             canonical.relative_to(expected_root)

@@ -42,10 +42,6 @@ def writing_artifacts(root: Path, *, snapshots: bool = False) -> dict[str, str]:
 def writing_complete(root: Path) -> bool:
     task = active_writing_request(root)
     if not task:
-        from .terminal_delivery import delivery_state
-        terminal = read_state(root, work_ref(root, "final_report.json"))
-        if terminal.get("run_status") == "completed":
-            return delivery_state(root).get("status") == "completed"
         return True
     key = {
         "outline": "research_outline",
@@ -60,14 +56,3 @@ def writing_complete(root: Path) -> bool:
 
         return paper_build_status(root) == "COMPLETE"
     return True
-
-
-def with_writing_outputs(result):
-    """Expose delivered files without changing the bound mathematical report."""
-    from dataclasses import replace
-    artifacts = writing_artifacts(result.run_dir)
-    fields = {"outline_file": "research_outline", "research_report_file": "research_report",
-              "paper_outline_file": "paper_outline", "paper_source_file": "paper_source",
-              "paper_pdf_file": "paper_pdf"}
-    return replace(result, **{field: result.run_dir / artifacts[key] if key in artifacts else None
-                              for field, key in fields.items()})

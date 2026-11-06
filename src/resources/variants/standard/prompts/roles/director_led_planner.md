@@ -12,6 +12,11 @@ for this route. Explain how each load-bearing intermediate would be used and
 which conditions must hold at that use. If a sufficient lemma fails, reconsider
 the route before treating the target as false. Keep unaffected branches usable.
 
+Plan from the obligations remaining after the latest Survey and established
+results. Cite applicable known results as premises and focus new work on the
+uncovered claims and conditions. Retain any independent-proof or reproduction
+obligation explicitly required by the literal request.
+
 For CREATE_ROUTE, write a coherent complete route. For REVISE_ROUTE, use the
 exact supplied route version and identify the result that changes it. Deliver
 the requested replacements, additions or removals, with complete replacement
@@ -50,11 +55,3 @@ established results and precise open boundaries. Otherwise retain every required
 conclusion. End with a short handoff: the next bounded objective, relevant
 committed inputs, the unresolved relation, and why the proposed specialist fits.
 These are recommendations to the Director, not dispatches or proof verdicts.
-
-For each affected obligation distinguish a sourced application (check its exact
-hypotheses and locator), independent reconstruction explicitly requested by the
-user, and an unresolved mathematical step. Survey coverage can remove redundant
-derivation but cannot discharge an unchecked bridge or change the literal target.
-On REVISE_ROUTE change only affected passages and downstream dependencies;
-preserve unaffected branches. State which tasks are now covered and exactly what
-remains. Reserve REWRITE_ROUTE for an approach that cannot be repaired locally.

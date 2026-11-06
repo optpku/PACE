@@ -35,11 +35,6 @@ def reserve_batch(engine, state, decision):
         "tasks": [task.to_json() for task in tasks],
         "input_snapshot": state.to_json(),
     })
-    # Freeze every worker's context before any sibling can publish a new route.
-    engine._freeze_route_context(state, first)
-    context = _read_json(engine.workdir / engine._round_ref(first, "route_context.json"))
-    for offset in range(1, len(tasks)):
-        _write_json(engine.workdir / engine._round_ref(first + offset, "route_context.json"), context)
     engine._persist_state(reserved)
     return reserved
 

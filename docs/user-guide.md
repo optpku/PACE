@@ -41,7 +41,7 @@ pace run \
 
 This creates `outputs/my-conjecture/`. In the continuation and recovery commands below, replace `outputs/even-square` with `outputs/my-conjecture` when working on this study.
 
-Only Survey has external retrieval enabled by default. Use `--web-search-mode off` to disable Survey retrieval; no option enables retrieval for other roles. Statement-only probes retain their restricted local inputs.
+Web Search is enabled by default for every role when its assigned task needs external sources. Use `--web-search-mode off` to disable external retrieval. Statement-only probes retain their restricted local inputs.
 
 The terminal prints factual task milestones, errors and artifact paths. The external Web application generates user updates, reader briefs and activity cards from those records. `--json` emits machine-readable started/completed JSONL records. `--profile` includes timing events. The model may produce partial findings even if the full target remains unresolved.
 
@@ -57,6 +57,20 @@ Read `work/turnNNN/outcome.md` for the factual outcome and `work/turnNNN/final_r
 `results/findings/README.md` and `archive.md` index the independently checked manuscripts. Original findings and their exact verification scope accumulate across turns. Rejected drafts remain outside that archive and their review records remain available to the Director for repair.
 
 PACE records mathematical originals and runtime events. The Web application generates the user-facing brief, thematic results overview, activity cards, reader copies and downloads. These presentation documents are not required inputs for core execution or recovery. Explicit report and paper tasks are described below.
+
+The core stores `orientation/`, `round1/`, `round2/` and `finalization/` directly
+under each `work/turnNNN/`. SMI candidates are direct children of `smi/attempt_NNN/`;
+each phase writes its files directly in a named directory, such as
+`candidate_01/seed_scout/seed.md`. Distinct phase iterations use sibling names
+such as `frontier_explorer/` and `frontier_explorer_02/`. Internal attempts remain
+immutable for resume. Core reader-path rules remove the attempt directory and
+the redundant `reports/round-NNNN/` container, so a report snapshot appears as
+`work/turn001/round3/current_report.md`. Reader publication selects the last
+successful committed attempt; a later failure does not replace it. Seed manuscripts
+are published directly as `round4/seed.md`; other candidates and seed revisions use
+names such as `seed-candidate_02.md` and `seed-revision_02.md` to preserve distinct
+manuscripts without extra directories. The original files remain available for resume. Web uses
+these core rules when rendering and placing the reading files.
 
 ## Continue with a new question
 
@@ -92,8 +106,6 @@ At a saved research Director boundary, `pace resume --run-dir PATH --finalize` e
 A completed artifact and its owning task checkpoint are saved before call success is published. Later log or Web presentation failures do not repeat that completed task. Incomplete attempts and their diagnostics remain in the turn directory.
 
 ## Write a report or paper
-
-Every completed turn automatically writes and independently reviews a Chinese report and English paper, then builds the PDF. The commands below request new versions explicitly. Review feedback is saved separately; revisions address named defects while preserving other content. `resume` reuses completed authorship and review, and retries only the PDF build when the reviewed source is already complete. See `work/turnNNN/state/terminal_delivery.json` for automatic delivery progress.
 
 Writing uses two independent paths over the run's existing evidence. Supply the complete writing request in `writing-request.md` and optional additional requirements in a UTF-8 file.
 

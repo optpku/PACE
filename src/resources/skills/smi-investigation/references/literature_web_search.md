@@ -1,9 +1,10 @@
 # Find and analyze literature for SMI
 
-Use only acquired sources supplied for this phase. External retrieval is disabled
-for every SMI role, including independent probes. Report a missing source to the
-Director for Survey. Blind probes remain statement-only: do not inspect hidden
-workspace sources, mechanisms, reviews or history.
+Use supplied sources and retrieve additional sources when Web Search is enabled
+and they help the current phase examine its assigned seed or candidate. Save
+acquired text or extracts in the assigned output directory with exact URLs and
+locators. For a blind probe, search independently from its supplied statement;
+do not inspect hidden workspace sources, mechanisms, reviews or history.
 
 ## Compare the exact statements
 
