@@ -292,6 +292,7 @@ def _complete_survey_sources(ws, output, result_ref, result):
 
 def _finish(pipeline, ws, state, target_id):
     from pace.orchestrator.recovery import _project_terminal_result
+    from pace.runtime.output.results import finding_entries, publish_finding
 
     report_ref = ws.work_ref("final_report.json")
     policy = json.loads(ws.path(ws.work_ref("state/research_execution_policy.json")).read_text())
@@ -335,6 +336,15 @@ def _finish(pipeline, ws, state, target_id):
             },
             "publication_status": "NO_PUBLICATION",
         }
+        if passed:
+            kernel = json.loads(ws.path(report["artifact_refs"]["kernel"]).read_text())
+            publish_finding(
+                ws.root, source_ref=report["artifact_refs"]["proof"],
+                verification_ref=report["artifact_refs"]["verification"],
+                round_index=state["loop_index"], publication=kernel["publication"],
+            )
+            report["publication_status"] = "PUBLISHED"
+        report["artifact_refs"]["findings"] = [row["ref"] for row in finding_entries(ws.root)]
         ws.write_json(report_ref, report)
     report = json.loads(ws.path(report_ref).read_text())
     outcome = ws.work_ref("outcome.md")

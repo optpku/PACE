@@ -79,6 +79,13 @@ $$
 
 ## 快速开始
 
+finding 编号表示一项持续完善的数学结果。核验完整稿件后，核验器明确决定新增、
+更新指定编号或不发布；辅助计算、基准复证和已有成果汇编可以保存而不增加编号。
+更新替换当前阅读文件，每次送审原稿及核验记录仍保留在固定的 work 路径中，
+历史证明绑定对应的原始版本。`results/findings/README.md` 按主题组织成果，
+`catalog.md` 列出当前条目，`archive.md` 保留各次核验原稿的入口。
+发布不会覆盖主题总览，也不会改变原题验收结论。
+
 ### 1. 安装 PACE
 
 需要 **Python 3.11+**，以及能访问所选模型的 **Codex CLI**。Python 运行时没有第三方依赖，Codex 需要单独安装。下方 proof 模式示例无需 TeX 或 Poppler；research 模式的论文交付还需要 `pdflatex`、BibTeX 和 `pdffonts`，详见 [PDF 工具安装](docs/installation.md#paper-pdf-tools)。

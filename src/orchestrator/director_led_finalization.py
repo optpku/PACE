@@ -26,7 +26,6 @@ from pace.orchestrator.director_led import (
     DirectorLedState,
     _validate_verification_checkpoint,
 )
-from pace.orchestrator.finding_publication import publication_reuse_refs
 from pace.pipeline_types import PipelineResult
 from pace.reporting.terminal_report import (
     FINAL_REPORT_SCHEMA_VERSION,
@@ -605,11 +604,11 @@ def _publish_report(ws: RunWorkspace, report: dict[str, Any]) -> dict[str, Any]:
     if report["result"] == "PASS":
         try:
             kernel = json.loads(ws.path(refs["kernel"]).read_text(encoding="utf-8"))
-            if not publication_reuse_refs(ws.root, kernel):
-                publish_finding(
-                    ws.root, source_ref=refs["proof"], verification_ref=refs["verification"],
-                    round_index=report["director_state"]["round_index"],
-                )
+            publish_finding(
+                ws.root, source_ref=refs["proof"], verification_ref=refs["verification"],
+                round_index=report["director_state"]["round_index"],
+                publication=kernel["publication"],
+            )
         except Exception as exc:
             report["finding_publication_diagnostics"] = [str(exc)]
             logger.warning("Verified final finding publication failed", exc_info=True)

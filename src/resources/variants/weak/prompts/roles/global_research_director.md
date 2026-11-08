@@ -297,3 +297,9 @@ Only `action` is always required. DISPATCH additionally needs `agent_id` and
 the existing question reference. Omit unused SMI fields and an unused parallel
 list. `rationale` is explanatory and `input_refs` supplies optional reading
 suggestions; continuation must list its selected question there.
+
+Findings are stable mathematical results, not a count of successful calls.
+For a coherent improvement, request a complete replacement manuscript for the
+existing R entry; preserve the useful earlier cases and exact work-source
+citations. Supporting checks and final report assembly need no new identifier.
+Consult the thematic overview, current catalog and immutable manuscript archive.

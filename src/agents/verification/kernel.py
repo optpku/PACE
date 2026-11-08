@@ -7,7 +7,7 @@ from typing import Any
 from pace.agents.roles import run_semantic_role
 from pace.contracts.verification.decision import missing_kernel_evidence
 from pace.runtime.json_values import as_dict as _as_dict
-from pace.runtime.output.results import FINDINGS_INDEX_REF
+from pace.runtime.output.results import FINDINGS_INDEX_REF, FINDINGS_CATALOG_REF, FINDINGS_ARCHIVE_REF
 from pace.runtime.output.workspace import work_ref
 from pace.runtime.prompts import (
     load_prompt_template,
@@ -39,7 +39,7 @@ def verify_finding(
         draft_ref=draft_ref,
         target_contract_id=target_contract_id,
         input_files="\n".join(f"- `{ref}`" for ref in input_refs),
-    )
+    ) + "\n\n" + load_prompt_template("output/finding_publication.md", workdir=workdir)
     return run_semantic_role(
         llm, prompt, workdir=workdir,
         call_name=f"finding_verifier_{round_index:04d}_{Path(draft_ref).stem}",
@@ -62,6 +62,10 @@ def _finding_receipt_schema():
     schema = open_object({
         "stage_status": {"type": "string", "enum": ["PASS", "MATH_FAIL", "VERIFIER_ERROR"]},
         "reuse_authorized": {"type": "boolean"},
+        "publication": open_object({
+            "action": {"type": "string", "enum": ["CREATE", "UPDATE", "NONE"]},
+            "finding_ref": {"type": "string"},
+        }),
     })
     schema["required"] = ["stage_status"]
     return schema
@@ -74,6 +78,24 @@ def _validate_finding_receipt(payload):
             "reason_code": "finding_authorization_missing",
             "message": "Explicitly decide whether this independently checked finding is authorized for reuse.",
         }]
+    diagnostics = _validate_finding_publication(payload)
+    if (payload.get("stage_status") == "PASS" and payload.get("reuse_authorized") is not True
+            and _as_dict(payload.get("publication")).get("action") in ("CREATE", "UPDATE")):
+        diagnostics.append({"stage": "finding_receipt", "reason_code": "finding_reuse_not_authorized",
+                            "json_pointer": "/publication/action"})
+    return diagnostics
+
+
+def _validate_finding_publication(payload):
+    if payload.get("stage_status") != "PASS":
+        return []
+    decision = payload.get("publication")
+    if (not isinstance(decision, dict) or decision.get("action") not in ("CREATE", "UPDATE", "NONE")
+            or (decision["action"] == "UPDATE" and not isinstance(decision.get("finding_ref"), str))
+            or (decision["action"] == "UPDATE" and not decision["finding_ref"].strip())):
+        return [{"stage": "finding_publication", "reason_code": "finding_publication_decision_missing",
+                 "json_pointer": "/publication",
+                 "message": "Explicitly choose CREATE, UPDATE with a current finding_ref, or NONE independently of mathematical PASS."}]
     return []
 
 
@@ -100,8 +122,11 @@ def run_math_verifier_kernel(
         raise ValueError("proof_ref does not match artifact_refs.proof_file")
     if relation_llm is None or workdir is None:
         return _verifier_error("math_verifier_kernel_llm_required", binding=binding)
-    if (workdir / FINDINGS_INDEX_REF).is_file():
-        refs["publication_overview"] = FINDINGS_INDEX_REF
+    for key, ref in (("publication_overview", FINDINGS_INDEX_REF),
+                     ("publication_catalog", FINDINGS_CATALOG_REF),
+                     ("publication_archive", FINDINGS_ARCHIVE_REF)):
+        if (workdir / ref).is_file():
+            refs[key] = ref
     prompt = build_math_verifier_kernel_prompt(
         artifact_refs=refs,
         workdir=workdir,
@@ -143,7 +168,8 @@ def run_math_verifier_kernel(
             "a missing mathematical argument. Return valid JSON with an explicit stage_status "
             "and the complete requested report. "
             "For PASS, include actual nonempty relation_checks, target_clause_checks and "
-            "final_assembly evidence, plus explicit publication_eligible=true. The schema "
+            "final_assembly evidence, plus explicit publication_eligible=true and a separate "
+            "publication CREATE/UPDATE/NONE decision. The schema "
             "is the minimum routing interface, not the complete report. If the independent "
             "check finds an unresolved mathematical issue, return MATH_FAIL with the actual "
             "gap and any valid local results instead of fabricating PASS evidence. "
@@ -248,6 +274,8 @@ def build_math_verifier_kernel_prompt(
         ),
         ("current-candidate Auditor report and hints", artifact_refs.get("auditor_file", "")),
         ("publication-only navigation after independent verification", artifact_refs.get("publication_overview", "")),
+        ("current stable finding entries", artifact_refs.get("publication_catalog", "")),
+        ("immutable checked manuscripts and receipts", artifact_refs.get("publication_archive", "")),
     ]
     files.extend(
         ("read first: verification method core" if index == 0 else "on-demand verification method", ref)
@@ -265,6 +293,7 @@ def build_math_verifier_kernel_prompt(
         workdir=workdir,
         artifact_refs=file_lines,
     ) + "\n\n" + load_prompt_template("output/structured.md", workdir=workdir)
+    prompt += "\n\n" + load_prompt_template("output/finding_publication.md", workdir=workdir)
     proof_ref = artifact_refs.get("proof_file")
     if proof_ref:
         draft_dir = (Path(proof_ref).parent / "findings").as_posix()
@@ -292,6 +321,7 @@ def _kernel_method_refs(workdir: Path) -> tuple[str, ...]:
     return (
         (method_root / "verification_methods.md").relative_to(root).as_posix(),
         (prompt_root(root) / "output/findings.md").relative_to(root).as_posix(),
+        (prompt_root(root) / "output/finding_publication.md").relative_to(root).as_posix(),
         (prompt_root(root) / "output/memory.md").relative_to(root).as_posix(),
         *(path.relative_to(root).as_posix() for path in sorted((method_root / "verification_cards").glob("*.md"))),
     )
@@ -305,6 +335,10 @@ def math_verifier_kernel_output_schema() -> dict[str, Any]:
         "properties": {
             "stage_status": {"type": "string", "enum": ["PASS", "MATH_FAIL"]},
             "publication_eligible": {"type": "boolean"},
+            "publication": open_object({
+                "action": {"type": "string", "enum": ["CREATE", "UPDATE", "NONE"]},
+                "finding_ref": {"type": "string"},
+            }),
         },
         "required": ["stage_status"],
         "additionalProperties": True,
@@ -314,7 +348,7 @@ def math_verifier_kernel_output_schema() -> dict[str, Any]:
 def _validate_kernel_publication_delivery(report: dict[str, Any]) -> list[dict[str, Any]]:
     if report.get("stage_status") != "PASS":
         return []
-    diagnostics = []
+    diagnostics = _validate_finding_publication(report)
     missing = missing_kernel_evidence(report)
     if missing:
         diagnostics.append({

@@ -11,7 +11,8 @@ from typing import Any, Iterable
 from pace.agents.verification.kernel import verify_finding
 from pace.runtime.output.results import (
     FINDINGS_INDEX_REF,
-    finding_entries,
+    FINDINGS_CATALOG_REF,
+    FINDINGS_ARCHIVE_REF,
     publish_finding,
 )
 from pace.runtime.output.workspace import (
@@ -42,18 +43,6 @@ def pending_finding_checks(workdir: Path) -> bool:
         if record.get("verdict", {}).get("stage_status") == "VERIFIER_ERROR":
             return True
     return False
-
-
-def publication_reuse_refs(workdir: Path, verdict: dict[str, Any]) -> list[str]:
-    """Consume the verifier's publication directive, not a theorem comparison."""
-
-    refs = verdict.get("existing_finding_refs", [])
-    published = {row["ref"] for row in finding_entries(workdir)}
-    if not isinstance(refs, list) or any(
-        not isinstance(ref, str) or ref not in published for ref in refs
-    ):
-        raise ValueError("existing_finding_refs must list published finding references")
-    return refs
 
 
 def publish_stage_findings(
@@ -143,7 +132,7 @@ def _check_and_publish(
             record = None
     if record is None:
         refs = []
-        for ref in (draft_ref, *context_refs, FINDINGS_INDEX_REF):
+        for ref in (draft_ref, *context_refs, FINDINGS_INDEX_REF, FINDINGS_CATALOG_REF, FINDINGS_ARCHIVE_REF):
             path = (root / ref).resolve()
             if path.is_relative_to(root) and path.is_file() and not is_call_path(path):
                 relative = path.relative_to(root).as_posix()
@@ -187,22 +176,12 @@ def _check_and_publish(
     verdict = record["verdict"]
     if verdict.get("stage_status") == "VERIFIER_ERROR":
         return False
-    if (
-        verdict.get("stage_status") == "PASS"
-        and verdict.get("reuse_authorized") is True
-    ):
-        try:
-            reused = publication_reuse_refs(root, verdict)
-        except ValueError as exc:
-            record["publication_diagnostics"] = [str(exc)]
-            _write_json_atomic(verification_path, record)
-            return True
-        if reused:
-            return True
+    if verdict.get("stage_status") == "PASS":
         publish_finding(
             root,
             source_ref=draft_ref,
             verification_ref=verification_path.relative_to(root).as_posix(),
             round_index=round_index,
+            publication=verdict["publication"],
         )
     return True

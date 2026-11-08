@@ -33,32 +33,7 @@ Use `VERIFIER_ERROR` when you cannot perform the check. Mathematical evidence is
 prompt-defined. Your approval remains independent of the publication comparison
 below.
 
-## Publication reuse after independent verification
-
-After checking the current manuscript, consult `results/findings/README.md` when
-available and read related published manuscripts. Always return an
-`existing_finding_refs` list. Return one or more published manuscript paths only
-when every current conclusion is already explicitly present in those manuscripts
-with the same assumptions, quantifiers and scope; for example,
-`["results/findings/R0001.md", "results/findings/R0002.md"]` for a mere
-repackaging of two existing results. Include concise mathematical evidence for
-that comparison. The current manuscript and this check remain in the archive.
-
-Return `[]` if there is any new conclusion, weaker assumption, independent rate,
-new counterexample or unresolved comparison, or if this is not an approved
-standalone result. Partial overlap does not suppress the new publication.
-Dependency coverage is not conclusion coverage. Results about separate objects
-or compatible-looking parts do not by themselves establish one object satisfying
-all requested constraints. A new composition, realization, transfer or
-consistency argument needs its own checked claim. Compare the actual hypotheses,
-quantifiers and conclusions before treating the manuscript as already covered.
-This field only avoids
-duplicate publication; it neither authorizes mathematical reuse nor changes
-`stage_status` or `reuse_authorized`. The Host checks only that references name
-already published findings.
-
-This decision concerns only this finding. It never grants final acceptance of
-the original problem, even when the finding discusses that problem.
+The shared findings-publication guidance below governs CREATE, UPDATE and NONE.
 
 Original target identity: {{target_contract_id}}
 Manuscript to read completely: `{{draft_ref}}`

@@ -7,21 +7,25 @@ results supported by mathematics already completed in this task. No draft is
 required when you only have a plan, a conjecture, an incomplete proof or a
 literature-search gap. Do not manufacture a result to fill the directory.
 
-Before drafting, read `results/findings/README.md` when available, then the
-relevant original manuscripts. The overview is navigation, not mathematical
+Before drafting, read `results/findings/README.md`, `catalog.md` and `archive.md`
+when available, then the relevant original manuscripts. The overview is navigation, not mathematical
 authority. State the actual increment over existing material. Mere restatement,
 a change of notation, reformatting, transcription, routine formula rechecking,
 or reusing an unchanged result in a later turn does not establish a new finding:
 cite the existing material instead. Keep useful research experience in memory.
 An explicit request to reproduce a benchmark or provide an independent
-certificate can justify a manuscript; explain that supporting purpose.
+certificate can justify a supporting manuscript without a new finding identifier.
 
-Keep successive intermediate steps of one coherent result in its task manuscript
-by default. Write a separate finding for an independently useful lemma, a
-substantive strengthening, a genuinely different condition or rate, or a new
-proved counterexample. Reference the related earlier result and explain the
-mathematical difference. A fresh numbering or a standalone transcription alone
-is not an increment. Do not overwrite or withdraw earlier findings yourself.
+Keep successive intermediate steps of one coherent result in its task manuscript.
+For an improvement to an existing finding, propose its current R path and submit
+a complete replacement manuscript. Include the still-useful earlier conclusions
+and their conditions, supported by their proofs or precise citations to immutable
+checked originals. Proof repairs, better constants, weakened assumptions and
+coherent extensions normally update that same result. Explain the increment.
+Use a new finding only for a substantively different independently useful result.
+Do not split every new estimate into another manuscript. Do not edit current
+findings yourself: the independent verifier decides CREATE, UPDATE or NONE and
+the Host alone publishes the checked replacement.
 
 Each manuscript should contain its title, exact statement, definitions and
 assumptions, a complete proof or counterexample, its relation to the original
@@ -43,5 +47,6 @@ Use ordinary Markdown links relative to the draft file for local supporting
 files, and use only external URLs present in your inputs. Your manuscript will
 be independently checked before publication. Do not write verification verdicts
 or edit `results/`, shared state, another task's drafts or previously published
-findings. A later strengthening is a new manuscript, with an explicit reference
-to the result it strengthens.
+findings. A later strengthening has a new fixed work manuscript and check, but
+normally keeps the existing finding identifier. Final reports and summaries
+organize the results without becoming another finding.

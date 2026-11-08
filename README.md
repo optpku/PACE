@@ -75,6 +75,16 @@ When `--mode` is omitted, the first target-location call selects `proof` only fo
 4. **Retain evidence for the next task.** Versioned memory records results separately from their uses, preserving assumptions, scope, sources, dependencies, and review findings. Changes to a candidate or condition trigger renewed review of affected evidence; established results retain their original conditions. Reuse requires checking those conditions and the argument connecting the old conclusion to its new use. Missing steps and failed routes guide the next objective, with checked premises, exploratory material, and unresolved obligations kept distinct in task-specific context.
 5. **Report and continue.** Checked findings update progress as the research proceeds. Explicit writing tasks produce a research-report outline and report, or an independent paper outline and LaTeX/PDF paper from saved evidence. The Web application owns user updates, reader briefs and downloads. [Resume](docs/user-guide.md#resume-an-interrupted-turn) continues unfinished stages while reusing completed work; [continue](docs/user-guide.md#continue-with-a-new-question) starts a new turn with prior findings.
 
+A finding identifier names a mathematical result that can be improved over time.
+After checking the complete manuscript, the verifier explicitly chooses CREATE,
+UPDATE of an existing R entry, or NONE for supporting work and report assembly.
+An update replaces the current reading file while preserving every fixed work
+manuscript and its receipt. Proof dependencies bind those exact source versions.
+`results/findings/README.md` is thematic navigation, `catalog.md` lists current
+entries, and `archive.md` links checked originals, including updates and reports
+that did not add an identifier. Publication refreshes the catalog and archive
+without overwriting the thematic overview or changing target acceptance.
+
 ## Quick start
 
 ### 1. Install PACE
