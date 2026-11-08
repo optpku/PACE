@@ -27,7 +27,10 @@ class protected_inputs:
         from pace.runtime.output.results import finding_entries
 
         for row in finding_entries(self.root):
-            critical.extend(self.root / row[key] for key in ("ref", "source_ref", "verification_ref"))
+            # The publisher can replace the current reading view between calls.
+            # Its bound manuscript and verification remain immutable originals.
+            fixed.append(self.root / row["ref"])
+            critical.extend(self.root / row[key] for key in ("source_ref", "verification_ref"))
         terminal = self.root / work_ref(root, "final_report.json")
         if terminal.is_file():
             report = json.loads(terminal.read_text(encoding="utf-8"))
