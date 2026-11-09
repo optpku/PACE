@@ -63,10 +63,11 @@ def stage_directories(root: Path, *, turn_id: str | None = None) -> tuple[Path, 
 
 
 def reader_artifact_path(run_dir: Path, output_dir: Path, relative: Path) -> Path:
-    """Keep round materials in the run; readers publish call pages and indexes.
+    """Keep round materials in the run and flatten final writing documents.
 
     The delivery consumer links these originals from its generated pages rather
     than copying receipts, memory drafts or mathematical files into each round.
+    The publisher selects the current paper directory separately for results.
     """
     parts = list(relative.parts)
     for index in range(len(parts) - 2):
@@ -75,14 +76,24 @@ def reader_artifact_path(run_dir: Path, output_dir: Path, relative: Path) -> Pat
         stage = parts[index + 2]
         if re.fullmatch(r"round\d+", stage) and len(parts) > index + 3:
             return Path(run_dir) / relative
-        trigger = "final" if stage == "finalization" else stage
         tail = parts[index + 3:]
-        if tail[:2] == ["reports", trigger]:
-            del tail[:2]
         for attempt, part in enumerate(tail[:-1]):
             if re.fullmatch(r"attempt[-_]\d+", part):
                 del tail[attempt]
                 break
+        if stage == "finalization":
+            if index == 0 and tail[:3] == ["papers", "paper", "paper"]:
+                return Path(run_dir) / relative
+            if tail[:2] in (["reports", "outline"], ["reports", "report"],
+                            ["papers", "outline"], ["papers", "paper"]):
+                group, task = tail[:2]
+                tail = tail[2:]
+                if group == "reports" and task == "report" and tail == ["outline.md"]:
+                    tail = ["report_outline.md"]
+                elif group == "papers" and task == "paper" and tail == ["paper_outline.md"]:
+                    tail = ["paper_used_outline.md"]
+        elif tail[:2] == ["reports", stage]:
+            del tail[:2]
         return Path(output_dir) / Path(*parts[:index + 3], *tail)
     return Path(output_dir) / relative
 
@@ -276,7 +287,7 @@ def list_problems(output_root: Path) -> list[dict]:
         state = json.loads(record.read_text(encoding="utf-8"))
         rows.append({"problem_id": root.name, "run_dir": str(root.resolve()), **state,
                      "title": problem_title(root),
-                     "report": str(root / work_ref(root, "outcome.md"))})
+                     "report": str(root / work_ref(root, "final_report.json"))})
     return rows
 
 

@@ -612,8 +612,6 @@ def _publish_report(ws: RunWorkspace, report: dict[str, Any]) -> dict[str, Any]:
         except Exception as exc:
             report["finding_publication_diagnostics"] = [str(exc)]
             logger.warning("Verified final finding publication failed", exc_info=True)
-    refs["report"] = work_ref(ws.root, "outcome.md")
-    ws.write_text_atomic(refs["report"], "# Mathematical outcome\n\n" + json.dumps({key: report.get(key) for key in ("result", "mathematical_status", "reason_code", "execution_mode", "mode_source", "mode_reason")}, ensure_ascii=False, indent=2) + "\n")
     refs["findings"] = [row["ref"] for row in finding_entries(ws.root)]
     report["publication_status"] = "PUBLISHED" if report["result"] == "PASS" else "REPORT_ONLY"
     FinalReportEnvelope.validate(report)

@@ -108,7 +108,7 @@ An empty problem list is expected before your first run. Proceed to the example 
 
 ## 5. Run the included example
 
-From the repository root, follow the [quickstart example](../examples/quickstart/README.md). It makes model calls, so choose a model and reasoning effort available to your account. Read `work/turn001/outcome.md` and `work/turn001/final_report.json`, then use the [user guide](user-guide.md) to investigate your own conjecture, continue a topic, or resume an interrupted turn.
+From the repository root, follow the [quickstart example](../examples/quickstart/README.md). It makes model calls, so choose a model and reasoning effort available to your account. Read `work/turn001/final_report.json`, then use the [user guide](user-guide.md) to investigate your own conjecture, continue a topic, or resume an interrupted turn.
 
 ## Troubleshooting
 

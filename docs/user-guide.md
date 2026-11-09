@@ -52,7 +52,7 @@ pace problems --output outputs
 pace problems --output outputs --json
 ```
 
-Read `work/turnNNN/outcome.md` for the factual outcome and `work/turnNNN/final_report.json` for the recorded mathematical result and evidence references. Read `result` with `answer_mode` and the original verifier records. `run_status` describes execution separately from mathematical acceptance. Auditor and Kernel provide model-based natural-language review.
+Read `work/turnNNN/final_report.json` for the recorded mathematical result and evidence references. Read `result` with `answer_mode` and the original verifier records. `run_status` describes execution separately from mathematical acceptance. Auditor and Kernel provide model-based natural-language review.
 
 `results/findings/README.md` and `archive.md` index the independently checked manuscripts. Original findings and their exact verification scope accumulate across turns. Rejected drafts remain outside that archive and their review records remain available to the Director for repair.
 

@@ -332,7 +332,6 @@ def _finish(pipeline, ws, state, target_id):
             "artifact_refs": {
                 **resolved["artifact_refs"],
                 "target_contract": ws.work_ref("input/target_contract.json"),
-                "report": ws.work_ref("outcome.md"),
             },
             "publication_status": "NO_PUBLICATION",
         }
@@ -347,7 +346,5 @@ def _finish(pipeline, ws, state, target_id):
         report["artifact_refs"]["findings"] = [row["ref"] for row in finding_entries(ws.root)]
         ws.write_json(report_ref, report)
     report = json.loads(ws.path(report_ref).read_text())
-    outcome = ws.work_ref("outcome.md")
-    ws.write_text_atomic(outcome, "# Mathematical outcome\n\n" + json.dumps(report, ensure_ascii=False, indent=2) + "\n")
     publish_progress(ws.root, task_id='proof-finished', stage='run', status='finished', final_report=report, execution_mode='proof', proof_loops_used=state['loops_started'], max_proof_loops=state['max_loops'])
     return _project_terminal_result(ws, report)

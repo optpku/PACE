@@ -13,6 +13,6 @@ pace run --problem examples/quickstart/EVEN_SQUARE.md --problem-id even-square \
   --web-search-mode on
 ```
 
-This command calls the configured model. Use a model/effort pair available to your account. It runs one initial Survey followed by direct proving and independent verification, without Director or SMI. Writing is explicitly requested after research or proof. Read `outputs/even-square/work/turn001/outcome.md` and `final_report.json` in the same turn directory, then the linked verification records. The Web application supplies reader briefs and downloads. A small example is not a guarantee of a particular model's success or cost.
+This command calls the configured model. Use a model/effort pair available to your account. It runs one initial Survey followed by direct proving and independent verification, without Director or SMI. Writing is explicitly requested after research or proof. Read `outputs/even-square/work/turn001/final_report.json`, then the linked verification records. The Web application supplies reader briefs and downloads. A small example is not a guarantee of a particular model's success or cost.
 
 For continuation, recovery, and batch execution of the same input, see the [user guide](../../docs/user-guide.md).

@@ -155,7 +155,7 @@ pace run \
   --web-search-mode on
 ```
 
-This command makes model calls. Choose a model/effort pair available to your account. The example uses proof mode: one initial Survey (with search available when needed), direct proving and independent verification. Writing is a separate explicit task. Read `outputs/even-square/work/turn001/outcome.md` and the same turn's `final_report.json` for the factual outcome and verification references. `--max-proof-states` caps proof states, not total calls, time, or cost; see [budgets](docs/configuration.md).
+This command makes model calls. Choose a model/effort pair available to your account. The example uses proof mode: one initial Survey (with search available when needed), direct proving and independent verification. Writing is a separate explicit task. Read `outputs/even-square/work/turn001/final_report.json` for the factual outcome and verification references. `--max-proof-states` caps proof states, not total calls, time, or cost; see [budgets](docs/configuration.md).
 
 ## Investigate your conjecture
 
@@ -167,7 +167,7 @@ pace run --problem conjecture.md --problem-id my-conjecture --output outputs \
   --model gpt-6.1-sol --reasoning-effort high --web-search-mode on
 ```
 
-List your research topics, then read the current turn's `outcome.md` and `final_report.json` under `outputs/my-conjecture/work/`:
+List your research topics, then read the current turn's `final_report.json` under `outputs/my-conjecture/work/`:
 
 ```bash
 pace problems --output outputs
@@ -183,7 +183,6 @@ The core's reader layout keeps each public `work/turnNNN/roundN/` directory limi
 
 | Output | What it provides |
 |---|---|
-| `work/turnNNN/outcome.md` | Factual outcome and original evidence links for this turn. |
 | `work/turnNNN/final_report.json` | Bound mathematical result, mode selection and execution status. |
 | `results/findings/` | Independently checked manuscripts with their verification references. |
 | `results/outline.md`, `results/research_report.md` | Explicit research-outline and report task outputs. |
