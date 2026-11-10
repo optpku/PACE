@@ -16,6 +16,7 @@ class PipelineConfig:
     mode: str | None = None
     max_calls: int | None = None
     max_seconds: int | None = None
+    max_rounds: int | None = None
     profile: bool = False
     provider: str = "codex"
     model: str = "gpt-5.6-sol"
@@ -33,7 +34,7 @@ class PipelineConfig:
     def __post_init__(self) -> None:
         if self.mode not in {None, "proof", "research"}:
             raise ValueError("mode must be proof or research")
-        for name in ("max_calls", "max_seconds"):
+        for name in ("max_calls", "max_seconds", "max_rounds"):
             value = getattr(self, name)
             if value is not None and (type(value) is not int or value < 1):
                 raise ValueError(f"{name} must be a positive integer")

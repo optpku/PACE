@@ -22,6 +22,8 @@ from pace.orchestrator.director_led import (
 
 def reserve_batch(engine, state, decision):
     tasks = (replace(decision, parallel_tasks=()), *decision.parallel_tasks)
+    if engine.max_rounds is not None:
+        tasks = tasks[:engine.max_rounds - state.round_index]
     engine._check_task_budget(tasks, state)
     first = state.round_index + 1
     manifest_ref = engine._round_ref(first, "batch.json")

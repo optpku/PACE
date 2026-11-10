@@ -173,6 +173,15 @@ List your research topics, then read the current turn's `final_report.json` unde
 pace problems --output outputs
 ```
 
+Research runs accept `--max-rounds N` to cap outer dispatch rounds per user turn,
+including planning, source research and SMI exploration. Every parallel task takes
+one slot; batches are limited to the remaining slots. The last dispatched task and
+pending verification finish before research closes. Reaching the limit produces a
+completed run with an OPEN mathematical status unless a full candidate has passed
+verification. Explicit writing tasks can then report the existing results and gaps.
+Resume retains the saved limit and used rounds; continue starts a new turn with its
+own setting. This does not cap the model calls inside one round.
+
 The user guide covers [report and paper writing](docs/user-guide.md#write-a-report-or-paper), [batch execution](docs/user-guide.md#run-a-batch), and [recorded result summaries](docs/user-guide.md#summarize-recorded-results). See [Configuration](docs/configuration.md) for models, retrieval, budgets, custom providers, and paper styles.
 
 ## Read the research output

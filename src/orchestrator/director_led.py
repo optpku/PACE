@@ -454,6 +454,7 @@ class DirectorLedEngine:
         specialists: Mapping[str, SpecialistHandler],
         target_contract_id: str = "",
         max_proof_states: int = 18,
+        max_rounds: int | None = None,
         state_ref: str | None = None,
         round_root: str | None = None,
         verifier: VerifierHandler | None = None,
@@ -482,6 +483,9 @@ class DirectorLedEngine:
         if max_proof_states < 1:
             raise ValueError("max_proof_states must be positive")
         self.max_proof_states = max_proof_states
+        if max_rounds is not None and (type(max_rounds) is not int or max_rounds < 1):
+            raise ValueError("max_rounds must be a positive integer")
+        self.max_rounds = max_rounds
         normalized_state_ref = _safe_relative_ref(
             state_ref,
             default=work_ref(workdir, 'state/director_state.json'),
@@ -593,6 +597,8 @@ class DirectorLedEngine:
             from pace.runtime.sessions import budget_exhausted
 
             reason = budget_exhausted(self.workdir)
+            if self.max_rounds is not None and state.round_index >= self.max_rounds:
+                reason = "RESEARCH_ROUND_LIMIT_REACHED"
             if reason:
                 state = self._replace_state(
                     state,
@@ -996,6 +1002,9 @@ class DirectorLedEngine:
                         "input_refs": self._director_input_refs(state),
                         "completed_result_refs": state.completed_result_refs,
                         "proof_states_remaining": state.max_proof_states - state.proof_states_used,
+                        "research_rounds_remaining": (
+                            self.max_rounds - state.round_index if self.max_rounds is not None else None
+                        ),
                         "control_context": str(control_context or ""),
                         "context": context,
                     },

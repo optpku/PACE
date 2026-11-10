@@ -411,6 +411,7 @@ class ProofPipeline:
                 "control_context": policy["control_context"],
                 "max_calls": policy.get("max_calls"),
                 "max_seconds": policy.get("max_seconds"),
+                "max_rounds": policy.get("max_rounds"),
             },
         )
 
@@ -436,6 +437,7 @@ class ProofPipeline:
                     "max_proof_states": self.config.max_proof_states,
                     "max_calls": self.config.max_calls,
                     "max_seconds": self.config.max_seconds,
+                    "max_rounds": self.config.max_rounds,
                     "mode": self.config.mode,
                     "requested_mode": self.config.mode,
                     "control_context": _director_control_context(
@@ -996,6 +998,7 @@ class ProofPipeline:
                 encoding="utf-8"
             )
         )["max_proof_states"]
+        policy = json.loads(ws.path(ws.work_ref("state/research_execution_policy.json")).read_text())
 
         def director(**kwargs: Any) -> Any:
             result = run_global_director(
@@ -1007,6 +1010,8 @@ class ProofPipeline:
                     str(kwargs.get("control_context") or "")
                     + "\nRemaining shared proof states: "
                     + str(kwargs["proof_states_remaining"])
+                    + "\nRemaining research rounds (including the next dispatch): "
+                    + str(kwargs["research_rounds_remaining"])
                 ),
                 host_metadata={
                     "round_index": int(kwargs["round_index"]),
@@ -1048,6 +1053,7 @@ class ProofPipeline:
             ),
             target_contract_id=target_contract_id,
             max_proof_states=max_proof_states,
+            max_rounds=policy.get("max_rounds"),
             on_round_committed=publish_results,
         )
 

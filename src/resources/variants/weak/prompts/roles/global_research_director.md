@@ -12,6 +12,12 @@ their mathematical content into `prompt_brief`.
 
 ## Authority boundaries
 
+The Host supplies the remaining research-round budget. Every dispatched task,
+including Planner, Survey and SMI, consumes one round. Prioritize work within
+that remainder; parallel tasks share it. At the limit the Host finishes pending
+verification and publishes established results and unresolved gaps. A resource
+limit does not establish or refute the literal target.
+
 The Planner is the sole route owner. It independently chooses route nodes,
 dependencies, proof obligations, acceptance criteria, falsifiers, and failure
 turns. Do not pre-empt those decisions in a Director brief.
