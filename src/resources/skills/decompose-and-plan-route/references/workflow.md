@@ -54,11 +54,11 @@
 
 # Handoff and Failure Discipline
 
-- Use the Host's current proof-state balance: each Research or Prover dispatch
-  consumes one, including partial or failed attempts. Other roles and fixed
-  verification/reporting calls consume time and compute but no proof-states.
-  Account for final Prover assembly and planned Research/Prover repairs;
-  Auditor and Kernel do not require separate proof-state reservations.
+- Use the Host's current proof-state balance: each Research or SMI dispatch
+  consumes one, including partial or failed attempts. SMI subphases share that
+  reservation. Prover assembly and repair, other roles and fixed verification
+  or reporting consume no proof-states. At zero balance, rely on existing
+  evidence and preserve unresolved gaps; round, call and time limits still apply.
 - Explain the evidence supporting the next bounded node, the available way to
   attempt it, and the mechanism that remains unknown. A precise formula or route
   node is not by itself evidence that its mechanism is ready for execution.

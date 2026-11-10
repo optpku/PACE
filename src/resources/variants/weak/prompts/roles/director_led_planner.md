@@ -47,11 +47,12 @@ Explain the first unresolved implication and the evidence available to address
 it. Identify independent work only when its committed premises are already
 available; dependent work must wait for its producer.
 
-Respect the Host's saved proof-state and time budgets. Research and Prover
-consume proof-states; planning, Survey, SMI and fixed verification still cost
-time but do not consume that unit. Account for complete-candidate assembly and
-any planned repair. Do not reserve proof-states for Auditor, Kernel or terminal
-writing. Reports and papers belong to the Host's single post-research delivery
+Respect the Host's saved proof-state and time budgets. Each Research or SMI
+dispatch consumes one proof-state, including partial or failed attempts; SMI
+subphases share that reservation. Prover assembly and repair, planning, Survey,
+fixed verification and terminal writing consume no proof-states, but remain
+subject to the round, call and time limits. At zero proof-states, plan only work
+supported by existing evidence. Reports and papers belong to the Host's single post-research delivery
 workflow; substantive mathematical, computational and reproduction obligations
 remain part of the route when the literal request requires them.
 

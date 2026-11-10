@@ -5,11 +5,12 @@ evidence and the mechanism that remains unknown. Keep every condition, scope,
 and downstream consequence explicit. Until the handoff is checked by the
 receiving mathematical role, it remains search context.
 
-Budget against the Host's current proof-state balance: Research and Prover each
-consume one per dispatch, including partial or failed attempts. Other roles,
-Auditor/Kernel checks and reporting do not consume proof-states, although they
-consume time and compute. Allow for final Prover assembly and planned
-Research/Prover repairs; do not reserve separate Auditor or Kernel slots.
+Budget against the Host's current proof-state balance: Research and SMI each
+consume one per dispatch, including partial or failed attempts. SMI subphases
+share that reservation. Prover assembly and repair, other roles, Auditor/Kernel
+checks and reporting consume no proof-states. At zero balance, use existing
+evidence for final assembly or identify the unresolved gap. All work remains
+subject to the saved round, call and time limits.
 
 Give the next ready node its candidate relation, proposed operation and reason
 for advancing a target branch. Preserve unaffected branches. If a route's strong

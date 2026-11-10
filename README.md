@@ -182,6 +182,12 @@ verification. Explicit writing tasks can then report the existing results and ga
 Resume retains the saved limit and used rounds; continue starts a new turn with its
 own setting. This does not cap the model calls inside one round.
 
+In Research mode, Research and SMI each consume one proof-state credit per
+dispatch, including partial or failed attempts. SMI subphases and recovery share
+that reservation. Prover assembly, repair and verification consume no proof-state
+credits and can use existing evidence after the balance reaches zero. All roles
+remain subject to the research-round, call and time budgets.
+
 The user guide covers [report and paper writing](docs/user-guide.md#write-a-report-or-paper), [batch execution](docs/user-guide.md#run-a-batch), and [recorded result summaries](docs/user-guide.md#summarize-recorded-results). See [Configuration](docs/configuration.md) for models, retrieval, budgets, custom providers, and paper styles.
 
 ## Read the research output

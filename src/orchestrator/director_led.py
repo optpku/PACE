@@ -524,7 +524,7 @@ class DirectorLedEngine:
         control_context: str = "",
         resume: bool = False,
     ) -> DirectorLedRunResult:
-        """Run until STOP, the proof-state budget, or a Host interface failure.
+        """Run until a verdict, STOP, an applicable budget, or a Host interface failure.
 
         ``resume=True`` opens the explicit state file.  No directory scan is
         used to infer progress.  A pending dispatch is resumed from its
@@ -604,18 +604,6 @@ class DirectorLedEngine:
                     state,
                     phase="FINALIZE",
                     stop_reason=reason,
-                    terminal_result="FAILED",
-                )
-                self._persist_state(state)
-                break
-            if state.proof_states_used >= state.max_proof_states:
-                # Reaching the search budget without a verifier PASS is a
-                # failed search.  FINALIZE is the publication boundary, while
-                # terminal_result carries the only admissible terminal value.
-                state = self._replace_state(
-                    state,
-                    phase="FINALIZE",
-                    stop_reason="PROOF_STATE_BUDGET_EXHAUSTED",
                     terminal_result="FAILED",
                 )
                 self._persist_state(state)
@@ -1085,8 +1073,16 @@ class DirectorLedEngine:
                 terminal_result="" if decision.action is DirectorAction.DISPATCH else "FAILED",
             )
             self._persist_state(state)
-        except DirectorBudgetExhausted as exc:
-            return self._fail_round(state, round_index, "DIRECTOR", exc, continue_search=True)
+        except DirectorBudgetExhausted:
+            state = self._replace_state(
+                state, round_index=round_index, phase="FINALIZE",
+                stop_reason="PROOF_STATE_BUDGET_EXHAUSTED", terminal_result="FAILED",
+            )
+            self._persist_state(state)
+            publish_progress(self.workdir, task_id=f'round-{round_index:04d}-director',
+                             stage='director', status='completed', round_index=round_index,
+                             notice='search_stopped')
+            return state
         except Exception as exc:
             return self._fail_round(state, max(state.round_index, round_index), "DIRECTOR", exc)
         if decision.action is DirectorAction.STOP:
@@ -1149,7 +1145,7 @@ class DirectorLedEngine:
     def _proof_state_cost(self, decision: DirectorDecision, state: DirectorLedState) -> int:
         if decision.action is not DirectorAction.DISPATCH:
             return 0
-        return 1 if decision.agent_id in {"research", "prover"} else 0
+        return 1 if decision.agent_id in {"research", "smi"} else 0
 
     def _check_task_budget(self, tasks: tuple[DirectorDecision, ...], state: DirectorLedState) -> None:
         cost = sum(self._proof_state_cost(task, state) for task in tasks)
@@ -1930,15 +1926,7 @@ class DirectorLedEngine:
                 terminal_result="PASS",
                 stop_reason="Auditor and Kernel accepted the same candidate.",
             )
-        elif verification_status == "FAILED":
-            if state.proof_states_used >= state.max_proof_states:
-                state = self._replace_state(
-                    state,
-                    phase="FINALIZE",
-                    terminal_result="FAILED",
-                    stop_reason="candidate_failed_verification",
-                )
-        else:
+        elif verification_status != "FAILED":
             raise DirectorLedEngineError("verifier returned no recognized terminal status")
         if self.commit_progress and isinstance(value, Mapping):
             commit_verified_progress(self.workdir, (value,))
@@ -1953,8 +1941,6 @@ class DirectorLedEngine:
         round_index: int,
         phase: str,
         exc: Exception,
-        *,
-        continue_search: bool = False,
     ) -> DirectorLedState:
         safe_round = max(1, int(round_index or 1))
         diagnostic_ref = self._round_ref(safe_round, "diagnostics.json")
@@ -1975,19 +1961,16 @@ class DirectorLedEngine:
             self.workdir / diagnostic_ref,
             diagnostic,
         )
-        next_phase = "DIRECTOR" if continue_search and state.proof_states_used < state.max_proof_states else "FAILED"
         next_state = self._replace_state(
             state,
             round_index=max(state.round_index, safe_round),
-            phase=next_phase,
+            phase="FAILED",
             pending_dispatch_ref="",
             pending_prompt_ref="",
             pending_assignment_ref="",
             pending_verifier_request_ref="",
             diagnostics_ref=diagnostic_ref,
-            terminal_result=(
-                "" if continue_search and state.proof_states_used < state.max_proof_states else "FAILED"
-            ),
+            terminal_result="FAILED",
         )
         self._persist_state(next_state)
         task_id = f"round-{safe_round:04d}"
@@ -1995,7 +1978,7 @@ class DirectorLedEngine:
             task_id += "-director"
         elif phase == "VERIFY":
             task_id += "-verification"
-        publish_progress(self.workdir, task_id=task_id, stage={'DIRECTOR': 'director', 'VERIFY': 'verification'}.get(phase, 'research'), status='failed', round_index=safe_round, notice='stage_failed_retry' if next_phase == 'DIRECTOR' else 'stage_failed_final')
+        publish_progress(self.workdir, task_id=task_id, stage={'DIRECTOR': 'director', 'VERIFY': 'verification'}.get(phase, 'research'), status='failed', round_index=safe_round, notice='stage_failed_final')
         return next_state
 
     def _round_ref(self, round_index: int, filename: str) -> str:
