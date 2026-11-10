@@ -23,10 +23,11 @@ Director may recommend a method in `prompt_brief` or name its file in
 | [Claim preservation](mathematical-claim-preservation/SKILL.md) | Check a draft against the exact source claims and conditions. | Writer, Editor |
 | [Paper composition](theory-paper-composition/SKILL.md) | Organize supplied mathematics into the assigned paper. | Writer, Editor |
 
-Role labels are reading suggestions, not new agents. Every role may retrieve
-external sources when the run enables Web Search. Use sources within the
-assigned role and preserve exact URLs and locators. ReasAtlas, when separately
-configured, is a source retrieval option; it is not bundled here.
+Role labels are reading suggestions, not new agents. Only Survey may retrieve
+external sources when Web Search is enabled. All other roles use acquired local
+material; no setting enables their external retrieval. Preserve exact URLs and
+locators. ReasAtlas, when separately configured for Survey, is a source retrieval
+option; it is not bundled here.
 
 Both prompt variants use this library. Skills and their illustrative examples
 remain search context. They cannot change the target, certify novelty, or

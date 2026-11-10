@@ -11,7 +11,7 @@
 | `--reasoning-effort` | `xhigh` | Provider-supported effort; `none` omits explicit effort and disables reasoning summaries. |
 | `--resource-variant` | model/effort lookup | `standard` or `weak`; explicit selection overrides the lookup on a new turn. |
 | `--mode` | omitted | The first target-location call selects `proof` for direct proving, or `research` for mechanism exploration or uncertainty. Explicit `proof` / `research` overrides selection. A new `continue` turn also selects when omitted; `resume` keeps the saved mode. There is no `auto` value. |
-| `--max-calls` / `--max-seconds` | unset | Soft total-call / cumulative active-time research budget, checked at dispatch boundaries; terminal delivery is separate. |
+| `--max-calls` / `--max-seconds` | unset | Soft total-call / cumulative active-time research budget, checked at dispatch boundaries; explicit writing is separate. |
 | `--max-proof-states` | 5 in proof; analysis-derived in research | Maximum successive proof loops for one target in proof; an upper bound on Orientation's allocation in research. A proof loop writes or revises one complete proof and independently checks it. |
 | `--web-search-mode` | `on` | `on`: enable Survey retrieval only; `off`: disable it. All other roles always have retrieval disabled; there is no per-role enable option. |
 | `--web-search-model` | primary model | Model for source-search calls. |
@@ -132,11 +132,9 @@ Ctrl-C stops the owned model/tool processes, preserves partial output and marks 
 
 ## Writing tasks
 
-Each completed proof/research turn automatically runs one saved sequence: Chinese outline, Chinese report with independent review and necessary revision, English paper outline, English paper with independent review and necessary revision, and PDF build. Transport or initialization failures do not start this sequence. Missing PDF tools pause delivery while preserving reviewed source. Recognized LaTeX/bibliography source errors trigger local patches and independent review of the changed manuscript until the PDF builds. There is no total revision-count cap for report and paper delivery. If the same compiler diagnostic survives a focused correction, delivery pauses with the exact blocker; environment failures also preserve the reviewed source for recovery. `resume` continues the saved stage without rerunning completed research, writing or review. Formatting errors repair the saved draft rather than restarting full authorship. The first independent review collects a complete numbered issue list; subsequent reviews check unresolved issues and the impact of changes, while allowing newly discovered substantive defects. Optional style suggestions do not block delivery. Markdown and TeX/bibliography corrections use local patches and retain original versions. Empty, invalid or cyclic patches receive one focused correction before a resumable pause, without repeating an unchanged manuscript review. Accepted source hashes, review receipts and build states are saved before advancing. This continuous delivery policy applies to automatic and explicit writing tasks; intermediate finding repair and transport retries retain their existing bounded policies.
+Proof and research turns finish with mathematical evidence and factual navigation. Writing starts only through explicit `outline`, `report`, `paper-outline` and `paper` commands. Each requested report or paper retains independent editorial review, necessary local revisions and resumable PDF construction. Completed authorship, reviews and successful builds are reused. Report and paper revisions have no total-count cap; persistent identical compiler failures and ineffective patches pause with a concrete diagnostic. Pure format model repairs remain fixed at `medium`; only Survey can retrieve sources.
 
-The core also exposes `outline`, `report`, `paper-outline` and `paper` over saved research evidence for new explicit versions. Report and paper branches are independent. Each request saves the complete writing requirements, resource snapshot and selected outline version. Explicit tasks save their state under `state/explicit_writing/`, independently of the automatic turn delivery. `resume` completes a selected unfinished writing task, then continues the same turn's saved proof/research checkpoint or pending automatic delivery. Completed writing and reviews are retained; only the completed task's navigation pointer is released when the turn still has work to resume. A writing command itself does not advance paused mathematics, and a completed explicit task cannot mark an unfinished turn delivery complete. Writing status and PDF build status are separate from the mathematical `result`. Versioned output paths are authoritative; `results/` holds the latest reading copies.
-
-The final delivery notice is recorded before the delivery checkpoint is marked complete. If the notice is missing, recovery publishes it without model calls. Batch recovery keeps checking mathematical checkpoints after a selected writing task has finished, so the completed writing selection cannot block an otherwise resumable run.
+A new writing request creates a numbered task in `finalization/`. Its checkpoint and all manuscript versions remain inside that task. A per-turn pointer selects it for recovery. Finishing explicit writing releases that selection when mathematical work remains; it never marks an unfinished proof complete. Latest successful reading copies stay under `results/` while another version is being revised or cannot build.
 
 The Web application controls user-facing updates, reading copies and download packaging. Core completion does not depend on a generated reader brief.
 
@@ -241,7 +239,7 @@ unique mathematical arguments rather than appending the entire research history.
 
 ### Finding versions, scoped inputs and route milestones
 
-New research dispatches freeze `assignment/context.json`: `required_refs` are
+New research dispatches freeze `context.json` beside `task.json` and `route_context.json`: `required_refs` are
 inputs for the work item, while `archive_refs` are available on demand. Historical
 route manuscripts stay in the archive for non-Planner roles. A role must still
 read and cite any original proof actually used. Blind RCI probes remain isolated.

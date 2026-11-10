@@ -480,8 +480,6 @@ def _is_resumable_run(run_dir: Path | None) -> bool:
         if setup is not None and setup["phase"] != "READY":
             return True
         terminal = _read_json_quiet(run_dir / work_ref(run_dir, "final_report.json"))
-        if terminal.get("run_status") == "completed" and not writing_complete(run_dir):
-            return True
         if setup is not None and terminal.get("terminal_kind") == "SETUP_FAILURE":
             return True
         proof_path = run_dir / work_ref(run_dir, "state/proof_state.json")

@@ -1411,7 +1411,7 @@ class RciPipeline:
         children: list[_Candidate] = []
         for child_ref in child_refs:
             child = self._new_candidate(
-                artifact_root=state.root.parents[1],
+                artifact_root=state.root.parent,
                 lineage=state.lineage,
                 split_generation=state.split_generation + 1,
             )
@@ -1431,7 +1431,7 @@ class RciPipeline:
     ) -> list[dict[str, Any]]:
         if len(open_tasks) == 1 and not prior_accepted_refs:
             return list(open_tasks)
-        call_dir = artifact_root / "portfolio" / "semantic_dedup" / "call_01"
+        call_dir = artifact_root / "semantic_dedup"
         result = self.phase_runner.run(
             round_index=self.round_index,
             phase="SEMANTIC_DEDUP",
@@ -1667,7 +1667,7 @@ class RciPipeline:
             round_index=self.round_index,
             phase=phase,
             workdir=workdir,
-            call_dir=phase_dir / f"call_{ordinal:02d}",
+            call_dir=phase_dir if ordinal == 1 else phase_dir.with_name(f"{phase_dir.name}_{ordinal:02d}"),
             target_contract_id=target_contract_id,
             input_refs=input_refs,
             prompt_seed=prompt_seed,
@@ -1687,7 +1687,7 @@ class RciPipeline:
         candidate_id = f"candidate_{self._candidate_ordinal:02d}"
         return _Candidate(
             candidate_id=candidate_id,
-            root=artifact_root / "candidates" / candidate_id,
+            root=artifact_root / candidate_id,
             lineage=lineage,
             split_generation=split_generation,
         )
@@ -1698,7 +1698,7 @@ class RciPipeline:
         state: _Candidate,
         exc: Exception,
     ) -> str:
-        path = state.root / "failures" / "call_01.json"
+        path = state.root / "failure.json"
         _write_json(path, _failure_payload(exc))
         return _relative_ref(path, workdir)
 
@@ -1708,7 +1708,7 @@ class RciPipeline:
         artifact_root: Path,
         exc: Exception,
     ) -> str:
-        path = artifact_root / "portfolio" / "failures" / "call_01.json"
+        path = artifact_root / "portfolio_failure.json"
         _write_json(path, _failure_payload(exc))
         return _relative_ref(path, workdir)
 

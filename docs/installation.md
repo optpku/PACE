@@ -74,7 +74,7 @@ PACE does not load `.env` automatically. Export optional shell variables as desc
 
 ## 3. Prepare paper PDF tools when needed
 
-Automatic terminal paper delivery and explicit `paper` tasks require `xelatex`, `bibtex`, and `pdffonts` on PATH. Install a [TeX distribution](https://tug.org/texlive/) and [Poppler](https://poppler.freedesktop.org/). The bundled NeurIPS preprint style needs its LaTeX dependencies, including T1 fonts and courier; Chinese prose uses ctex and Fandol fonts.
+Explicit `paper` tasks require `xelatex`, `bibtex`, and `pdffonts` on PATH. Install a [TeX distribution](https://tug.org/texlive/) and [Poppler](https://poppler.freedesktop.org/). The bundled NeurIPS preprint style needs its LaTeX dependencies, including T1 fonts and courier; Chinese prose uses ctex and Fandol fonts.
 
 ```bash
 xelatex --version
@@ -100,7 +100,7 @@ pace problems --output outputs --json
 
 These commands do not call a model. `pace doctor` checks Python, POSIX utilities and Codex compatibility. An executable that exists but cannot run, or exits without a recognizable version, fails the check. These checks do not verify model access or service availability.
 
-Before running the quickstart, also check the PDF toolchain:
+Before requesting a paper, also check the PDF toolchain:
 
 ```bash
 pace doctor --pdf
@@ -113,7 +113,7 @@ An empty problem list is expected before your first run. Proceed to the example 
 
 ## 5. Run the included example
 
-From the repository root, follow the [quickstart example](../examples/quickstart/README.md). It makes model calls, so choose a model and reasoning effort available to your account. Read `work/turn001/outcome.md` and `work/turn001/final_report.json`, then use the [user guide](user-guide.md) to investigate your own conjecture, continue a topic, or resume an interrupted turn.
+From the repository root, follow the [quickstart example](../examples/quickstart/README.md). It makes model calls, so choose a model and reasoning effort available to your account. Read the run `README.md` and `work/turn001/final_report.json`, then use the [user guide](user-guide.md) to investigate your own conjecture, continue a topic, or resume an interrupted turn.
 
 ## Troubleshooting
 
@@ -153,5 +153,4 @@ uv sync --locked --no-editable --extra math
 
 An environment created by uv may not include pip. PACE supplies the current
 Python executable and optional tool availability to roles; missing optional
-packages do not imply that a theorem is false. Both modes complete mathematical work before automatic manuscript delivery;
-missing TeX pauses only PDF delivery.
+packages do not imply that a theorem is false. Both modes finish without starting writing. Explicit paper tasks preserve reviewed source when missing TeX pauses PDF delivery.

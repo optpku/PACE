@@ -9,7 +9,29 @@ from pace.runtime.output.workspace import _write_json_atomic, work_ref
 
 def read_state(root: Path, ref: str) -> dict[str, Any]:
     path = Path(root) / ref
-    return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    value = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    if value.get("schema_version") == "writing_pointer/v1":
+        return json.loads((Path(root) / value["task_ref"] / "state.json").read_text(encoding="utf-8"))
+    return value
+
+
+def save_writing_state(root: Path, ref: str, state: dict) -> None:
+    """The task owns its checkpoint; the turn only selects the latest request."""
+    if state.get("task_ref"):
+        _write_json_atomic(Path(root) / state["task_ref"] / "state.json", state)
+        _write_json_atomic(Path(root) / ref, {"schema_version": "writing_pointer/v1", "task_ref": state["task_ref"]})
+    else:
+        _write_json_atomic(Path(root) / ref, state)
+
+
+def new_writing_task(root: Path, kind: str) -> str:
+    from pace.runtime.output.workspace import stage_ref
+    base = Path(root) / stage_ref(workdir=root, final=True)
+    numbers = [int(path.name[len(kind) + 1:]) for path in base.glob(kind + "-*")
+               if path.is_dir() and path.name[len(kind) + 1:].isdigit()]
+    task = base / f"{kind}-{max(numbers, default=0) + 1:03d}"
+    task.mkdir(parents=True, exist_ok=False)
+    return task.relative_to(root).as_posix()
 
 
 def writing_task_ref(root: Path) -> str:
@@ -41,22 +63,13 @@ def writing_artifacts(root: Path, *, snapshots: bool = False, scope: str | None 
     }
 
 
-def terminal_delivery_pending(root: Path) -> bool:
-    from .terminal_delivery import delivery_complete
-    terminal = read_state(root, work_ref(root, "final_report.json"))
-    return (terminal.get("run_status") == "completed"
-            and not delivery_complete(root))
-
-
 def turn_continuation_pending(root: Path) -> bool:
-    """A saved mathematical workflow or its automatic delivery still owns the turn.
+    """A saved mathematical workflow still owns the turn.
 
     Only detect ownership here. The recovery dispatcher validates the saved
     checkpoint and chooses its exact action; writing never reconstructs it.
     A standalone writing workspace has no mathematical checkpoint to resume.
     """
-    if terminal_delivery_pending(root):
-        return True
     terminal = read_state(root, work_ref(root, "final_report.json"))
     if terminal.get("run_status") == "completed":
         return False
@@ -98,7 +111,7 @@ def release_completed_writing_task(root: Path) -> None:
 
 
 def writing_complete(root: Path) -> bool:
-    return not terminal_delivery_pending(root) and selected_writing_complete(root)
+    return selected_writing_complete(root)
 
 
 def with_writing_outputs(result):

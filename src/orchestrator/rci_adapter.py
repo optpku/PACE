@@ -7,7 +7,7 @@ from pathlib import Path
 from pace.agents.rci.phase_runner import RciPhaseRunner
 from pace.agents.rci.pipeline import RciPipeline
 from pace.orchestrator.director_led_adapters import SpecialistAdapterResult
-from pace.runtime.output.workspace import work_ref
+from pace.runtime.output.workspace import work_ref, stage_ref
 from pace.runtime.output.results import relocate_links
 
 
@@ -41,7 +41,7 @@ def build_rci_handler(*, llm, workdir, phase_runner=None):
                 )
             previous_attempts = [prior for prior in attempts if prior != attempt]
             assignment_ref = (
-                f"{work_ref(workdir)}/stages/{index:04d}/assignment/task.json"
+                f"{stage_ref(index, workdir=root)}/task.json"
             )
             # Director-selected evidence is distinct from Host navigation and budgets.
             excluded = {work_ref(root, "input/target_contract.json"),
@@ -158,8 +158,8 @@ def build_rci_handler(*, llm, workdir, phase_runner=None):
             refs.extend(value for key, value in receipt.items()
                         if key.endswith("_ref") and isinstance(value, str)
                         and value and (root / value).is_file())
-            if path.parent.parent.name == "frontier_explorer":
-                candidate_root = path.parent.parent.parent
+            if path.parent.name.startswith("frontier_explorer"):
+                candidate_root = path.parent.parent
                 changes[candidate_root] = receipt["change_ref"]
                 if receipt.get("candidate_ref"):
                     versions = questions.setdefault(candidate_root.relative_to(root).as_posix(), [])

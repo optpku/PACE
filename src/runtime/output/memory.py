@@ -11,7 +11,7 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 
 from pace.runtime.context_state import empty_search_progress
-from .results import FINDINGS_ARCHIVE_REF, FINDINGS_INDEX_REF, relocate_links, finding_entries
+from .results import FINDINGS_ARCHIVE_REF, FINDINGS_INDEX_REF, relocate_links, finding_entries, finding_publications
 from .workspace import RunWorkspace, work_ref, path_has_symlink_component, is_call_path
 
 logger = logging.getLogger(__name__)
@@ -134,7 +134,7 @@ def refresh_memory_index(root: Path) -> None:
         lines.append(f"- [{label}]({link})")
     lines.extend(["", "既往核验关系保留原始目标引用；跨轮使用需要重新检查范围与应用条件。"])
     latest_plan = ""
-    for path in sorted(root.glob("work/turn*/stages/*/agent_result.json")):
+    for path in sorted(root.glob("work/turn*/round*/agent_result.json")):
         result = json.loads(path.read_text(encoding="utf-8"))
         if result["agent_id"] == "planner" and result["status"] == "SUCCEEDED":
             latest_plan = result["deliverable_ref"]
@@ -189,7 +189,7 @@ def refresh_research_index(root: Path) -> None:
     workspace = RunWorkspace(root=root, problem_id=root.name)
     records = []
     research_records = []
-    for file in sorted(root.glob("work/turn*/stages/*/agent_result.json")):
+    for file in sorted(root.glob("work/turn*/round*/agent_result.json")):
         result = json.loads(file.read_text())
         if result.get("status") != "SUCCEEDED":
             continue
@@ -217,7 +217,7 @@ def refresh_research_index(root: Path) -> None:
     task_ref = route.get("next_task_ref", "")
     task_uses = []
     if task_ref:
-        for file in sorted((root / work_ref(root, "stages")).glob("*/assignment/task.json")):
+        for file in sorted((root / work_ref(root)).glob("*/task.json")):
             assignment = json.loads(file.read_text())
             if assignment.get("agent_id") not in {"research", "prover", "rci"}:
                 continue
@@ -227,7 +227,7 @@ def refresh_research_index(root: Path) -> None:
             decision = json.loads(decision_path.read_text())
             if task_ref not in decision.get("input_refs", ()):
                 continue
-            result_path = file.parent.parent / "agent_result.json"
+            result_path = file.parent / "agent_result.json"
             result = json.loads(result_path.read_text()) if result_path.is_file() else {}
             task_uses.append({"assignment_ref": file.relative_to(root).as_posix(),
                               "result_ref": result_path.relative_to(root).as_posix() if result else "",
@@ -235,17 +235,20 @@ def refresh_research_index(root: Path) -> None:
     task_status = task_uses[-1]["status"] if task_uses else "PROPOSED" if task_ref else "NONE"
     state_path = root / work_ref(root, "state/director_state.json")
     state = json.loads(state_path.read_text()) if state_path.is_file() else {}
-    incorporated = route.get("incorporated_finding_ids")
+    incorporated = route.get("incorporated_finding_versions")
     if incorporated is None:
-        # Historical maps keep their exact versions; expose newer verified
-        # evidence for explicit mathematical assessment, never infer closure.
+        # Recover the versions available at that historical route, never the latest R view.
         route_parts = Path(route.get("ref", "")).parts
         route_turn = route_parts[1] if len(route_parts) > 1 else ""
-        route_round = int(route_parts[3]) if len(route_parts) > 3 and route_parts[3].isdigit() else 0
-        incorporated = [row["finding_id"] for row in finding_entries(root)
-                        if row.get("turn_id", "") < route_turn
-                        or row.get("turn_id") == route_turn and row.get("round_index", 0) <= route_round]
-    unincorporated = [row["ref"] for row in finding_entries(root) if row["finding_id"] not in incorporated]
+        round_name = route_parts[2] if len(route_parts) > 2 else ""
+        route_round = int(round_name[5:]) if round_name.startswith("round") and round_name[5:].isdigit() else 0
+        incorporated = {row["finding_id"]: hashlib.sha256((root / row["source_ref"]).read_bytes()).hexdigest()
+                        for row in finding_publications(root) if row.get("finding_id") and
+                        (row.get("turn_id", "") < route_turn or
+                         row.get("turn_id") == route_turn and row.get("round_index", 0) <= route_round)}
+    versions_by_id = {row["id"]: row["version"] for row in records}
+    unincorporated = [row["ref"] for row in finding_entries(root)
+                     if incorporated.get(row["finding_id"]) != versions_by_id[row["finding_id"]]]
     assessment_path = root / state.get("last_directive_ref", "")
     assessment = json.loads(assessment_path.read_text()) if assessment_path.is_file() else {}
     # These are Planner declarations about uses, not approvals. Exact independent

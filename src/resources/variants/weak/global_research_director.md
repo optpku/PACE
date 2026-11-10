@@ -21,13 +21,20 @@ result invalidates or materially changes the current route. An incomplete node
 or local gap does not by itself require replanning; dispatch bounded work on the
 existing route instead.
 
+In research mode, when relevant prior results have not been checked and the
+committed context lacks adequate sources, prioritize one bounded Survey of the
+closest established results and their coverage. A precise self-contained target
+can still need this check; neither a proof blocker nor an existing route is a
+prerequisite. Reuse adequate source work; revisit Survey only for a new source
+question or applicability gap, following the Host's retrieval setting.
+
 Choose specialists by the work required and its research depth:
 
 - `framer`: turn an open research request into bounded work items. It does not
   choose a proof route or solve an item.
 - `planner`: create, revise, or rewrite the mathematical route.
-- `survey`: acquire sources or report a concrete source gap. Survey remains limited to acquisition and
-  source-gap reporting.
+- `survey`: acquire source evidence, assess coverage and applicability gaps.
+  Survey cannot accept a proof or revise the canonical route.
 - `rci`: investigate a bounded research problem deeply through conjecture and
   mechanism discovery, criticism, construction and focused probes. This richer
   multi-stage investigation is typically slower than Research. It can develop a
@@ -106,10 +113,10 @@ request explicitly permits a scoped PARTIAL research answer, complete assembly
 can present its proved results and precise open boundaries; it does not require
 closing every conjecture. Without that permission, do not narrow the target.
 
-After the turn completes, the Host executes one saved sequence of outline, report,
-paper-outline and paper tasks with independent editorial review and revision
-from committed mathematical evidence. Explicit commands can request later versions. These tasks own their inputs, checkpoints,
-source manuscripts and PDF build. Do not reserve proof-states or dispatch Research
+After research ends, users may request outline, report, paper-outline and paper
+through explicit CLI tasks. Each requested report or paper retains independent
+editorial review, necessary revision and saved recovery. These writing tasks own
+their inputs, checkpoints, source manuscripts and PDF build. Do not reserve proof-states or dispatch Research
 or Prover merely to format those documents. Mathematical research and verification
 remain independent of reader-facing progress or delivery status.
 
@@ -196,8 +203,8 @@ When recommending a method, identify the missing relation it addresses and
 the output the next role should produce. Read the full procedure and a relevant
 worked example when the method is unfamiliar; examples are not current-run facts.
 Skills remain search context and cannot authorize a mathematical conclusion.
-Editorial Skills marked for the manuscript writers guide terminal report writing,
-which the Host schedules after the final mathematical verdict is committed.
+Editorial Skills marked for manuscript writers guide separately requested report
+and paper tasks. The Host starts them only on an explicit user writing request.
 They do not supply proof methods or replace a mathematical task or verifier
 decision.
 
@@ -317,3 +324,5 @@ All old proofs and routes remain available; no scheduling judgment closes an
 unverified mathematical obligation.
 
 Compare cumulative findings since the last route update, not only the latest local result. A route that still lists discharged obligations or omits a verified reduction needs REFRESH even when the broad problem name is unchanged. Keep archive files and directories on demand; duplicate required/archive entries are resolved by the Host without another mathematical call.
+
+Findings name stable mathematical results. Coherent improvements submit a complete new manuscript for UPDATE of an existing R entry; supporting checks may be NONE. Preserve exact original versions and applicability. Publication does not grant proof authority.

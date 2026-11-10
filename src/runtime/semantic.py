@@ -316,6 +316,14 @@ def semantic_call(
         row.get("stage") == "acceptance" for row in result.diagnostics
     ):
         return result
+    # Publication has its own narrow correction and a saved mathematical verdict.
+    if result.diagnostics and all(
+        row.get("stage") == "finding_publication"
+        or row.get("json_pointer") == "/publication"
+        or str(row.get("json_pointer", "")).startswith("/publication/")
+        for row in result.diagnostics
+    ):
+        return result
     from pace.runtime.sessions import budget_exhausted
 
     if budget_exhausted(Path(workdir)):

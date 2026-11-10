@@ -12,7 +12,7 @@ from typing import Any, Iterable
 from pace.agents.kernel import verify_finding
 from pace.runtime.output.results import (
     FINDINGS_INDEX_REF,
-    finding_entries,
+    FINDINGS_CATALOG_REF,
     publish_finding,
 )
 from pace.runtime.output.workspace import (
@@ -42,7 +42,6 @@ def pending_finding_checks(workdir: Path) -> bool:
         if accepted and result_path.is_file():
             if json.loads(result_path.read_text(encoding="utf-8")).get("deliverable_ref") == accepted:
                 continue
-        findings = Path(workdir) / directory / "findings"
         active = current_finding_drafts(Path(workdir), Path(workdir) / directory)
         for path in (draft.with_suffix(".format.json") for draft in active):
             if not path.is_file():
@@ -56,18 +55,6 @@ def pending_finding_checks(workdir: Path) -> bool:
             if record.get("verdict", {}).get("stage_status") == "VERIFIER_ERROR":
                 return True
     return False
-
-
-def publication_reuse_refs(workdir: Path, verdict: dict[str, Any]) -> list[str]:
-    """Consume the verifier's publication directive, not a theorem comparison."""
-
-    refs = verdict.get("existing_finding_refs", [])
-    published = {row["ref"] for row in finding_entries(workdir)}
-    if not isinstance(refs, list) or any(
-        not isinstance(ref, str) or ref not in published for ref in refs
-    ):
-        raise ValueError("existing_finding_refs must list published finding references")
-    return refs
 
 
 def publish_stage_findings(
@@ -89,7 +76,6 @@ def publish_stage_findings(
         if Path(result_ref).name != "agent_result.json":
             continue
         directory = Path(result_ref).parent
-        findings = root / directory / "findings"
         try:
             result = json.loads((root / result_ref).read_text(encoding="utf-8"))
             if result.get("status") != "SUCCEEDED":
@@ -100,7 +86,7 @@ def publish_stage_findings(
             if not drafts:
                 continue
             assignment = json.loads(
-                (root / directory / "assignment/task.json").read_text(encoding="utf-8")
+                (root / directory / "task.json").read_text(encoding="utf-8")
             )
             round_index = int(assignment["round_index"])
             target = json.loads(
@@ -211,7 +197,7 @@ def _check_and_publish(
         draft = _formatted_finding(llm=llm, root=root, draft=original)
         draft_ref = draft.relative_to(root).as_posix()
         refs = []
-        for ref in (draft_ref, *context_refs, FINDINGS_INDEX_REF):
+        for ref in (draft_ref, *context_refs, FINDINGS_INDEX_REF, FINDINGS_CATALOG_REF):
             if ref == source_ref:
                 ref = draft_ref
             path = (root / ref).resolve()
@@ -263,22 +249,8 @@ def _check_and_publish(
     verdict = record["verdict"]
     if verdict.get("stage_status") == "VERIFIER_ERROR":
         return False
-    if (
-        verdict.get("stage_status") == "PASS"
-        and verdict.get("reuse_authorized") is True
-    ):
-        try:
-            reused = publication_reuse_refs(root, verdict)
-        except ValueError as exc:
-            record["publication_diagnostics"] = [str(exc)]
-            _write_json_atomic(verification_path, record)
-            return True
-        if reused:
-            return True
-        publish_finding(
-            root,
-            source_ref=draft_ref,
-            verification_ref=verification_path.relative_to(root).as_posix(),
-            round_index=round_index,
-        )
+    if verdict.get("stage_status") == "PASS":
+        publish_finding(root, source_ref=draft_ref,
+                        verification_ref=verification_path.relative_to(root).as_posix(),
+                        round_index=round_index, publication=verdict["publication"])
     return True

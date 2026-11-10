@@ -8,6 +8,7 @@ correctness.
 
 from __future__ import annotations
 
+
 import json
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
@@ -37,7 +38,7 @@ GLOBAL_DIRECTOR_PROMPT_REF = "roles/global_research_director.md"
 _SPECIALIST_DESCRIPTIONS = {
     "framer": "frame an open request into bounded work items",
     "planner": "own the canonical route and its dependencies",
-    "survey": "acquire sources and report source gaps",
+    "survey": "check prior-result coverage and applicability, acquire sources and report remaining gaps",
     "rci": (
         "deeply explore conjectures and mechanisms with a slower "
         "multi-stage investigation"
@@ -143,7 +144,7 @@ def run_global_director(
     # Current-turn execution receipts own the acquisition budget.
     survey_calls = sum(
         json.loads(path.read_text()).get("agent_id") == "survey"
-        for path in (Path(workdir) / work_ref(workdir, 'stages')).glob('*/agent_result.json')
+        for path in (Path(workdir) / work_ref(workdir)).glob('*/agent_result.json')
     )
     survey_remaining = max(0, 4 - survey_calls)
     final_prompt += (

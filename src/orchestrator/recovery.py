@@ -117,15 +117,6 @@ def resume_existing_run(
             raise RecoveryError("continuation_hook_unavailable", "initialization recovery requires a pipeline continuation")
         return continue_pipeline(RecoveryRequest(workspace=workspace, checkpoint=setup, continuation_action="SETUP"))
 
-    if terminal.is_file():
-        from pace.reporting.terminal_delivery import delivery_complete
-        report = _read_json_object(terminal)
-        pending = not delivery_complete(workspace.root)
-        if report.get("run_status") == "completed" and pending:
-            if continue_pipeline is None:
-                raise RecoveryError("continuation_hook_unavailable", "terminal writing needs a pipeline continuation")
-            return continue_pipeline(RecoveryRequest(workspace, report, "TERMINAL_DELIVERY"))
-
     proof_state = workspace.path(work_ref(workspace.root, "state/proof_state.json"))
     if proof_state.is_file():
         state = _read_json_object(proof_state)

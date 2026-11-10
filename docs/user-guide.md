@@ -43,7 +43,7 @@ This creates `outputs/my-conjecture/`. In the continuation and recovery commands
 
 Only Survey has external retrieval enabled by default. Use `--web-search-mode off` to disable Survey retrieval; no option enables retrieval for other roles. Statement-only probes retain their restricted local inputs.
 
-The terminal prints factual task milestones, errors and artifact paths. The external Web application generates user updates, reader briefs and activity cards from those records. `--json` emits machine-readable started/completed JSONL records. `--profile` includes timing events. The model may produce partial findings even if the full target remains unresolved.
+The terminal prints factual task milestones, errors and artifact paths. The external Web application generates user updates, reader briefs and activity cards from those records. `--json` emits machine-readable started/completed JSONL records; `navigation` links the run entry page. `--profile` includes timing events. The model may produce partial findings even if the full target remains unresolved.
 
 ## Read results
 
@@ -52,11 +52,87 @@ pace problems --output outputs
 pace problems --output outputs --json
 ```
 
-Read `work/turnNNN/outcome.md` for the factual outcome and `work/turnNNN/final_report.json` for the recorded mathematical result and evidence references. Read `result` with `answer_mode` and the original verifier records. `run_status` describes execution separately from mathematical acceptance. Auditor and Kernel provide model-based natural-language review.
+Open the run `README.md`, then the current turn and round pages. `work/turnNNN/final_report.json` records the mathematical result and evidence references. Read `result` with `answer_mode` and the original verifier records; execution status is separate from mathematical acceptance.
 
-`results/findings/README.md` and `archive.md` index the independently checked manuscripts. Original findings and their exact verification scope accumulate across turns. Rejected drafts remain outside that archive and their review records remain available to the Director for repair.
+`results/findings/README.md` is the thematic entry point; `catalog.md` lists current numbered results and `archive.md` links exact checked versions. Original findings and their exact verification scope accumulate across turns. Rejected drafts remain outside that archive and their review records remain available to the Director for repair.
 
 PACE records mathematical originals and runtime events. The Web application generates the user-facing brief, thematic results overview, activity cards, reader copies and downloads. These presentation documents are not required inputs for core execution or recovery. Explicit report and paper tasks are described below.
+
+### Experiment files
+
+New runs record `pace_run_layout/v2` in `work/state/layout.json`. Existing
+experiments are not moved: their bound runtime and original evidence paths remain
+in use. Keep the whole run directory, including `work/`, for recovery.
+
+```text
+<run>/
+├── README.md
+├── results/
+│   ├── findings/
+│   ├── outline.md
+│   ├── research_report.md
+│   ├── paper_outline.md
+│   └── paper/{main.tex, main.pdf, ...}
+├── memory/
+└── work/
+    ├── state/
+    ├── runtime/
+    └── turn001/
+        ├── README.md
+        ├── input/, state/, resources/
+        ├── events.jsonl
+        ├── final_report.json
+        ├── orientation/
+        ├── round0001/
+        ├── round0002/
+        │   ├── README.md
+        │   ├── task.json, context.json, route_context.json
+        │   ├── agent_result.json, research.md
+        │   ├── findings/, verification/, calls/
+        │   └── rci/attempt_001/
+        │       ├── outcome.json
+        │       ├── semantic_dedup/
+        │       └── candidate_01/
+        │           ├── seed_scout/
+        │           ├── frontier_explorer/
+        │           └── frontier_explorer_02/
+        └── finalization/
+            ├── README.md
+            ├── report-outline-001/
+            ├── report-001/
+            ├── paper-outline-001/
+            └── paper-001/
+```
+
+Auxiliary files are omitted. Each `roundNNNN` is a dispatch round, distinct from a
+user turn and from the proof-state budget. Proof mode uses one directory per
+successive proof loop; verification stays beside that loop's proof. RCI attempt,
+candidate and phase directories denote different attempts, statements and phases;
+`frontier_explorer_02` is a later mathematical iteration. Transport retries stay
+in `calls/`. Parallel workers use distinct, pre-reserved round directories.
+
+Research assignments freeze `route_context.json` (route version, work item and
+sources) and `context.json` (required inputs and on-demand archives) before the
+worker starts. Resume uses those saved references, including for parallel tasks.
+Blind probes continue to receive only their independent input view; adjacent
+navigation and candidate files do not become permitted context.
+
+The Host updates the run, turn and affected round pages from saved records.
+Pages contain facts and links, not copied proofs or model-written summaries.
+They are not acceptance or recovery checkpoints. Rebuild missing pages locally:
+
+```bash
+pace index --run-dir outputs/even-square
+```
+
+A stable result such as `R0001` may acquire a new independently checked version.
+The verifier selects `CREATE` for a distinct result, `UPDATE` for an existing
+result, or `NONE` for checked supporting material that needs no new number.
+Original manuscripts and reviews remain immutable in `work/`; the archive keeps
+all versions, including supporting material. Saved dependencies retain their
+exact versions, and route memory detects a changed version of an existing ID.
+These publication choices do not change mathematical acceptance. An invalid
+publication field is corrected separately without rerunning a completed check.
 
 ## Continue with a new question
 
@@ -83,10 +159,10 @@ pace resume --run-dir outputs/even-square \
   --model gpt-6.1-sol --reasoning-effort high --web-search-mode on
 ```
 
-`resume` continues the selected saved task. It preserves the target, mode, resource snapshot, proof-loop limit and committed outputs. `--resource-variant`, `--max-proof-states` and `--mode` are not resume options. Completed mathematical work is reused without another model call. If an explicit writing task is unfinished, recovery completes it first, then continues the same turn's saved proof/research checkpoint or pending automatic delivery. Completed writing and review stages are reused.
+`resume` continues the selected saved task. It preserves target, mode, resources, proof budget and committed outputs. Mode and budget are not resume options. An unfinished explicit writing task completes first, then recovery continues the same turn’s paused proof/research checkpoint. Completed writing and review stages are reused; completed mathematics does not trigger writing.
 
-Archived runs can retain their original executable package through a
-`work/state/runtime_binding.json` file. For a bound run, CLI resume, continue
+Every new run saves its executable package under `work/runtime/initial/pace` and
+binds its file hashes in `work/state/runtime_binding.json`. For a bound run, CLI resume, continue
 and writing commands first verify the package hashes and use that runtime.
 Keep its `work/runtime/` directory when moving the run. Historical identifiers,
 prompts, manuscripts and reviews remain unchanged; new runs use RCI throughout.
@@ -99,7 +175,7 @@ A completed artifact and its owning task checkpoint are saved before call succes
 
 ## Write a report or paper
 
-Every completed turn automatically writes and independently reviews a Chinese report and English paper, then builds the PDF. The commands below request new versions explicitly. Review feedback is saved separately; revisions address named defects while preserving other content. `resume` reuses completed authorship and review. Missing tools pause PDF delivery; repair the environment and resume to rebuild. A concrete source error reported by the compiler instead schedules a bounded local revision and fresh independent review of the changed manuscript. See `work/turnNNN/state/terminal_delivery.json` for automatic delivery progress.
+Research ends without starting long-form writing. Request the commands below when a report or paper is wanted. Each requested report/paper has independent review and necessary revisions. `resume` retains accepted authorship and reviews. Missing tools pause PDF delivery; concrete compiler source errors trigger local revision and review before rebuilding.
 
 Writing uses two independent paths over the run's existing evidence. Supply the complete writing request in `writing-request.md` and optional additional requirements in a UTF-8 file.
 
@@ -111,11 +187,11 @@ pace paper-outline --run-dir outputs/even-square --message writing-request.md
 pace paper --run-dir outputs/even-square --outline results/paper_outline.md
 ```
 
-Each command accepts execution settings such as `--model`, `--reasoning-effort` and `--web-search-mode`. Add `--requirements FILE` for additional requirements. Report and paper writing save the selected outline as a read-only snapshot together with the original request. The paper path can use the existing research directly.
+Each command accepts execution settings such as `--model` and `--reasoning-effort`. Writing roles always keep retrieval disabled, including when the shared `--web-search-mode on` option is supplied. Add `--requirements FILE` for additional requirements. Report and paper writing save the selected outline as a read-only snapshot together with the original request. The paper path can use the existing research directly.
 
-Each step uses one author task with its saved prompt, output and delivery/format checks. PACE assembles prompts locally from role instructions and input references, without a separate model call. Recognized escape and path-format defects are repaired locally before model assistance. Remaining preflight repairs use focused excerpts and constrained patches at fixed `medium` effort. These repairs preserve originals and do not replace independent mathematical or editorial review. Writing preserves mathematical targets, evidence and verifier decisions. It cannot fill a missing mathematical proof or turn an unfinished target into PASS. A new request starts a new writing attempt in `state/explicit_writing/`, separate from the automatic turn delivery. A writing command delivers that requested version; it does not advance a paused mathematical workflow. `pace resume --run-dir PATH` finishes a selected unfinished attempt, then continues the same turn's saved mathematical workflow or pending automatic delivery. A completed explicit request cannot block that continuation or reset saved report/paper stages. Standalone writing workspaces and fully completed turns have no mathematical work to resume.
+Each request owns one task directory under `work/turnNNN/finalization/`: `report-outline-001`, `report-001`, `paper-outline-001` or `paper-001`. Its `request.md`, `selected_outline.md`, drafts, reviews, revisions and `state.json` remain together. A new user request increments the task number; restart and resume do not. The turn’s writing pointer selects that task. A writing command alone does not advance paused mathematics; subsequent `resume` can finish writing and continue its saved mathematical workflow. Formatting repairs first use conservative local rules, then constrained patches at fixed `medium` effort; independent editorial review remains required.
 
-The latest reading copies are `results/research_report.md` and `results/paper/`, with a successful PDF at `results/paper/main.pdf`. Commands and completion events also return the exact saved version paths under the turn’s finalization stages. Use those version paths when retaining a specific automatic or explicitly requested manuscript; later writing can update the reading copies. Paper prose defaults to English unless the user explicitly requests another language. The saved NeurIPS preprint template is used without a checklist or submission questionnaire.
+The latest completed reading copies are `results/outline.md`, `results/research_report.md`, `results/paper_outline.md` and `results/paper/`. A report under revision or failed PDF build does not replace the previous successful delivery. Commands return exact historical version paths. A paper task keeps its initial complete source bundle in `draft/`, later bundles in `revision-001/`, and independent reviews beside them as `review-001.md`. Each accepted paper bundle is independently compilable. Default paper language is English; the NeurIPS preprint style is retained without a checklist.
 
 PDF compilation uses XeLaTeX, BibTeX when cited, and `pdffonts`. The source delivery and build status are separate. Build failures keep the source and diagnostic. Environment or unclassified build failures pause for inspection. Recognized source errors trigger local patches, review and recompilation until the PDF builds. Reports and papers have no fixed revision-count limit. The first review collects the required corrections; follow-up reviews check unresolved issues and the impact of changes, and may identify new substantive defects. Empty or cyclic patches and persistent identical compiler errors receive a focused correction before a resumable pause. Ordinary revisions continue automatically, with completed writing and reviews retained across recovery. Optional style preferences do not block delivery. Writing and build status do not alter the committed mathematical verdict. The external Web application organizes reader copies and download archives.
 

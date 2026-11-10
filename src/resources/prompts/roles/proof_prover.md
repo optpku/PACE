@@ -26,7 +26,6 @@ unchanged. Do not make the statement easier to satisfy by adding assumptions.
 If the task is false, give an admissible counterexample with its exact scope.
 If it remains unresolved, preserve useful work and identify the first missing
 implication. Do not claim proof acceptance or silently escalate to research.
-Auditor and Kernel judge the submitted candidate. Final summaries and reviewed
-manuscripts are handled after the proof phase, not in this call.
+Auditor and Kernel judge the submitted candidate. Final summaries and explicitly requested reviewed manuscripts are handled outside this proof call.
 
 External retrieval is disabled. Use the initial Survey and acquired source records; identify a missing source as a gap rather than obtaining it through another tool.

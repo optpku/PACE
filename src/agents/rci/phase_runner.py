@@ -503,7 +503,7 @@ class RciPhaseRunner:
                     *guidance,
                     "## Task\n" + str(prompt_seed),
                     *((FINDING_MANIFEST_POLICY,) if scoped else ()),
-                    *(("Host assignment/context.json distinguishes required_refs from archive_refs. Read archive refs only to resolve a specific dependency, and record the actual source in dependency_refs; do not read the archive as a batch.",) if scoped and binding.required_inputs != ("PROBE_TASK",) else ()),
+                    *(("Host context.json distinguishes required_refs from archive_refs. Read archive refs only to resolve a specific dependency, and record the actual source in dependency_refs; do not read the archive as a batch.",) if scoped and binding.required_inputs != ("PROBE_TASK",) else ()),
                     *(
                         (
                             f"## Receipt routing contract\nFor this invocation, return an `action` equal to one of {list(actions)!r}. Earlier source artifacts do not change this controller-owned routing choice.",

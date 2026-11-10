@@ -1,6 +1,8 @@
 """Resumable manuscript format repair and independent editorial review."""
 from __future__ import annotations
 
+from pace.reporting.writing import save_writing_state
+
 from dataclasses import asdict
 import hashlib
 import json
@@ -71,7 +73,7 @@ def repair_artifact_batch(*, llm, root: Path, state: dict, state_ref: str,
         return hashlib.sha256(path.read_bytes()).hexdigest()
 
     def save():
-        _write_json_atomic(root / state_ref, state)
+        save_writing_state(root, state_ref, state)
 
     if "format_batch" not in state:
         hashes = {ref: digest(ref) for ref in refs}
@@ -261,7 +263,7 @@ def request_manuscript_revision(*, root: Path, state: dict, state_ref: str,
             if not markdown:
                 revision["bundle_patch"] = True
             _write_json_atomic(root / revision["context_ref"], plan)
-    _write_json_atomic(root / state_ref, state)
+    save_writing_state(root, state_ref, state)
 
 
 def review_draft(*, llm, root: Path, state: dict, state_ref: str,
@@ -274,7 +276,7 @@ def review_draft(*, llm, root: Path, state: dict, state_ref: str,
     })
 
     def save():
-        _write_json_atomic(root / state_ref, state)
+        save_writing_state(root, state_ref, state)
 
     review_base = Path(source_ref).parent if markdown else Path(source_ref).parent.parent
     save()
@@ -381,7 +383,7 @@ def review_draft(*, llm, root: Path, state: dict, state_ref: str,
                               "output_dirs": [] if revision.get("patch_ref") else [str(output.parent.relative_to(root))]},
                 )
                 if handle.transport_status != "SUCCESS":
-                    diagnostic = str(review_base / "editorial" / f"{handle.call_id}.failure.json")
+                    diagnostic = str(review_base / f"{handle.call_id}.failure.json")
                     _write_json_atomic(root / diagnostic, {"error": handle.error_code,
                                                            "output_ref": revision["output_ref"]})
                     commit_artifact_call_failure(handle, workdir=root,
@@ -418,7 +420,7 @@ def review_draft(*, llm, root: Path, state: dict, state_ref: str,
                 if output.is_symlink():
                     output.unlink()
                 revision["delivery_error"] = str(exc)
-                diagnostic = str(review_base / "editorial" / f"{failed.call_id}.failure.json")
+                diagnostic = str(review_base / f"{failed.call_id}.failure.json")
                 _write_json_atomic(root / diagnostic, {"error": str(exc),
                                                        "output_ref": revision["output_ref"]})
                 save()
@@ -461,7 +463,7 @@ def review_draft(*, llm, root: Path, state: dict, state_ref: str,
             review = editorial.get("last_review")
             if not review:
                 index = len(editorial["reviews"]) + 1
-                review_ref = str(review_base / "editorial" / f"review-{index:03d}.md")
+                review_ref = str(review_base / f"review-{index:03d}.md")
                 (root / review_ref).parent.mkdir(parents=True, exist_ok=True)
 
                 def validate(payload):

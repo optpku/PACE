@@ -15,13 +15,17 @@ from .workspace import _write_json_atomic, _write_text_atomic, stage_ref
 
 def artifact_owner_metadata(root: Path, ref: str) -> dict[str, Any]:
     """Attribute an editorial/control call to its saved artifact, not orientation."""
+    if (root / ref).is_file() and Path(ref).suffix == ".json":
+        value = json.loads((root / ref).read_text())
+        if isinstance(value, dict) and value.get("schema_version") == "writing_pointer/v1":
+            ref = value["task_ref"] + "/state.json"
     path = Path(ref)
     if path.is_absolute() or ".." in path.parts:
         raise ValueError("Artifact owner must be run-relative")
     parts = path.parts
-    if len(parts) >= 5 and parts[0] == "work" and parts[2] == "stages":
-        owner = Path(*parts[:4]).as_posix()
-        round_index = int(parts[3]) if parts[3].isdigit() else 0
+    if len(parts) >= 4 and parts[0] == "work" and (parts[2].startswith("round") or parts[2] in {"orientation", "finalization"}):
+        owner = Path(*parts[:3]).as_posix()
+        round_index = int(parts[2][5:]) if parts[2].startswith("round") and parts[2][5:].isdigit() else 0
     else:
         owner, round_index = path.parent.as_posix(), 0
     target = (root / Path(*parts[:2]) / "input/target_contract.json"
@@ -180,7 +184,7 @@ def update_agent_call_deliverable(
     deliverable_ref: str,
 ) -> bool:
     """Attach a file committed after the structured response was accepted."""
-    records = list(Path(workdir).glob(f"{work_ref(workdir)}/stages/*/calls/{call_id}/record.json"))
+    records = list(Path(workdir).glob(f"{work_ref(workdir)}/*/calls/{call_id}/record.json"))
     if not records:
         return False
     (path,) = records

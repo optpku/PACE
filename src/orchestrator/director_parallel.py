@@ -81,7 +81,7 @@ def _execute(parent, snapshot, task, index, first_round, control_context):
         state = worker._load_state()
     else:
         directive = worker._round_ref(index, "director_decision.json")
-        assignment = worker._round_ref(index, "assignment/task.json")
+        assignment = worker._round_ref(index, "task.json")
         _write_json(worker.workdir / directive, {
             "schema_version": DIRECTOR_PROTOCOL_SCHEMA_VERSION, "round_index": index, **task,
         })

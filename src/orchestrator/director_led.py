@@ -454,7 +454,6 @@ class DirectorLedEngine:
         target_contract_id: str = "",
         max_proof_states: int = 18,
         state_ref: str | None = None,
-        round_root: str | None = None,
         verifier: VerifierHandler | None = None,
         on_round_committed: Callable[..., Any] | None = None,
     ) -> None:
@@ -489,16 +488,7 @@ class DirectorLedEngine:
             raise ValueError(
                 f"Director-led state_ref must be {work_ref(workdir, 'state/director_state.json')}"
             )
-        normalized_round_root = _safe_relative_ref(
-            round_root,
-            default=work_ref(workdir, 'stages'),
-        )
-        if normalized_round_root != work_ref(workdir, 'stages'):
-            raise ValueError(
-                f"Director-led round_root must be {work_ref(workdir, 'stages')}"
-            )
         self.state_ref = work_ref(workdir, 'state/director_state.json')
-        self.round_root = work_ref(workdir, 'stages')
         self.commit_progress = True
         self.verifier = verifier
         self.parent_task_id = ""
@@ -886,7 +876,7 @@ class DirectorLedEngine:
         recovering: bool = False,
     ) -> DirectorLedState:
         round_index = state.round_index + 1
-        round_dir = self.workdir / self.round_root / f"{round_index:04d}"
+        round_dir = self.workdir / stage_ref(round_index, workdir=self.workdir)
         try:
             batch_path = round_dir / "batch.json"
             if recovering and batch_path.is_file():
@@ -918,8 +908,8 @@ class DirectorLedEngine:
                     "director_context.json",
                     "route_context.json",
                     "director_decision.json",
-                    "assignment/task.json",
-                    "assignment/context.json",
+                    "task.json",
+                    "context.json",
                     "progress_snapshot.json",
                     "diagnostics.json",
                 }
@@ -934,7 +924,7 @@ class DirectorLedEngine:
                     )
                 context_path = round_dir / "director_context.json"
                 decision_path = round_dir / "director_decision.json"
-                assignment_path = round_dir / "assignment/task.json"
+                assignment_path = round_dir / "task.json"
                 if decision_path.is_file() and not context_path.is_file():
                     raise DirectorLedEngineError("dispatch decision has no input snapshot")
                 if assignment_path.is_file() and not decision_path.is_file():
@@ -1032,7 +1022,7 @@ class DirectorLedEngine:
                 },
             )
             if decision.action is DirectorAction.DISPATCH:
-                assignment_ref = self._round_ref(round_index, "assignment/task.json")
+                assignment_ref = self._round_ref(round_index, "task.json")
                 output_ref = self._default_output_ref(decision.agent_id, round_index)
                 self._write_assignment_context(decision, round_index)
                 if recovering and (self.workdir / assignment_ref).is_file():
@@ -1155,7 +1145,7 @@ class DirectorLedEngine:
         _write_json(path, {"route_ref": route, "route_index_ref": route_index,
                            "next_task_ref": next_task, "input_refs": list(refs),
                            "context_policy": "scoped/v1", "archive_refs": list(unique_strings(archives)),
-                           "finding_ids": [row["id"] for row in memory.get("records", [])],
+                           "finding_versions": {row["id"]: row["version"] for row in memory.get("records", [])},
                            "unincorporated_finding_refs": memory.get("unincorporated_finding_refs", [])})
 
     def _route_context_refs(self, round_index: int, *, include_route: bool = False) -> tuple[str, ...]:
@@ -1199,7 +1189,7 @@ class DirectorLedEngine:
         if decision.agent_id != "planner":
             optional.update(context.get("archive_refs", ()))
         return unique_strings((*[ref for ref in refs if ref not in optional],
-                               self._round_ref(round_index, "assignment/context.json")))
+                               self._round_ref(round_index, "context.json")))
 
     def _write_assignment_context(self, decision: DirectorDecision, round_index: int) -> None:
         """Freeze required and on-demand references before any specialist runs."""
@@ -1207,7 +1197,7 @@ class DirectorLedEngine:
         context = _read_json(path) if path.is_file() else {}
         if context.get("context_policy") != "scoped/v1":
             return
-        ref = self._round_ref(round_index, "assignment/context.json")
+        ref = self._round_ref(round_index, "context.json")
         required = self._assignment_input_refs(decision, round_index)
         archives = unique_strings((*context.get("archive_refs", ()), *decision.archive_refs))
         value = {"required_refs": [item for item in required if item != ref],
@@ -2069,11 +2059,11 @@ class DirectorLedEngine:
     def _default_output_ref(self, agent_id: str, round_index: int) -> str:
         names = {
             "framer": "research_brief.json",
-            "planner": "planner_deliverable.md",
-            "survey": "survey_deliverable.md",
-            "rci": "rci_deliverable.md",
-            "research": "research_deliverable.md",
-            "prover": "candidate_proof.md",
+            "planner": "route.md",
+            "survey": "survey.md",
+            "rci": "research.md",
+            "research": "research.md",
+            "prover": "proof.md",
         }
         return self._round_ref(round_index, names.get(agent_id, "deliverable.md"))
 
@@ -2190,7 +2180,7 @@ class DirectorLedEngine:
         # not satisfy the round binding in that case.
         try:
             expected_root = (
-                self.workdir / self.round_root / f"{int(round_index):04d}"
+                self.workdir / stage_ref(int(round_index), workdir=self.workdir)
             ).resolve()
             canonical = (self.workdir / normalized).resolve()
             canonical.relative_to(expected_root)

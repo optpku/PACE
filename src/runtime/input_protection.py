@@ -16,6 +16,14 @@ class protected_inputs:
     def __init__(self, root, refs, invocation):
         self.root = Path(root)
         fixed = [self.root / str(ref) for ref in refs if str(ref)]
+        for path in tuple(fixed):
+            if path.suffix == ".json" and path.is_file():
+                try:
+                    value = json.loads(path.read_text())
+                except (ValueError, OSError):
+                    continue
+                if isinstance(value, dict) and value.get("schema_version") == "writing_pointer/v1":
+                    fixed.append(self.root / value["task_ref"] / "state.json")
         from pace.runtime.output.workspace import work_ref
 
         critical = list(
@@ -24,10 +32,12 @@ class protected_inputs:
         )
         # These immutable originals may be reached through a catalogue link
         # rather than explicitly named in this call's suggested input list.
-        from pace.runtime.output.results import finding_entries
+        from pace.runtime.output.results import finding_entries, finding_publications
 
         for row in finding_entries(self.root):
-            critical.extend(self.root / row[key] for key in ("ref", "source_ref", "verification_ref"))
+            fixed.append(self.root / row["ref"])
+        for row in finding_publications(self.root):
+            critical.extend(self.root / row[key] for key in ("source_ref", "verification_ref"))
         terminal = self.root / work_ref(root, "final_report.json")
         if terminal.is_file():
             report = json.loads(terminal.read_text(encoding="utf-8"))

@@ -1521,7 +1521,7 @@ def _build_file_driven_cli_instruction(
         base += (
             f"Read `{prompt_file}` for your task. The current exploration is `{turn_dir}/`. "
             f"The user request is `{turn_dir}/input/request.md`; the current problem is "
-            f"`{turn_dir}/input/problem.md`; committed task results are under `{turn_dir}/stages/`.\n\n"
+            f"`{turn_dir}/input/problem.md`; committed task results are under `{turn_dir}/roundNNNN/`.\n\n"
             "You may list and search this problem directory and read relevant existing files on demand, "
             "including earlier work/turn*/ explorations and results/findings/ for this same problem. "
             "Do not read global Codex memories, unrelated problem workspaces, developer test records, "

@@ -14,6 +14,8 @@ verification binding.
 
 from __future__ import annotations
 
+from pace.runtime.output.workspace import stage_ref
+
 import json
 import copy
 import uuid
@@ -72,7 +74,7 @@ def _verify_candidate(
 ) -> dict[str, str]:
     """Persist independent reports once and return references to their outcome."""
 
-    state_dir = f"{work_ref(root)}/stages/{round_index:04d}/verification"
+    state_dir = f"{stage_ref(round_index, workdir=root)}/verification"
     verification_ref = f"{state_dir}/verification_report.json"
     workspace = RunWorkspace(root=root, problem_id=root.name)
     proof_id = ""
@@ -477,7 +479,7 @@ def _existing_ref(
 
 
 def _state_dir(root: Path, context: Mapping[str, Any], result_ref: str, round_index: int) -> str:
-    expected = f"{work_ref(root, 'stages')}/{int(round_index):04d}/verification"
+    expected = f"{stage_ref(int(round_index), workdir=root)}/verification"
     explicit = _string(context.get("verification_dir")).replace("\\", "/")
     if explicit:
         _ensure_relative_ref(explicit, "verification_dir")

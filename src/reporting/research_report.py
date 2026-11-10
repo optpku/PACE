@@ -5,7 +5,7 @@ import logging
 from pace.reporting.editorial import review_draft
 from pathlib import Path
 from typing import Any
-from pace.reporting.writing import read_state
+from pace.reporting.writing import read_state, new_writing_task, save_writing_state
 from pace.runtime.output.events import publish_progress
 from pace.runtime.output.results import relocate_links
 from pace.runtime.output.workspace import (
@@ -66,11 +66,7 @@ class ResearchReportOutliner:
         self.scope = scope
 
     def _attempt(self) -> str:
-        base = f"{stage_ref(workdir=self.workdir, final=True)}/reports/outline"
-        index = len(tuple((self.workdir / base).glob("attempt-*"))) + 1
-        ref = f"{base}/attempt-{index:04d}"
-        (self.workdir / ref).mkdir(parents=True, exist_ok=False)
-        return ref
+        return new_writing_task(self.workdir, "report-outline")
 
     def request(
         self, text: str, *, requirements: str = "", resource_variant: str | None = None
@@ -78,7 +74,7 @@ class ResearchReportOutliner:
         if not text.strip():
             raise ValueError("Outline writing request must not be empty")
         attempt = self._attempt()
-        request_ref = f"{attempt}/writing_request.md"
+        request_ref = f"{attempt}/request.md"
         _write_text_atomic(
             self.workdir / request_ref,
             "# 本次用户输入\n\n" + text + "\n\n# 附加要求\n\n" + requirements + "\n",
@@ -91,9 +87,8 @@ class ResearchReportOutliner:
                 resource_variant=resource_variant,
                 destination=self.workdir / resources,
             )
-        _write_json_atomic(
-            self.workdir / outline_state_ref(self.workdir, self.scope),
-            {"request_ref": request_ref, "resources_ref": resources, "outline_ref": ""},
+        save_writing_state(self.workdir, outline_state_ref(self.workdir, self.scope),
+            {"task_ref": attempt, "pending_attempt": attempt, "request_ref": request_ref, "resources_ref": resources, "outline_ref": ""},
         )
         (self.workdir / report_state_ref(self.workdir, self.scope)).unlink(missing_ok=True)
 
@@ -109,9 +104,7 @@ class ResearchReportOutliner:
         if state.get("draft_ref"):
             self._publish_draft(state)
             return True
-        attempt = state.get("pending_attempt") or self._attempt()
-        state["pending_attempt"] = attempt
-        _write_json_atomic(self.workdir / outline_state_ref(self.workdir, self.scope), state)
+        attempt = state["pending_attempt"]
         output_ref = f"{attempt}/outline.md"
         task_id = f"reporter-artifacts-outline-{Path(attempt).name}"
         resources = state["resources_ref"]
@@ -183,7 +176,7 @@ class ResearchReportOutliner:
             if not source.read_text(encoding="utf-8").strip():
                 raise ValueError("Writing output is empty")
             state.update(draft_ref=output_ref, draft_inputs=list(refs), task_id=task_id, round_index=round_index)
-            _write_json_atomic(self.workdir / outline_state_ref(self.workdir, self.scope), state)
+            save_writing_state(self.workdir, outline_state_ref(self.workdir, self.scope), state)
             accepted_handle, handle = handle, None
             commit_artifact_call_success(accepted_handle, workdir=self.workdir, artifact_ref=output_ref)
             self._publish_draft(state)
@@ -226,7 +219,7 @@ class ResearchReportOutliner:
         destination = self.workdir / RESEARCH_OUTLINE_REF
         _write_text_atomic(destination, relocate_links(source.read_text(encoding="utf-8"), source, destination))
         state["outline_ref"] = ref
-        _write_json_atomic(self.workdir / outline_state_ref(self.workdir, self.scope), state)
+        save_writing_state(self.workdir, outline_state_ref(self.workdir, self.scope), state)
         _publish_reviewed(self.workdir, state, outline_state_ref(self.workdir, self.scope),
                           {"research_outline": ref})
 
@@ -240,11 +233,7 @@ class ResearchReportWriter:
         self.scope = scope
 
     def _attempt(self) -> str:
-        base = f"{stage_ref(workdir=self.workdir, final=True)}/reports/report"
-        index = len(tuple((self.workdir / base).glob("attempt-*"))) + 1
-        ref = f"{base}/attempt-{index:04d}"
-        (self.workdir / ref).mkdir(parents=True, exist_ok=False)
-        return ref
+        return new_writing_task(self.workdir, "report")
 
     def request(
         self,
@@ -275,11 +264,11 @@ class ResearchReportWriter:
                 "Report writing needs a user request; supply --message for a standalone outline"
             )
         attempt = self._attempt()
-        frozen_ref = f"{attempt}/outline.md"
+        frozen_ref = f"{attempt}/selected_outline.md"
         _write_text_atomic(
             self.workdir / frozen_ref, relocate_links(body, source, self.workdir / frozen_ref)
         )
-        request_ref = f"{attempt}/writing_request.md"
+        request_ref = f"{attempt}/request.md"
         _write_text_atomic(
             self.workdir / request_ref,
             ("# 提纲阶段的原始写作要求\n\n" + original + "\n\n" if original else "")
@@ -293,10 +282,9 @@ class ResearchReportWriter:
         materialize_run_resources(
             self.workdir, resource_variant=resource_variant, destination=self.workdir / resources
         )
-        _write_json_atomic(
-            self.workdir / report_state_ref(self.workdir, self.scope),
+        save_writing_state(self.workdir, report_state_ref(self.workdir, self.scope),
             {
-                "request_ref": request_ref,
+                "task_ref": attempt, "pending_attempt": attempt, "request_ref": request_ref,
                 "outline_ref": frozen_ref,
                 "outline_source": source.relative_to(self.workdir.resolve()).as_posix()
                 if source.is_relative_to(self.workdir.resolve())
@@ -316,9 +304,7 @@ class ResearchReportWriter:
         if state.get("draft_ref"):
             self._publish_draft(state)
             return True
-        attempt = state.get("pending_attempt") or self._attempt()
-        state["pending_attempt"] = attempt
-        _write_json_atomic(self.workdir / report_state_ref(self.workdir, self.scope), state)
+        attempt = state["pending_attempt"]
         output_ref = f"{attempt}/research_report.md"
         task_id = f"reporter-artifacts-report-{Path(attempt).name}"
         resources = state["resources_ref"]
@@ -390,7 +376,7 @@ class ResearchReportWriter:
             if not source.read_text(encoding="utf-8").strip():
                 raise ValueError("Writing output is empty")
             state.update(draft_ref=output_ref, draft_inputs=list(refs), task_id=task_id, round_index=round_index)
-            _write_json_atomic(self.workdir / report_state_ref(self.workdir, self.scope), state)
+            save_writing_state(self.workdir, report_state_ref(self.workdir, self.scope), state)
             accepted_handle, handle = handle, None
             commit_artifact_call_success(accepted_handle, workdir=self.workdir, artifact_ref=output_ref)
             self._publish_draft(state)
@@ -437,7 +423,7 @@ class ResearchReportWriter:
         destination = self.workdir / RESEARCH_REPORT_REF
         _write_text_atomic(destination, relocate_links(source.read_text(encoding="utf-8"), source, destination))
         state["report_ref"] = ref
-        _write_json_atomic(self.workdir / report_state_ref(self.workdir, self.scope), state)
+        save_writing_state(self.workdir, report_state_ref(self.workdir, self.scope), state)
         _publish_reviewed(self.workdir, state, report_state_ref(self.workdir, self.scope),
                           {"research_report": ref, "report_outline": state["outline_ref"]})
 
@@ -449,4 +435,4 @@ def _publish_reviewed(root, state, state_ref, publications):
                      stage="reporter", status="completed", round_index=state.get("round_index", 0),
                      publication_refs=publications)
     state["publication_complete"] = True
-    _write_json_atomic(root / state_ref, state)
+    save_writing_state(root, state_ref, state)

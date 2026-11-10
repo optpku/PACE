@@ -233,45 +233,45 @@ class ProofPipeline:
         )
         with ws.execution_lock():
             if writing_action == "outline":
-                outliner = self._outliner(ws, scope="explicit_writing")
+                outliner = self._outliner(ws, scope="")
                 outliner.request(
                     problem.text,
                     requirements=additional_requirements,
                     resource_variant=self.config.resource_variant,
                 )
-                selected_state = outline_state_ref(ws.root, "explicit_writing")
+                selected_state = outline_state_ref(ws.root, "")
             elif writing_action == "report":
-                writer = self._writer(ws, scope="explicit_writing")
+                writer = self._writer(ws, scope="")
                 writer.request(
                     outline=outline_ref or RESEARCH_OUTLINE_REF,
                     message=problem.text,
                     requirements=additional_requirements,
                     resource_variant=self.config.resource_variant,
                 )
-                selected_state = report_state_ref(ws.root, "explicit_writing")
+                selected_state = report_state_ref(ws.root, "")
             elif writing_action == "paper-outline":
-                self._paper_writer(ws, scope="explicit_writing").request_outline(
+                self._paper_writer(ws, scope="").request_outline(
                     problem.text,
                     requirements=additional_requirements,
                     resource_variant=self.config.resource_variant,
                 )
-                selected_state = paper_outline_state_ref(ws.root, "explicit_writing")
+                selected_state = paper_outline_state_ref(ws.root, "")
             elif writing_action == "paper":
-                self._paper_writer(ws, scope="explicit_writing").request(
+                self._paper_writer(ws, scope="").request(
                     outline=outline_ref or PAPER_OUTLINE_REF,
                     message=problem.text,
                     requirements=additional_requirements,
                     resource_variant=self.config.resource_variant,
                 )
-                selected_state = paper_state_ref(ws.root, "explicit_writing")
+                selected_state = paper_state_ref(ws.root, "")
             elif writing_action:
                 raise ValueError(f"Unknown writing action: {writing_action}")
             if writing_action:
                 from pace.runtime.sessions import run_session
 
-                select_writing_task(ws.root, writing_action, selected_state, scope="explicit_writing")
+                select_writing_task(ws.root, writing_action, selected_state, scope="")
                 with run_session(ws.root, config=self.config):
-                    return self._complete_writing(ws, writing_action, scope="explicit_writing", selected=True)
+                    return self._complete_writing(ws, writing_action, scope="", selected=True)
             if run_dir is not None:
                 from pace.runtime.input_protection import (
                     recover_open_input_snapshots,
@@ -327,20 +327,11 @@ class ProofPipeline:
                         ws, problem, allow_research_continuation=allow_research_continuation,
                         research_context=research_context,
                     )
-                    result = self._terminal_writing(ws, result)
             except BaseException:
                 ws.finish_turn("interrupted")
                 raise
             ws.finish_turn("completed")
             return result
-
-    def _terminal_writing(self, ws, result):
-        if isinstance(result, PipelineResult) and result.run_status == "completed":
-            from pace.reporting.terminal_delivery import complete_terminal_delivery
-            complete_terminal_delivery(self, ws)
-            from pace.reporting.writing import with_writing_outputs
-            return with_writing_outputs(result)
-        return result
 
     def _outliner(self, ws: RunWorkspace, *, scope: str = "") -> ResearchReportOutliner:
         return ResearchReportOutliner(
@@ -501,7 +492,7 @@ class ProofPipeline:
                         on_mode_selected=select_mode,
                     )
                 ws.write_json(
-                    ws.work_ref("stages/orientation/problem_orientation_result.json"),
+                    ws.work_ref("orientation/problem_orientation_result.json"),
                     orientation,
                 )
                 if (
@@ -638,7 +629,6 @@ class ProofPipeline:
                                     request.continuation_action, **kwargs,
                                 ),
                             )
-                            output = self._terminal_writing(workspace, output)
                 except BaseException:
                     if continuing_turn:
                         workspace.finish_turn("interrupted")
@@ -655,7 +645,6 @@ class ProofPipeline:
                     result = self._resume(
                         workspace, checkpoint, continuation_action, **kwargs
                     )
-                    result = self._terminal_writing(workspace, result)
             except BaseException:
                 workspace.finish_turn("interrupted")
                 raise
@@ -670,10 +659,6 @@ class ProofPipeline:
         *,
         finalize: bool = False,
     ) -> PipelineResult:
-        if continuation_action == "TERMINAL_DELIVERY":
-            from pace.orchestrator.recovery import _project_terminal_result
-            report = json.loads(workspace.path(workspace.work_ref("final_report.json")).read_text())
-            return _project_terminal_result(workspace, report)
         if finalize and continuation_action in {"WRITING", "PROOF", "SETUP"}:
             from pace.orchestrator.recovery import RecoveryError
 
@@ -955,7 +940,7 @@ class ProofPipeline:
                 target_contract_ref=ws.work_ref("input/target_contract.json"),
                 problem_brief_ref=orientation_result.get("problem_brief_ref", ""),
                 orientation_ref=ws.work_ref(
-                    "stages/orientation/problem_orientation_result.json"
+                    "orientation/problem_orientation_result.json"
                 ),
             ),
         )
@@ -1083,14 +1068,14 @@ class ProofPipeline:
         state["failure_refs"].append(ref)
         state["last_failure_ref"] = ref
         save_setup(ws.root, state)
-        note = ws.work_ref("stages/orientation/setup_failure.md")
+        note = ws.work_ref("orientation/setup_failure.md")
         ws.write_text_atomic(
             note,
             "# Initialization interrupted\n\n"
             f"Reason: `{reason_code}`. Saved phase: `{state['phase']}`.\n\n"
             "Correct the input environment or service, then use `pace resume --run-dir PATH`. "
             "Changing the literal problem requires a new turn or problem ID.\n\n"
-            f"Diagnostics: [{Path(ref).name}](../../state/setup_attempts/{Path(ref).name}).\n",
+            f"Diagnostics: [{Path(ref).name}](../state/setup_attempts/{Path(ref).name}).\n",
         )
         report_ref = ws.work_ref("final_report.json")
         report = {

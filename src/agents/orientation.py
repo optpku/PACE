@@ -87,7 +87,7 @@ def run_problem_orientation(
             spec=extraction_role.call_spec(
                 validator=lambda payload: validate_problem_extraction_payload(text, payload),
             ),
-            host_metadata={"task_id": "orientation", "stage_ref": work_ref(root, "stages/orientation")},
+            host_metadata={"task_id": "orientation", "stage_ref": work_ref(root, "orientation")},
         )
         if isinstance(extraction, SemanticInterfaceFailure):
             return {"stage_status": "INTERFACE_FAILED", "interface_failure":
@@ -98,7 +98,7 @@ def run_problem_orientation(
     errors = validate_problem_extraction_payload(text, state["extraction"])
     if errors:
         raise ValueError("saved target extraction is invalid")
-    locations_ref = work_ref(root, "stages/orientation/target_locations.json")
+    locations_ref = work_ref(root, "orientation/target_locations.json")
     target_ref = work_ref(root, "input/target_contract.json")
     if recommend:
         if validate_json_instance(state["extraction"], problem_extraction_output_schema(recommend_mode=True)):
@@ -119,7 +119,7 @@ def run_problem_orientation(
     if on_mode_selected is not None:
         on_mode_selected(state["mode"], state["mode_source"], state["mode_reason"])
     proof_brief = state["mode"] == "proof"
-    assessment_ref = work_ref(root, "stages/orientation/assessment.json")
+    assessment_ref = work_ref(root, "orientation/assessment.json")
     brief_ref = work_ref(root, "input/problem_brief.md")
     def accept_brief(payload):
         state["brief" if proof_brief else "assessment"] = payload
@@ -140,7 +140,7 @@ def run_problem_orientation(
             ),
             input_refs=(work_ref(root, "input/problem.md"), target_ref),
             host_metadata={"output_ref": brief_ref if proof_brief else assessment_ref,
-                           "task_id": "orientation", "stage_ref": work_ref(root, "stages/orientation")},
+                           "task_id": "orientation", "stage_ref": work_ref(root, "orientation")},
         )
         diagnostic = {}
         if isinstance(assessment, SemanticInterfaceFailure):
@@ -175,7 +175,7 @@ def run_problem_orientation(
         else:
             diagnostic = {"reason_code": "orientation_brief_missing", "output_ref": brief_ref}
     if diagnostic:
-        result["diagnostics_ref"] = work_ref(root, "stages/orientation/brief_diagnostics.json")
+        result["diagnostics_ref"] = work_ref(root, "orientation/brief_diagnostics.json")
         committed_json(result["diagnostics_ref"], diagnostic)
     state["phase"] = "READY"
     save()

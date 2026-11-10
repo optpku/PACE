@@ -7,6 +7,8 @@ and incomplete output files are never promoted to candidate proofs.
 
 from __future__ import annotations
 
+from pace.runtime.output.workspace import stage_ref
+
 import json
 import logging
 from collections.abc import Mapping
@@ -26,7 +28,6 @@ from pace.orchestrator.director_led import (
     DirectorLedState,
     _validate_verification_checkpoint,
 )
-from pace.orchestrator.finding_publication import publication_reuse_refs
 from pace.pipeline_types import PipelineResult
 from pace.reporting.terminal_report import (
     FINAL_REPORT_SCHEMA_VERSION,
@@ -311,7 +312,7 @@ def finalize_director_led(
     from pace.runtime.output.events import publish_progress
     envelope = FinalReportEnvelope.validate(report)
 
-    publish_progress(root, task_id=f"final-{report['director_state']['round_index']}-{envelope.result}", stage='mathematical_result', status='completed', final_report=report)
+    publish_progress(root, task_id=f"final-{report['director_state']['round_index']}-{envelope.result}", stage='run', status='finished', final_report=report)
 
     def resolve_artifact(name: str) -> Path | None:
         ref = str(envelope.artifact_refs.get(name) or "")
@@ -522,7 +523,7 @@ def _resolve_chain(
     if not _is_safe_ref(verification_observation_ref):
         raise DirectorLedFinalizationError("Director-led verification reference is invalid")
     expected_verification_ref = (
-        f"{work_ref(ws.root, 'stages')}/{int(state.round_index):04d}/verification/verification.json"
+        f"{stage_ref(int(state.round_index), workdir=ws.root)}/verification/verification.json"
     )
     if verification_observation_ref != expected_verification_ref:
         raise DirectorLedFinalizationError(
@@ -583,7 +584,7 @@ def _last_candidate_state(ws: RunWorkspace, state: DirectorLedState | None) -> D
             continue
         result = _read_object(ws.root / ref)
         round_dir = Path(ref).parent
-        assignment_ref = (round_dir / "assignment/task.json").as_posix()
+        assignment_ref = (round_dir / "task.json").as_posix()
         assignment = _read_object(ws.root / assignment_ref)
         if assignment.get("agent_id") == "prover" and result.get("status") == "SUCCEEDED":
             candidates.append((int(assignment["round_index"]), ref, result, assignment_ref))
@@ -603,16 +604,11 @@ def _publish_report(ws: RunWorkspace, report: dict[str, Any]) -> dict[str, Any]:
     if report["result"] == "PASS":
         try:
             kernel = json.loads(ws.path(refs["kernel"]).read_text(encoding="utf-8"))
-            if not publication_reuse_refs(ws.root, kernel):
-                publish_finding(
-                    ws.root, source_ref=refs["proof"], verification_ref=refs["verification"],
-                    round_index=report["director_state"]["round_index"],
-                )
+            publish_finding(ws.root, source_ref=refs["proof"], verification_ref=refs["verification"],
+                            round_index=report["director_state"]["round_index"], publication=kernel["publication"])
         except Exception as exc:
             report["finding_publication_diagnostics"] = [str(exc)]
             logger.warning("Verified final finding publication failed", exc_info=True)
-    refs["report"] = work_ref(ws.root, "outcome.md")
-    ws.write_text_atomic(refs["report"], "# Mathematical outcome\n\n" + json.dumps({key: report.get(key) for key in ("result", "mathematical_status", "reason_code", "execution_mode", "mode_source", "mode_reason")}, ensure_ascii=False, indent=2) + "\n")
     refs["findings"] = [row["ref"] for row in finding_entries(ws.root)]
     report["publication_status"] = "PUBLISHED" if report["result"] == "PASS" else "REPORT_ONLY"
     FinalReportEnvelope.validate(report)
@@ -673,8 +669,7 @@ def _safe_round_existing_path(
     try:
         expected_root = (
             Path(root).resolve()
-            / work_ref(root, 'stages')
-            / f"{int(round_index):04d}"
+            / stage_ref(int(round_index), workdir=root)
         ).resolve()
         resolved.relative_to(expected_root)
     except (OSError, RuntimeError, ValueError):

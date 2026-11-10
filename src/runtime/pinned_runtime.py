@@ -9,6 +9,20 @@ import sys
 from pace.runtime.output.workspace import path_has_symlink_component
 
 
+def pin_runtime(root: Path) -> None:
+    """Freeze executable files once at run creation, before any model call."""
+    import shutil
+    from pace.runtime.output.workspace import _write_json_atomic
+    source = Path(__file__).resolve().parents[1]
+    package = Path(root) / "work/runtime/initial/pace"
+    shutil.copytree(source, package, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".DS_Store"))
+    files = {p.relative_to(package).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+             for p in sorted(package.rglob("*")) if p.is_file()}
+    _write_json_atomic(Path(root) / "work/state/runtime_binding.json", {
+        "schema_version": "pace_runtime_binding/v1", "package_ref": package.relative_to(root).as_posix(), "files": files,
+    })
+
+
 def reexec_pinned_runtime(run_dir: Path, arguments: list[str]) -> None:
     """Honor a local run's explicit, hash-bound runtime before touching its state."""
     root = Path(run_dir).expanduser().resolve()

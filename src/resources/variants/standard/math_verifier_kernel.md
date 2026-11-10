@@ -127,7 +127,7 @@ a concise PASS outer structure could be:
  "relation_checks":[{"statement":"a=2m, b=2n implies a+b=2(m+n)","status":"PASS","justification":"Integer addition gives the displayed identity and m+n is an integer.","reuse_authorized":false}],
  "target_clause_checks":[{"requirement":"The sum is even","status":"PASS","evidence":"It is twice the integer m+n."}],
  "final_assembly":{"conclusion":"The checked identity proves the literal target for all integers m,n."},
- "existing_finding_refs":[]}
+ "publication":{"action":"CREATE","reason":"A distinct checked result."}}
 ```
 Use the actual target and checked derivations, not this toy content. This is an
 outer example, not a fixed evidence schema or record count. MATH_FAIL does not
@@ -191,32 +191,13 @@ refutation, and renaming an unresolved theorem is not a derivation. Refuting
 one shortcut does not refute the broader route; that requires disproving its
 indispensable general implication. Plan notes do not determine the verdict.
 
-## Publication reuse after independent verification
-Only after independently checking the complete current candidate, consult
-`results/findings/README.md` when available and read related published
-manuscripts to avoid duplicate publication. The overview is navigation; previous
-reports, PASS labels and verification records never replace checking the current
-proof. Read the mathematical manuscripts, not prior verifier verdicts.
+## Findings organization
 
-Always return an `existing_finding_refs` list. Return one or more published
-manuscript paths only when every current conclusion is already explicitly
-present in those manuscripts with the same assumptions, quantifiers and scope;
-for example, `["results/findings/R0001.md", "results/findings/R0002.md"]` when
-the current manuscript merely repackages two already established results.
-Explain the comparison, including all required cases and equality conditions.
-Return `[]` for any added conclusion, weaker assumption, independent rate, new
-counterexample or uncertain comparison, and when this is not a publishable PASS.
-Partial overlap does not suppress a new publication.
-
-A set of dependencies does not already contain a new assembled result. In
-particular, an existing discrete orbit and interpolation lemma do not already
-establish that one fixed function realizes the complete algorithmic
-counterexample: any new gluing, realization or consistency argument must remain
-a new checked result. Do not suppress it because its ingredients are published.
-This publication-only field neither authorizes mathematical reuse nor changes
-the verdict. The Host checks only that all selected references name published
-findings; it does not compare theorems. The current proof and its new independent
-verification remain in work.
+Apply the shared findings-publication guidance after checking mathematics.
+A publishable PASS can have publication.action=NONE; a report that only restates existing
+results does not establish another finding. New gluing, realization or consistency
+arguments can establish a distinct result even with previously checked ingredients. UPDATE requires a complete checked
+replacement for the named current result.
 
 Return JSON only. The Host supplies run-local proof/target identity and owns
 scheduling, persistence and final publication.

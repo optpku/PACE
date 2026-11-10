@@ -4,7 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from .results import finding_entries
+from .results import finding_publications
 from .workspace import _write_json_atomic, path_has_symlink_component
 
 
@@ -50,7 +50,7 @@ def validate_finding_manifest(root: Path, value: dict, stage: Path) -> dict:
     for ref in value["current_refs"]:
         check(ref)
     published = set()
-    for row in finding_entries(root):
+    for row in finding_publications(root):
         published.add(row["source_ref"])
         receipt = root / row["verification_ref"]
         if receipt.is_file():

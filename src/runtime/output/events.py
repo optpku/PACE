@@ -121,7 +121,7 @@ def publish_progress(
     root = Path(workdir)
     terminal = final_report is not None or bool(final_report_ref) or status in {"cancelled", "stopped"}
     fields = dict(task_id=task_id, parent_task_id=parent_task_id, stage=stage,
-        stage_ref=stage_ref(round_index, final=terminal, workdir=root),
+        stage_ref=stage_ref(round_index, final=terminal or stage == "reporter", workdir=root),
         round_index=round_index, status=status, notice=notice, task_count=task_count,
         artifact_refs=list(artifact_refs), publication_refs=dict(publication_refs or {}),
         final_report_ref=final_report_ref or (work_ref(root, "final_report.json") if final_report is not None else ""),
@@ -130,7 +130,10 @@ def publish_progress(
     previous = [row for row in read_updates(root) if row["task_id"] == task_id and row["status"] == status]
     if previous and all(previous[-1].get(key) == value for key,value in fields.items()):
         return previous[-1]
-    return append_event(root, "PROGRESS", idempotency_key=f"progress:{task_id}:{status}:{len(previous)}", **fields)
+    event = append_event(root, "PROGRESS", idempotency_key=f"progress:{task_id}:{status}:{len(previous)}", **fields)
+    from .navigation import refresh_navigation
+    refresh_navigation(root, stage=fields["stage_ref"])
+    return event
 
 
 def summarize_calls(events: Any) -> dict[str, Any]:

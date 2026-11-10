@@ -101,11 +101,11 @@ def stage_ref(round_index: int = 0, *, workdir: Path, final: bool = False) -> st
     name = (
         "finalization"
         if final
-        else f"{round_index:04d}"
+        else f"round{round_index:04d}"
         if round_index
         else "orientation"
     )
-    return f"{work_ref(workdir, 'stages')}/{name}"
+    return f"{work_ref(workdir)}/{name}"
 
 
 def path_has_symlink_component(root: Path, path: Path) -> bool:
@@ -130,7 +130,7 @@ def path_has_symlink_component(root: Path, path: Path) -> bool:
 
 def is_call_path(path: Path) -> bool:
     """Call traces are provenance, never mathematical artifact inputs."""
-    return "calls" in path.parts and "stages" in path.parts
+    return "calls" in path.parts
 
 
 def is_private_transport_path(path: Path) -> bool:
@@ -171,6 +171,9 @@ class RunWorkspace:
         workspace = cls(root=root, problem_id=safe_problem_id)
         for relative in ("memory", "results/findings", "work/state"):
             workspace.path(relative).mkdir(parents=True)
+        workspace.write_json("work/state/layout.json", {"schema_version": "pace_run_layout/v2"})
+        from pace.runtime.pinned_runtime import pin_runtime
+        pin_runtime(root)
         workspace.start_turn()
         return workspace
 
@@ -186,18 +189,22 @@ class RunWorkspace:
         index = int(current_turn(self.root)[4:]) + 1 if record.is_file() else 1
         turn_id = f"turn{index:03d}"
         self.path("work", turn_id).mkdir(exist_ok=False)
-        for relative in ("input", "state", "stages"):
+        for relative in ("input", "state"):
             self.path("work", turn_id, relative).mkdir()
         self.write_json(CURRENT_TURN_REF, {"turn_id": turn_id, "status": "running", "updated_at": utc_now()})
 
         from pace.runtime.output.events import initialize_events
 
         initialize_events(self.root)
+        from .navigation import refresh_navigation
+        refresh_navigation(self.root)
 
         return turn_id
 
     def finish_turn(self, status: str) -> None:
         self.write_json(CURRENT_TURN_REF, {"turn_id": self.turn_id, "status": status, "updated_at": utc_now()})
+        from .navigation import refresh_navigation
+        refresh_navigation(self.root)
 
     @contextmanager
     def execution_lock(self):
@@ -242,6 +249,9 @@ class RunWorkspace:
         resolved = Path(root).expanduser().resolve()
         if not resolved.is_dir():
             raise ValueError(f"run directory does not exist: {resolved}")
+        layout = resolved / "work/state/layout.json"
+        if not layout.is_file() or json.loads(layout.read_text()).get("schema_version") != "pace_run_layout/v2":
+            raise ValueError("This run uses an older layout. Resume with its original pinned runtime; do not move its evidence files.")
         if not (resolved / work_ref(resolved, "input/problem.md")).is_file():
             raise ValueError(f"run directory is missing problem.md: {resolved}")
         reconcile_execution_state(resolved)
@@ -307,7 +317,7 @@ def list_problems(output_root: Path) -> list[dict]:
         state = reconcile_execution_state(root)
         rows.append({"problem_id": root.name, "run_dir": str(root.resolve()), **state,
                      "title": problem_title(root),
-                     "report": str(root / work_ref(root, "outcome.md"))})
+                     "report": str(root / "README.md")})
     return rows
 
 

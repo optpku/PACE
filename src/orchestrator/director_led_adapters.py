@@ -10,6 +10,8 @@ promoted to a deliverable.
 
 from __future__ import annotations
 
+from pace.runtime.output.workspace import stage_ref
+
 import json
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, dataclass
@@ -39,7 +41,7 @@ from pace.runtime.semantic import (
 
 
 from pace.runtime.output.finding_manifest import (
-    FINDING_MANIFEST_POLICY, current_finding_drafts, ensure_finding_inventory, scoped_stage,
+    FINDING_MANIFEST_POLICY, ensure_finding_inventory, scoped_stage,
 )
 
 SPECIALIST_STAGE = "DIRECTOR_LED_SPECIALIST"
@@ -127,7 +129,7 @@ def build_default_specialist_handlers(
 
     ``output_ref_factory`` may be supplied by the engine to bind its round
     artifact layout.  The default layout is deterministic and remains below
-    ``work/<current-turn>/stages``.
+    ``work/<current-turn>/roundNNNN``.
     """
 
     root = Path(workdir)
@@ -371,7 +373,7 @@ def run_default_specialist(
             llm,
             str(prompt or "") + _ARTIFACT_DELIVERY_POLICY
             + (_PLANNER_DELIVERY_POLICY if normalized_agent == "planner" else "")
-            + ((FINDING_MANIFEST_POLICY + " Read assignment/context.json for required inputs. Its archive_refs are on-demand sources, not an additional reading list. Select only a needed definition or proof from the archive; record the dependency used. ") if scoped_stage(root, destination.parent) else ""),
+            + ((FINDING_MANIFEST_POLICY + " Read context.json for required inputs. Its archive_refs are on-demand sources, not an additional reading list. Select only a needed definition or proof from the archive; record the dependency used. ") if scoped_stage(root, destination.parent) else ""),
             workdir=root,
             call_name=call_name,
             role=spec.role,
@@ -495,7 +497,7 @@ def run_default_specialist(
         route_state = {"ref": requested_ref}
         if scoped_stage(root, destination.parent):
             frozen = json.loads((destination.parent / "route_context.json").read_text())
-            route_state["incorporated_finding_ids"] = frozen.get("finding_ids", [])
+            route_state["incorporated_finding_versions"] = frozen.get("finding_versions", {})
             route_state["milestone_decision_ref"] = str((context or {}).get("directive_ref") or "")
         if delivery.get("planner_contract"):
             route_state.update(next_task_ref=destination.with_name("next_task.md").relative_to(root).as_posix(),
@@ -565,7 +567,7 @@ def recover_completed_specialist_delivery(root: Path, output_ref: str) -> bool:
         bound = record.get("output_ref")
         if not bound:
             # Older calls have an explicit, frozen assignment and Host prompt.
-            assignment = directory / "assignment/task.json"
+            assignment = directory / "task.json"
             if not assignment.is_file():
                 continue
             task = json.loads(assignment.read_text())
@@ -707,7 +709,7 @@ def _write_failure(
     # Keep adapter artifacts in the same four-digit round layout as the
     # Director-led engine.  A single canonical path is required for resume
     # and for promoting failure diagnostics into the next public snapshot.
-    ref = f"{work_ref(root)}/stages/{max(1, int(round_index or 1)):04d}/specialist_failure.json"
+    ref = f"{stage_ref(max(1, int(round_index or 1)), workdir=root)}/specialist_failure.json"
     payload = {
         "schema_version": "director_led_specialist_failure/v1",
         "agent_id": agent_id,

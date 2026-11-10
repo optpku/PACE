@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pace.runtime.output.workspace import stage_ref
+
 import json
 from pathlib import Path
 
@@ -68,7 +70,7 @@ def run_proof(pipeline, ws):
         state.update(phase="FINALIZE", stop_reason=budget_exhausted(ws.root))
         save()
     if state["phase"] == "SURVEY":
-        output = ws.work_ref("stages/orientation/survey.md")
+        output = ws.work_ref("orientation/survey.md")
         _run_task(
             pipeline,
             ws,
@@ -91,7 +93,7 @@ def run_proof(pipeline, ws):
             save()
             break
         index = state["loop_index"]
-        directory = ws.work_ref(f"stages/{index:04d}")
+        directory = stage_ref(index, workdir=ws.root)
         output = f"{directory}/proof.md"
         result_ref = f"{directory}/agent_result.json"
         if state["phase"] == "PROVE":
@@ -334,13 +336,18 @@ def _finish( ws, state, target_id):
             "artifact_refs": {
                 **resolved["artifact_refs"],
                 "target_contract": ws.work_ref("input/target_contract.json"),
-                "report": ws.work_ref("outcome.md"),
             },
             "publication_status": "NO_PUBLICATION",
         }
+        from pace.runtime.output.results import publish_finding, finding_entries
+        if passed:
+            kernel = json.loads(ws.path(report["artifact_refs"]["kernel"]).read_text())
+            publish_finding(ws.root, source_ref=report["artifact_refs"]["proof"],
+                verification_ref=report["artifact_refs"]["verification"], round_index=state["loop_index"],
+                publication=kernel["publication"])
+            report["publication_status"] = "PUBLISHED"
+        report["artifact_refs"]["findings"] = [row["ref"] for row in finding_entries(ws.root)]
         ws.write_json(report_ref, report)
     report = json.loads(ws.path(report_ref).read_text())
-    outcome = ws.work_ref("outcome.md")
-    ws.write_text_atomic(outcome, "# Mathematical outcome\n\n" + json.dumps(report, ensure_ascii=False, indent=2) + "\n")
-    publish_progress(ws.root, task_id='proof-finished', stage='mathematical_result', status='completed', final_report=report, execution_mode='proof', proof_loops_used=state['loops_started'], max_proof_loops=state['max_loops'])
+    publish_progress(ws.root, task_id='proof-finished', stage='run', status='finished', final_report=report, execution_mode='proof', proof_loops_used=state['loops_started'], max_proof_loops=state['max_loops'])
     return _project_terminal_result(ws, report)

@@ -37,8 +37,7 @@ Respect the Host's saved proof-state and time budgets. Research and Prover
 consume proof-states; planning, Survey, RCI and fixed verification still cost
 time but do not consume that unit. Account for complete-candidate assembly and
 any planned repair. Do not reserve proof-states for Auditor, Kernel or terminal
-writing. Reports and papers belong to the Host's single post-research delivery
-workflow; substantive mathematical, computational and reproduction obligations
+writing. Reports and papers belong to separately requested writing tasks; substantive mathematical, computational and reproduction obligations
 remain part of the route when the literal request requires them.
 
 If the request permits a partial research answer, plan that answer with its

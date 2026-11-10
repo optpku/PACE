@@ -40,7 +40,7 @@ def collect_results(runs_dir: Path) -> list[dict]:
             "semantic_call_count": calls.get("semantic_call_count") if calls is not None else None,
             "transport_attempt_count": calls.get("transport_attempt_count") if calls is not None else None,
             "final_report_ref": final_ref if report is not None else None,
-            "outcome_ref": f"{turn_ref}/outcome.md" if (root / turn_ref / "outcome.md").is_file() else None,
+            "navigation_ref": "README.md" if (root / "README.md").is_file() else None,
             "writing_action": active_writing_request(root).get("action"),
             "writing_complete": writing_complete(root),
             "artifact_refs": artifacts,

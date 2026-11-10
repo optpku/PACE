@@ -6,7 +6,7 @@ from pace.reporting.editorial import review_draft, request_manuscript_revision
 import shutil
 from pathlib import Path
 from typing import Any
-from pace.reporting.writing import read_state
+from pace.reporting.writing import read_state, new_writing_task, save_writing_state
 from pace.runtime.output.events import publish_progress
 from pace.runtime.output.paper import build_paper, build_failure_kind
 from pace.runtime.output.results import relocate_links
@@ -77,17 +77,13 @@ class TheoryPaperWriter:
         self.scope = scope
 
     def _attempt(self, kind: str) -> str:
-        base = f"{stage_ref(workdir=self.workdir, final=True)}/papers/{kind}"
-        index = len(tuple((self.workdir / base).glob("attempt-*"))) + 1
-        ref = f"{base}/attempt-{index:04d}"
-        (self.workdir / ref).mkdir(parents=True, exist_ok=False)
-        return ref
+        return new_writing_task(self.workdir, "paper-outline" if kind == "outline" else "paper")
 
     def request_outline(self, text: str, *, requirements: str = "", resource_variant: str) -> None:
         if not text.strip():
             raise ValueError("Paper outline writing request must not be empty")
         attempt = self._attempt("outline")
-        request_ref = f"{attempt}/writing_request.md"
+        request_ref = f"{attempt}/request.md"
         _write_text_atomic(
             self.workdir / request_ref,
             "# 本次用户输入\n\n" + text + "\n\n# 附加要求\n\n" + requirements + "\n",
@@ -96,9 +92,8 @@ class TheoryPaperWriter:
         materialize_run_resources(
             self.workdir, resource_variant=resource_variant, destination=self.workdir / resources
         )
-        _write_json_atomic(
-            self.workdir / paper_outline_state_ref(self.workdir, self.scope),
-            {"request_ref": request_ref, "resources_ref": resources, "outline_ref": ""},
+        save_writing_state(self.workdir, paper_outline_state_ref(self.workdir, self.scope),
+            {"task_ref": attempt, "pending_attempt": attempt, "request_ref": request_ref, "resources_ref": resources, "outline_ref": ""},
         )
         (self.workdir / paper_state_ref(self.workdir, self.scope)).unlink(missing_ok=True)
 
@@ -131,11 +126,11 @@ class TheoryPaperWriter:
                 "Paper writing needs a user request; supply --message for a standalone outline"
             )
         attempt = self._attempt("paper")
-        frozen_ref = f"{attempt}/paper_outline.md"
+        frozen_ref = f"{attempt}/selected_outline.md"
         _write_text_atomic(
             self.workdir / frozen_ref, relocate_links(body, source, self.workdir / frozen_ref)
         )
-        request_ref = f"{attempt}/writing_request.md"
+        request_ref = f"{attempt}/request.md"
         _write_text_atomic(
             self.workdir / request_ref,
             ("# 提纲阶段的原始写作要求\n\n" + original + "\n\n" if original else "")
@@ -149,10 +144,9 @@ class TheoryPaperWriter:
         materialize_run_resources(
             self.workdir, resource_variant=resource_variant, destination=self.workdir / resources
         )
-        _write_json_atomic(
-            self.workdir / paper_state_ref(self.workdir, self.scope),
+        save_writing_state(self.workdir, paper_state_ref(self.workdir, self.scope),
             {
-                "request_ref": request_ref,
+                "task_ref": attempt, "pending_attempt": attempt, "request_ref": request_ref,
                 "outline_ref": frozen_ref,
                 "outline_source": source.relative_to(self.workdir.resolve()).as_posix()
                 if source.is_relative_to(self.workdir.resolve())
@@ -180,11 +174,9 @@ class TheoryPaperWriter:
         if state.get("draft_ref"):
             self._publish_draft(state, outline=outline)
             return outline or paper_build_status(self.workdir, self.scope) == "COMPLETE"
-        attempt = state.get("pending_attempt") or self._attempt("outline" if outline else "paper")
-        state["pending_attempt"] = attempt
-        _write_json_atomic(self.workdir / state_ref, state)
+        attempt = state["pending_attempt"]
         name = "theory_paper_outline" if outline else "theory_paper_writer"
-        output_ref = f"{attempt}/paper_outline.md" if outline else f"{attempt}/paper/main.tex"
+        output_ref = f"{attempt}/paper_outline.md" if outline else f"{attempt}/draft/main.tex"
         (self.workdir / output_ref).parent.mkdir(parents=True, exist_ok=True)
         task_id = f"reporter-artifacts-{name}-{Path(attempt).name}"
         role, stage = (name.upper(), "HOST_" + name.upper())
@@ -263,7 +255,7 @@ class TheoryPaperWriter:
             if not source.read_text(encoding="utf-8").strip():
                 raise ValueError("Paper output file is empty")
             state.update(draft_ref=output_ref, draft_inputs=list(refs), task_id=task_id)
-            _write_json_atomic(self.workdir / state_ref, state)
+            save_writing_state(self.workdir, state_ref, state)
             accepted_handle, handle = handle, None
             commit_artifact_call_success(accepted_handle, workdir=self.workdir, artifact_ref=output_ref)
             self._publish_draft(state, outline=outline)
@@ -313,9 +305,9 @@ class TheoryPaperWriter:
         else:
             # Commit accepted source before the optional PDF toolchain runs.
             state["paper_ref"] = ref
-            _write_json_atomic(self.workdir / state_ref, state)
+            save_writing_state(self.workdir, state_ref, state)
             self._complete_paper(state)
-        _write_json_atomic(self.workdir / state_ref, state)
+        save_writing_state(self.workdir, state_ref, state)
 
     def _complete_paper(self, state: dict[str, Any]) -> bool:
         """Resume accepted source until it builds, or a concrete blocker persists."""
@@ -329,7 +321,7 @@ class TheoryPaperWriter:
                                   input_refs=tuple(state["draft_inputs"]), markdown=False, continuous=True)
                 # The existing build receipt belongs only to the previous source.
                 state.update(paper_ref=ref, build_ref="")
-                _write_json_atomic(self.workdir / state_ref, state)
+                save_writing_state(self.workdir, state_ref, state)
             build = read_state(self.workdir, state["build_ref"]) if state.get("build_ref") else {}
             log_ref = str(Path(state["paper_ref"]).with_name("build.log"))
             diagnostics = ((self.workdir / log_ref).read_text(encoding="utf-8")
@@ -346,7 +338,7 @@ class TheoryPaperWriter:
                 # instead of generating cosmetic versions indefinitely.
                 if repeated and previous.get("focused") and previous["build_ref"] != state["build_ref"]:
                     state["build_blocker"] = "Compiler diagnostic persisted after its focused correction: " + signature
-                    _write_json_atomic(self.workdir / state_ref, state)
+                    save_writing_state(self.workdir, state_ref, state)
                     return False
                 focused = repeated or bool(previous.get("focused") and previous.get("build_ref") == state["build_ref"])
                 if previous.get("build_ref") != state["build_ref"]:
@@ -367,7 +359,7 @@ class TheoryPaperWriter:
                 self._publish_build(state)
                 return True
             self._build_delivery(state["paper_ref"], state)
-            _write_json_atomic(self.workdir / state_ref, state)
+            save_writing_state(self.workdir, state_ref, state)
             build = read_state(self.workdir, state["build_ref"])
             self._publish_build(state)
             if build.get("status") == "COMPLETE":
@@ -380,17 +372,40 @@ class TheoryPaperWriter:
         identity = [state["build_ref"], build["status"]]
         if state.get("build_publication") == identity:
             return
+        if build["status"] == "COMPLETE":
+            self._publish_paper(state["paper_ref"])
         publish_progress(self.workdir, task_id=state.get("task_id", state["paper_ref"]) + "-build",
                          stage="reporter", status="completed" if build["status"] == "COMPLETE" else "failed",
                          publication_refs=paper_artifacts(self.workdir, snapshots=True, scope=self.scope))
         state["build_publication"] = identity
-        _write_json_atomic(self.workdir / paper_state_ref(self.workdir, self.scope), state)
+        save_writing_state(self.workdir, paper_state_ref(self.workdir, self.scope), state)
 
     def _build_delivery(self, source_ref: str, state: dict[str, Any]) -> None:
         directory = (self.workdir / source_ref).parent
-        build_paper(directory)
-        destination = (self.workdir / PAPER_SOURCE_REF).parent
-        if destination.exists():
-            shutil.rmtree(destination)
-        shutil.copytree(directory, destination)
+        # Reuse a durable successful build after interruption before the task checkpoint.
+        if read_state(self.workdir, f"{Path(source_ref).parent}/build.json").get("status") != "COMPLETE":
+            build_paper(directory)
         state.update(paper_ref=source_ref, build_ref=f"{Path(source_ref).parent}/build.json")
+
+    def _publish_paper(self, source_ref: str) -> None:
+        """Switch the reading copy only after review and a successful complete build."""
+        directory = (self.workdir / source_ref).parent
+        destination = (self.workdir / PAPER_SOURCE_REF).parent
+        staged, previous = destination.with_name(".paper-next"), destination.with_name(".paper-previous")
+        if previous.exists() and not destination.exists():
+            previous.rename(destination)
+        if staged.exists():
+            shutil.rmtree(staged)
+        shutil.copytree(directory, staged)
+        if previous.exists():
+            shutil.rmtree(previous)
+        if destination.exists():
+            destination.rename(previous)
+        try:
+            staged.rename(destination)
+        except BaseException:
+            if previous.exists() and not destination.exists():
+                previous.rename(destination)
+            raise
+        if previous.exists():
+            shutil.rmtree(previous)

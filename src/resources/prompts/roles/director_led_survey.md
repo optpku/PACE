@@ -33,6 +33,8 @@ to retrieve it, not to stop before trying. Save acquired sources or literal
 extracts under the assigned deliverable's sibling `sources/` directory and cite
 their exact paths, URLs, versions and locators in the report.
 
+Preserve the title, authors, year and version actually shown by the acquired source or its authoritative bibliographic record. Keep unknown details explicit; distinguish a source you read from a reference found in another document.
+
 When retrieval is enabled and this turn has a
 `resources/skills/reasatlas-query/SKILL.md` file, use that optional Skill for
 relevant mathematical knowledge searches alongside scholarly or web sources.
