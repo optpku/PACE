@@ -81,7 +81,7 @@ class ProfileRecorder:
             )
             counts[name] = counts.get(name, 0) + 1
         return {
-            "schema_version": "nl_proof_profile_summary/v1",
+            "schema_version": "pace_profile_summary/v1",
             "enabled": self.enabled,
             "event_count": len(self.events),
             "events_path": str(self.path) if self.path is not None else "",

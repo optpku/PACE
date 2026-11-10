@@ -9,7 +9,7 @@ import shutil
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 
-from pace.contracts.research.director_protocol import DIRECTOR_PROTOCOL_SCHEMA_VERSION
+from pace.contracts.director_protocol import DIRECTOR_PROTOCOL_SCHEMA_VERSION
 from pace.runtime.context_state import commit_verified_progress
 from pace.runtime.output.memory import commit_memory_notes
 from pace.runtime.processes import cancellable_model_calls
@@ -27,7 +27,7 @@ def reserve_batch(engine, state, decision):
     manifest_ref = engine._round_ref(first, "batch.json")
     reserved = replace(state, round_index=state.round_index + len(tasks),
                        proof_states_used=state.proof_states_used + sum(
-                           engine._proof_state_cost(task, state) for task in tasks),
+                           engine._proof_state_cost(task) for task in tasks),
                        phase="PENDING_BATCH", pending_assignment_ref=manifest_ref)
     _write_json(engine.workdir / manifest_ref, {
         "reserved_state": reserved.to_json(),
@@ -86,6 +86,7 @@ def _execute(parent, snapshot, task, index, first_round, control_context):
             "schema_version": DIRECTOR_PROTOCOL_SCHEMA_VERSION, "round_index": index, **task,
         })
         decision = _coerce_decision(task)
+        worker._write_assignment_context(decision, index)
         _write_json(worker.workdir / assignment, {
             "schema_version": DIRECTOR_LED_ASSIGNMENT_SCHEMA_VERSION,
             "round_index": index, **{k: task[k] for k in (

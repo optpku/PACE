@@ -1,20 +1,19 @@
-"""References for model-owned prompt assembly.
+"""References for deterministic assembly of role instructions.
 
 The Host selects stable references and records provenance metadata.  The
-Prompt Composer model arranges those references and writing guidance. The
-Host does not inspect or summarize mathematical JSON.
+Host combines the assigned instructions and file references without inspecting
+or summarizing mathematical JSON.
 """
 
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from pace.runtime.output.workspace import work_ref
+from pace.runtime.output.workspace import work_ref, _write_json_atomic
 from pace.runtime.prompts import prompt_root
 
 PROMPT_ASSEMBLY_SCHEMA_VERSION = "prompt_assembly/v3"
@@ -159,7 +158,7 @@ def build_prompt_assembly(
     if manifest_path is not None:
         path = Path(manifest_path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        _atomic_write_json(path, assembly.to_json())
+        _write_json_atomic(path, assembly.to_json())
     return assembly
 
 
@@ -214,14 +213,6 @@ def _manifest_ref(path: Path | None, root: Path) -> str:
         return str(target.resolve().relative_to(root.resolve()))
     except ValueError:
         return str(target)
-
-
-def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
-    temporary = path.with_name(path.name + ".tmp")
-    temporary.write_text(
-        json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
-    os.replace(temporary, path)
 
 
 __all__ = [

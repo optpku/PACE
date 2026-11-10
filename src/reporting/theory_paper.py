@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 import logging
-from pace.reporting.editorial import review_draft
+from pace.reporting.editorial import review_draft, request_manuscript_revision
 import shutil
 from pathlib import Path
 from typing import Any
 from pace.reporting.writing import read_state
 from pace.runtime.output.events import publish_progress
-from pace.runtime.output.paper import build_paper
+from pace.runtime.output.paper import build_paper, build_failure_kind
 from pace.runtime.output.results import relocate_links
 from pace.runtime.output.workspace import (
     _write_json_atomic,
@@ -30,50 +30,51 @@ PAPER_OUTLINE_REF = "results/paper_outline.md"
 PAPER_SOURCE_REF = "results/paper/main.tex"
 
 
-def paper_outline_state_ref(root: Path) -> str:
-    return work_ref(root, "state/paper_outline.json")
+def paper_outline_state_ref(root: Path, scope: str = "") -> str:
+    return work_ref(root, f"state/{scope + '/' if scope else ''}paper_outline.json")
 
 
-def paper_state_ref(root: Path) -> str:
-    return work_ref(root, "state/theory_paper.json")
+def paper_state_ref(root: Path, scope: str = "") -> str:
+    return work_ref(root, f"state/{scope + '/' if scope else ''}theory_paper.json")
 
 
-def paper_outline_artifacts(root: Path, *, snapshots: bool = False) -> dict[str, str]:
-    state = read_state(root, paper_outline_state_ref(root))
+def paper_outline_artifacts(root: Path, *, scope: str = "") -> dict[str, str]:
+    state = read_state(root, paper_outline_state_ref(root, scope))
     if not state.get("outline_ref"):
         return {}
-    ref = state["outline_ref"] if snapshots else PAPER_OUTLINE_REF
+    ref = state["outline_ref"]
     return {"paper_outline": ref} if (Path(root) / ref).is_file() else {}
 
 
-def paper_artifacts(root: Path, *, snapshots: bool = False) -> dict[str, str]:
-    state = read_state(root, paper_state_ref(root))
+def paper_artifacts(root: Path, *, snapshots: bool = False, scope: str = "") -> dict[str, str]:
+    state = read_state(root, paper_state_ref(root, scope))
     if not state.get("paper_ref"):
         return {}
-    ref = state["paper_ref"] if snapshots else PAPER_SOURCE_REF
+    ref = state["paper_ref"]
     source = Path(root) / ref
     if not source.is_file():
         return {}
     result = {"paper_source": ref}
     if source.with_name("references.bib").is_file():
         result["paper_bibliography"] = str(Path(ref).with_name("references.bib"))
-    if paper_build_status(root) == "COMPLETE" and source.with_suffix(".pdf").is_file():
+    if paper_build_status(root, scope) == "COMPLETE" and source.with_suffix(".pdf").is_file():
         result["paper_pdf"] = str(Path(ref).with_suffix(".pdf"))
     if snapshots:
         result["paper_used_outline"] = state["outline_ref"]
     return result
 
 
-def paper_build_status(root: Path) -> str:
-    state = read_state(root, paper_state_ref(root))
+def paper_build_status(root: Path, scope: str = "") -> str:
+    state = read_state(root, paper_state_ref(root, scope))
     return read_state(root, state["build_ref"])["status"] if state.get("build_ref") else ""
 
 
 class TheoryPaperWriter:
     """The Host persists instructions and files; the author chooses the content."""
 
-    def __init__(self, *, llm: Any, composer_llm: Any, workdir: Path) -> None:
-        self.llm, self.composer_llm, self.workdir = (llm, composer_llm, Path(workdir))
+    def __init__(self, *, llm: Any, workdir: Path, scope: str = "") -> None:
+        self.llm, self.workdir = llm, Path(workdir)
+        self.scope = scope
 
     def _attempt(self, kind: str) -> str:
         base = f"{stage_ref(workdir=self.workdir, final=True)}/papers/{kind}"
@@ -96,10 +97,10 @@ class TheoryPaperWriter:
             self.workdir, resource_variant=resource_variant, destination=self.workdir / resources
         )
         _write_json_atomic(
-            self.workdir / paper_outline_state_ref(self.workdir),
+            self.workdir / paper_outline_state_ref(self.workdir, self.scope),
             {"request_ref": request_ref, "resources_ref": resources, "outline_ref": ""},
         )
-        (self.workdir / paper_state_ref(self.workdir)).unlink(missing_ok=True)
+        (self.workdir / paper_state_ref(self.workdir, self.scope)).unlink(missing_ok=True)
 
     def request(
         self,
@@ -109,9 +110,15 @@ class TheoryPaperWriter:
         requirements: str = "",
         resource_variant: str,
     ) -> None:
-        parent = read_state(self.workdir, paper_outline_state_ref(self.workdir))
+        parent = read_state(self.workdir, paper_outline_state_ref(self.workdir, self.scope))
         if outline == PAPER_OUTLINE_REF and parent and (not parent["outline_ref"]):
             raise ValueError("The current paper outline request has not delivered an outline")
+        if not parent and self.scope:
+            parent = read_state(self.workdir, paper_outline_state_ref(self.workdir))
+        if outline == PAPER_OUTLINE_REF and parent:
+            if not parent.get("outline_ref"):
+                raise ValueError("The selected paper outline is not complete")
+            outline = parent["outline_ref"]
         source = (self.workdir / outline).resolve()
         body = source.read_text(encoding="utf-8")
         if not body.strip():
@@ -143,7 +150,7 @@ class TheoryPaperWriter:
             self.workdir, resource_variant=resource_variant, destination=self.workdir / resources
         )
         _write_json_atomic(
-            self.workdir / paper_state_ref(self.workdir),
+            self.workdir / paper_state_ref(self.workdir, self.scope),
             {
                 "request_ref": request_ref,
                 "outline_ref": frozen_ref,
@@ -163,31 +170,19 @@ class TheoryPaperWriter:
         return self._update(outline=False)
 
     def _update(self, *, outline: bool) -> bool:
-        delivered = (
-            paper_outline_artifacts(self.workdir) if outline else paper_artifacts(self.workdir)
-        )
-        if delivered:
-            if not outline and paper_build_status(self.workdir) != "COMPLETE":
-                state_ref = paper_state_ref(self.workdir)
-                state = read_state(self.workdir, state_ref)
-                self._build_delivery(state["paper_ref"], state)
-                _write_json_atomic(self.workdir / state_ref, state)
-                publish_progress(
-                    self.workdir,
-                    task_id="reporter-artifacts-paper-build",
-                    stage="reporter",
-                    status="completed",
-                    publication_refs=paper_artifacts(self.workdir, snapshots=True),
-                )
-            return outline or paper_build_status(self.workdir) == "COMPLETE"
-        state_ref = (
-            paper_outline_state_ref(self.workdir) if outline else paper_state_ref(self.workdir)
-        )
+        state_ref = (paper_outline_state_ref(self.workdir, self.scope) if outline
+                     else paper_state_ref(self.workdir, self.scope))
         state = read_state(self.workdir, state_ref)
+        if outline and paper_outline_artifacts(self.workdir, scope=self.scope):
+            return True
+        if not outline and state.get("paper_ref"):
+            return self._complete_paper(state)
         if state.get("draft_ref"):
             self._publish_draft(state, outline=outline)
-            return outline or paper_build_status(self.workdir) == "COMPLETE"
-        attempt = self._attempt("outline" if outline else "paper")
+            return outline or paper_build_status(self.workdir, self.scope) == "COMPLETE"
+        attempt = state.get("pending_attempt") or self._attempt("outline" if outline else "paper")
+        state["pending_attempt"] = attempt
+        _write_json_atomic(self.workdir / state_ref, state)
         name = "theory_paper_outline" if outline else "theory_paper_writer"
         output_ref = f"{attempt}/paper_outline.md" if outline else f"{attempt}/paper/main.tex"
         (self.workdir / output_ref).parent.mkdir(parents=True, exist_ok=True)
@@ -203,12 +198,16 @@ class TheoryPaperWriter:
             *guides,
             *((state["outline_ref"],) if not outline else ()),
         )
+        from pace.reporting.research_report import report_artifacts
+        reports = report_artifacts(self.workdir, snapshots=True, scope=self.scope)
+        if not reports and self.scope:
+            reports = report_artifacts(self.workdir, snapshots=True)
         candidates = (
             *required,
             "memory/README.md",
             "results/findings/README.md",
             "results/findings/archive.md",
-            "results/research_report.md",
+            *([reports["research_report"]] if reports else []),
             work_ref(self.workdir, "input/problem.md"),
             work_ref(self.workdir, "input/request.md"),
             work_ref(self.workdir, "input/target_contract.json"),
@@ -219,12 +218,11 @@ class TheoryPaperWriter:
         if outline:
             task += "Deliver only the paper outline. Use Markdown links relative to the exact output file.\n"
         else:
-            task += f"Selected outline snapshot (read-only): `{state['outline_ref']}`.\nWrite the whole paper and its complete supplied proofs in `{Path(output_ref).parent}`. Keep main.tex and all required assets together using relative paths. Include bibliography files when cited; an uncited paper needs no bibliography file. The Host compiles with XeLaTeX and BibTeX. For Chinese use ctex with the installed Fandol fonts. Keep compilation logs and PDF text exports outside the delivered source directory. Complete the initial manuscript in this author task. The Host will independently review it and schedule bounded revisions if needed.\nNeurIPS template: `{resources}/templates/neurips2026/neurips_2026.sty`; use this NeurIPS preprint style and copy it unchanged into the output directory. Do not generate a checklist or submission questionnaire.\nYou may compile and fix concrete formatting errors within this task. The Host builds the delivered source and records build status separately from source delivery.\n"
+            task += f"Selected outline snapshot (read-only): `{state['outline_ref']}`.\nWrite the whole paper and its complete supplied proofs in `{Path(output_ref).parent}`. Keep main.tex and all required assets together using relative paths. Include bibliography files when cited; an uncited paper needs no bibliography file. The Host compiles with XeLaTeX and BibTeX. For Chinese use ctex with the installed Fandol fonts. Keep compilation logs and PDF text exports outside the delivered source directory. Complete the initial manuscript in this author task. The Host will independently review it and schedule necessary local revisions until independent review and PDF delivery succeed.\nNeurIPS template: `{resources}/templates/neurips2026/neurips_2026.sty`; use this NeurIPS preprint style and copy it unchanged into the output directory. Do not generate a checklist or submission questionnaire.\nYou may compile and fix concrete formatting errors within this task. The Host builds the delivered source and records build status separately from source delivery.\n"
         publish_progress(self.workdir, task_id=task_id, stage="reporter", status="started")
         handle = None
         try:
             composed = compose_prompt(
-                llm=self.composer_llm,
                 workdir=self.workdir,
                 assembly=PromptAssembly(
                     stage=stage,
@@ -237,7 +235,6 @@ class TheoryPaperWriter:
                     output_artifact_ref=output_ref,
                 ),
                 input_refs=refs,
-                call_name=f"prompt_composer_{name}",
             )
             _write_text_atomic(self.workdir / attempt / "final_prompt.md", composed.final_prompt)
             handle = begin_artifact_call(
@@ -256,6 +253,8 @@ class TheoryPaperWriter:
                     "stage_ref": stage_ref(workdir=self.workdir, final=True),
                     "request_ref": state["request_ref"],
                     "composer_call_id": composed.call_id,
+                    "output_ref": output_ref,
+                    "output_dirs": [] if outline else [str(Path(output_ref).parent)],
                 },
             )
             if handle.transport_status != "SUCCESS":
@@ -263,13 +262,13 @@ class TheoryPaperWriter:
             source = self.workdir / output_ref
             if not source.read_text(encoding="utf-8").strip():
                 raise ValueError("Paper output file is empty")
-            state.update(draft_ref=output_ref, draft_inputs=list(refs))
+            state.update(draft_ref=output_ref, draft_inputs=list(refs), task_id=task_id)
             _write_json_atomic(self.workdir / state_ref, state)
             accepted_handle, handle = handle, None
             commit_artifact_call_success(accepted_handle, workdir=self.workdir, artifact_ref=output_ref)
             self._publish_draft(state, outline=outline)
-            publications = (paper_outline_artifacts(self.workdir, snapshots=True) if outline
-                            else paper_artifacts(self.workdir, snapshots=True))
+            publications = (paper_outline_artifacts(self.workdir, scope=self.scope) if outline
+                            else paper_artifacts(self.workdir, snapshots=True, scope=self.scope))
 
         except Exception as exc:
             logger.warning("Theory paper writing failed", exc_info=True)
@@ -295,17 +294,17 @@ class TheoryPaperWriter:
             self.workdir,
             task_id=task_id,
             stage="reporter",
-            status="completed",
+            status="completed" if outline or paper_build_status(self.workdir, self.scope) == "COMPLETE" else "failed",
             publication_refs=publications,
         )
-        return outline or paper_build_status(self.workdir) == "COMPLETE"
+        return outline or paper_build_status(self.workdir, self.scope) == "COMPLETE"
 
     def _publish_draft(self, state, *, outline):
-        state_ref = paper_outline_state_ref(self.workdir) if outline else paper_state_ref(self.workdir)
+        state_ref = paper_outline_state_ref(self.workdir, self.scope) if outline else paper_state_ref(self.workdir, self.scope)
         ref = review_draft(llm=self.llm, root=self.workdir, state=state,
                            state_ref=state_ref, source_ref=state["draft_ref"],
                            input_refs=tuple(state["draft_inputs"]), markdown=outline,
-                           independent=not outline)
+                           independent=not outline, continuous=True)
         if outline:
             source = self.workdir / ref
             destination = self.workdir / PAPER_OUTLINE_REF
@@ -315,8 +314,77 @@ class TheoryPaperWriter:
             # Commit accepted source before the optional PDF toolchain runs.
             state["paper_ref"] = ref
             _write_json_atomic(self.workdir / state_ref, state)
-            self._build_delivery(ref, state)
+            self._complete_paper(state)
         _write_json_atomic(self.workdir / state_ref, state)
+
+    def _complete_paper(self, state: dict[str, Any]) -> bool:
+        """Resume accepted source until it builds, or a concrete blocker persists."""
+        state_ref = paper_state_ref(self.workdir, self.scope)
+        while True:
+            editorial = state.get("editorial", {})
+            if editorial and (not editorial.get("approved")
+                              or editorial.get("current_ref") != state["paper_ref"]):
+                ref = review_draft(llm=self.llm, root=self.workdir, state=state,
+                                  state_ref=state_ref, source_ref=state["draft_ref"],
+                                  input_refs=tuple(state["draft_inputs"]), markdown=False, continuous=True)
+                # The existing build receipt belongs only to the previous source.
+                state.update(paper_ref=ref, build_ref="")
+                _write_json_atomic(self.workdir / state_ref, state)
+            build = read_state(self.workdir, state["build_ref"]) if state.get("build_ref") else {}
+            log_ref = str(Path(state["paper_ref"]).with_name("build.log"))
+            diagnostics = ((self.workdir / log_ref).read_text(encoding="utf-8")
+                           if (self.workdir / log_ref).is_file() else "")
+            kind = build.get("failure_kind") or build_failure_kind(
+                build.get("status", ""), diagnostics + "\n" + build.get("reason", ""))
+            if build.get("status") == "FAILED" and kind == "SOURCE":
+                signature = build.get("source_error_signature") or build.get("reason", "")
+                history = state.setdefault("compiler_repairs", [])
+                previous = history[-1] if history else {}
+                repeated = previous.get("signature") == signature and previous.get("build_ref") != state["build_ref"]
+                # Normal, effective repairs have no total-count cap. A repeated
+                # unchanged diagnostic gets one focused correction, then stops
+                # instead of generating cosmetic versions indefinitely.
+                if repeated and previous.get("focused") and previous["build_ref"] != state["build_ref"]:
+                    state["build_blocker"] = "Compiler diagnostic persisted after its focused correction: " + signature
+                    _write_json_atomic(self.workdir / state_ref, state)
+                    return False
+                focused = repeated or bool(previous.get("focused") and previous.get("build_ref") == state["build_ref"])
+                if previous.get("build_ref") != state["build_ref"]:
+                    history.append({"signature": signature, "build_ref": state["build_ref"], "focused": focused})
+                state.pop("build_blocker", None)
+                request_manuscript_revision(root=self.workdir, state=state, state_ref=state_ref,
+                    source_ref=state["paper_ref"], markdown=False,
+                    format_only=True, local_patch=True,
+                    input_refs=(log_ref,),
+                    issues=f"Formatting-only repair of compiler diagnostics in `{log_ref}`. "
+                           "Read that log and correct only the reported LaTeX/bibliography defects. "
+                           "Preserve mathematical statements, proofs and citations. Do not install "
+                           "tools or fetch sources. Keep the complete local source bundle. "
+                           + ("The same diagnostic survived the previous repair. Correct its precise root cause; "
+                              "do not make cosmetic changes or repeat the ineffective edit." if focused else ""))
+                continue
+            if build.get("status") == "COMPLETE":
+                self._publish_build(state)
+                return True
+            self._build_delivery(state["paper_ref"], state)
+            _write_json_atomic(self.workdir / state_ref, state)
+            build = read_state(self.workdir, state["build_ref"])
+            self._publish_build(state)
+            if build.get("status") == "COMPLETE":
+                return True
+            if build.get("failure_kind") != "SOURCE":
+                return False
+
+    def _publish_build(self, state):
+        build = read_state(self.workdir, state["build_ref"])
+        identity = [state["build_ref"], build["status"]]
+        if state.get("build_publication") == identity:
+            return
+        publish_progress(self.workdir, task_id=state.get("task_id", state["paper_ref"]) + "-build",
+                         stage="reporter", status="completed" if build["status"] == "COMPLETE" else "failed",
+                         publication_refs=paper_artifacts(self.workdir, snapshots=True, scope=self.scope))
+        state["build_publication"] = identity
+        _write_json_atomic(self.workdir / paper_state_ref(self.workdir, self.scope), state)
 
     def _build_delivery(self, source_ref: str, state: dict[str, Any]) -> None:
         directory = (self.workdir / source_ref).parent

@@ -7,15 +7,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-from pace.runtime.output.workspace import (
-    _write_json_atomic,
-    _write_text_atomic,
-)
+from pace.runtime.output.workspace import _write_json_atomic
 from pace.runtime.prompt_policy import PromptAssembly
 
 
 class PromptComposerError(ValueError):
-    """A Composer transport or output failure owned by the Host interface."""
+    """A missing input or invalid assembly at the Host prompt boundary."""
 
     failure_owner = "HOST"
     reason_code = "prompt_composer_interface_failed"
@@ -33,13 +30,9 @@ class PromptComposerResult:
 
 def compose_prompt(
     *,
-    llm: Any,
     workdir: Path,
     assembly: PromptAssembly,
     input_refs: Iterable[str],
-    call_name: str,
-    semantic_call_fn: Any | None = None,
-    round_index: int = 0,
 ) -> PromptComposerResult:
     """Render a fixed role task without a model call."""
     from pace.runtime.prompts import prompt_root
@@ -95,7 +88,8 @@ def write_dependency_manifest(*, workdir: Path, output_ref: str,
         entries.append({
             **row, "statement_and_assumptions_ref": row["source_ref"],
             "source_lines": [1, len(body.splitlines())], "source_summary_verbatim": title,
-            "source_text": body, "verification_receipt": receipt,
+            "verification_receipt_ref": row["verification_ref"],
+            "receipt_reuse_authorized": receipt.get("verdict", receipt).get("reuse_authorized", False),
             "current_target_contract_id": target_contract_id,
             "target_relationship": "To be established explicitly in this candidate; not inferred by the Host.",
         })
@@ -104,46 +98,8 @@ def write_dependency_manifest(*, workdir: Path, output_ref: str,
         table.append("| None | No checked finding dependency is available. | — |")
     ref = str(Path(output_ref).with_name("dependency_manifest.json"))
     _write_json_atomic(workdir / ref, {"target_contract_id": target_contract_id, "entries": entries})
-    table.append(f"Exact source and receipt snapshot: `{ref}`. Inspect original proofs as needed.")
+    table.append(f"Source and receipt index: `{ref}`. Read each dependency's original proof before using it; bodies are not duplicated in this index.")
     return ref, "\n".join(table)
-
-
-def record_composer_manifest(path: Path, result: PromptComposerResult) -> None:
-    """Add Composer provenance to an existing assembly manifest."""
-
-    target = Path(path)
-    try:
-        payload = json.loads(target.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise PromptComposerError(
-            "Prompt assembly manifest is unavailable",
-            diagnostics=({"stage": "prompt_composer", "reason": str(exc)},),
-        ) from exc
-    if not isinstance(payload, dict):
-        raise PromptComposerError("Prompt assembly manifest is not an object")
-    payload.update(
-        {
-            "composer_call_id": result.call_id,
-            "final_prompt_ref": str(target.with_name("final_prompt.md")),
-            "assembly_source": "template",
-        }
-    )
-    prompt_ref = target.with_name("final_prompt.md")
-    try:
-        _write_text_atomic(prompt_ref, result.final_prompt)
-        _write_json_atomic(target, payload)
-    except (OSError, UnicodeError) as exc:
-        raise PromptComposerError(
-            "Prompt assembly manifest could not be written",
-            diagnostics=(
-                {
-                    "stage": "prompt_composer",
-                    "reason_code": "manifest_write_failed",
-                    "error_type": type(exc).__name__,
-                    "message": str(exc),
-                },
-            ),
-        ) from exc
 
 
 def _format_budget(value: Any) -> str:
@@ -155,27 +111,8 @@ def _format_budget(value: Any) -> str:
         return str(value)
 
 
-def _input_guidance(paths: Iterable[str], assembly: PromptAssembly, root: Path) -> str:
-    """Label suggested reading paths; the role can discover further context."""
-
-    groups = {
-        label: {(root / ref).resolve() for ref in refs}
-        for label, refs in (
-            ("required", assembly.required_refs),
-            ("contract guide", assembly.contract_guide_refs),
-            ("artifact guide", assembly.artifact_guide_refs),
-        )
-    }
-    lines = []
-    for ref in paths:
-        labels = [label for label, refs in groups.items() if (root / ref).resolve() in refs]
-        lines.append(f"- `{ref}` — {', '.join(labels) or 'on-demand context'}")
-    return "\n".join(lines) or "- (none)"
-
-
 __all__ = [
     "PromptComposerError",
     "PromptComposerResult",
     "compose_prompt",
-    "record_composer_manifest",
 ]

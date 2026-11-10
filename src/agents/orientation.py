@@ -7,16 +7,15 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from pace.agents.roles import run_semantic_role
-from pace.contracts.problem.loader import Problem
-from pace.contracts.problem.target import (
+from pace.contracts.problem import Problem
+from pace.contracts.target import (
     SCHEMA_VERSION as TARGET_CONTRACT_SCHEMA_VERSION,
 )
-from pace.contracts.problem.target import target_contract_id
+from pace.contracts.target import target_contract_id
 from pace.runtime.json_values import dict_rows as _rows
 from pace.runtime.output.workspace import RunWorkspace, work_ref
 from pace.runtime.prompts import render_prompt_template
-from pace.runtime.roles import SemanticRoleSpec
+from pace.agents.roles import SemanticRoleSpec
 from pace.runtime.schema import (
     INTEGER,
     STRING,
@@ -82,12 +81,13 @@ def run_problem_orientation(
     extraction_role = replace(extraction_role, on_accept=accept_extraction)
     save()
     if state["phase"] == "EXTRACTION":
-        extraction = run_semantic_role(
+        extraction = semantic_call(
             llm, build_problem_extraction_prompt(text, workdir=root, recommend_mode=recommend),
             workdir=root, call_name="problem_orientation_extract", input_refs=(),
-            semantic_call_fn=semantic_call, role=extraction_role,
+            spec=extraction_role.call_spec(
+                validator=lambda payload: validate_problem_extraction_payload(text, payload),
+            ),
             host_metadata={"task_id": "orientation", "stage_ref": work_ref(root, "stages/orientation")},
-            validator=lambda payload: validate_problem_extraction_payload(text, payload),
         )
         if isinstance(extraction, SemanticInterfaceFailure):
             return {"stage_status": "INTERFACE_FAILED", "interface_failure":
@@ -129,15 +129,16 @@ def run_problem_orientation(
     brief_role = replace(_PROOF_BRIEF_ROLE if proof_brief else _RESEARCH_DECISION_ROLE,
                          on_accept=accept_brief)
     if state["phase"] == "ASSESSMENT":
-        assessment = run_semantic_role(
+        assessment = semantic_call(
             llm, build_research_decision_prompt(workdir=root, proof_brief=proof_brief), workdir=root,
-            call_name="problem_research_decision", role=brief_role,
-            validator=(lambda payload: [] if payload.get("brief_ref") == brief_ref
-                       and (root / brief_ref).is_file() and (root / brief_ref).read_text().strip()
-                       else [{"json_pointer": "/brief_ref", "expected": "the nonempty requested brief file"}])
-                       if proof_brief else None,
+            call_name="problem_research_decision",
+            spec=brief_role.call_spec(
+                validator=(lambda payload: [] if payload.get("brief_ref") == brief_ref
+                           and (root / brief_ref).is_file() and (root / brief_ref).read_text().strip()
+                           else [{"json_pointer": "/brief_ref", "expected": "the nonempty requested brief file"}])
+                           if proof_brief else None,
+            ),
             input_refs=(work_ref(root, "input/problem.md"), target_ref),
-            semantic_call_fn=semantic_call,
             host_metadata={"output_ref": brief_ref if proof_brief else assessment_ref,
                            "task_id": "orientation", "stage_ref": work_ref(root, "stages/orientation")},
         )

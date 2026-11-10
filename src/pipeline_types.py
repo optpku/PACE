@@ -3,7 +3,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from pace.model_defaults import default_resource_variant
+MODEL_RESOURCE_DEFAULTS: dict[tuple[str, str], str] = {
+    ("gpt-5.5", "medium"): "standard",
+    ("gpt-5.5", "high"): "standard",
+    ("gpt-5.5", "xhigh"): "standard",
+    ("gpt-5.6-sol", "high"): "standard",
+    ("gpt-5.6-sol", "xhigh"): "standard",
+    ("gpt-6.1-sol", "medium"): "standard",
+    ("gpt-6.1-sol", "high"): "standard",
+    ("gpt-6.1-sol", "xhigh"): "standard",
+    ("deepseek-v4-flash", "none"): "weak",
+}
 
 MAX_PROOF_STATES = 16
 DEFAULT_PROOF_LOOPS = 5
@@ -41,7 +51,7 @@ class PipelineConfig:
             raise ValueError(f"unsupported web search mode: {self.web_search_mode}")
         variant = self.resource_variant
         if variant is None:
-            variant = default_resource_variant(self.model, self.reasoning_effort)
+            variant = MODEL_RESOURCE_DEFAULTS.get((self.model, self.reasoning_effort), "weak")
         if variant not in {"standard", "weak"}:
             raise ValueError(f"unsupported resource variant: {variant}")
         object.__setattr__(self, "resource_variant", variant)

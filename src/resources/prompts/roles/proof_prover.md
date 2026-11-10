@@ -11,7 +11,7 @@ assigned output file. Preserve the legal hypotheses, quantifiers and requested
 answer. Check the conditions of each cited or derived result at its use. Supply
 the necessary derivations; a source lead or earlier PASS label is not a proof.
 Use the relevant mathematical Skills without running conjecture-discovery or
-SMI workflows. Preserve exact source URLs and locators for retrieved evidence.
+RCI workflows. Preserve exact source URLs and locators for retrieved evidence.
 
 Work on the same proof task across successive loops. The first loop writes the
 initial complete proof; later loops revise the current proof using the latest

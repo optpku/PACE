@@ -9,7 +9,7 @@ from pace.reporting.terminal_report import (
     FinalReportEnvelopeError,
 )
 from pace.runtime.json_values import as_dict as _as_dict
-from pace.runtime.output.workspace import CURRENT_TURN_REF, utc_now, work_ref
+from pace.runtime.output.workspace import CURRENT_TURN_REF, utc_now, work_ref, reconcile_execution_state
 
 
 def postmortem_rescan(
@@ -27,7 +27,9 @@ def postmortem_rescan(
     summary = {
         "schema_version": "runner_summary/v4",
         "updated_at": utc_now(),
-        "run_status": "running" if active and completed < len(problems) else "completed",
+        "run_status": ("running" if any(row["run_status"] == "running" for row in problems)
+                       else "interrupted" if any(row["run_status"] == "interrupted" for row in problems)
+                       else "completed"),
         "expected_problem_count": len(problem_ids),
         "completed_problem_count": completed,
         "problems": problems,
@@ -94,13 +96,14 @@ def _problem_summary(root: Path, problem_id: str, *, active: bool) -> dict[str, 
     completed = bool(row["final_report_file"])
     return {
         **row, "problem_id": problem_id,
-        "run_status": row["run_status"] if completed else "running" if active else "missing",
+        "run_status": row["run_status"] or "missing",
         "result": row["result"] if completed else "missing",
         "artifact_class": "final_report" if completed else "missing",
     }
 
 
 def _run_summary(run_dir: Path) -> dict[str, Any]:
+    execution = reconcile_execution_state(run_dir) if (run_dir / CURRENT_TURN_REF).is_file() else {}
     report = run_dir / work_ref(run_dir, "final_report.json") if (run_dir / CURRENT_TURN_REF).is_file() else None
     payload = _read_json(report)
     is_terminal = _is_terminal_report(payload)
@@ -109,7 +112,7 @@ def _run_summary(run_dir: Path) -> dict[str, Any]:
     return {
         "run_dir": str(run_dir),
         "final_report_file": str(report) if is_terminal else "",
-        "run_status": str(payload.get("run_status") or "") if is_terminal else "",
+        "run_status": str(payload.get("run_status") or "") if is_terminal else execution.get("status", ""),
         "result": str(payload.get("result") or "") if is_terminal else "",
         "termination_owner": (
             str(payload.get("termination_owner") or "") if is_terminal else ""

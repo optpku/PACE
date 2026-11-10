@@ -25,7 +25,6 @@ state/
 runs/
 run_records/
 .codex_calls/
-.nl-proof-runs/
 *.log
 screenlog.*
 profile.json

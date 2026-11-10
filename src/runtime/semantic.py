@@ -4,21 +4,19 @@ import json
 import logging
 import uuid
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Union
 
 from pace.runtime.json_values import as_dict as _as_dict
-from pace.runtime.output.calls import begin_call, call_directory, finish_call
+from pace.runtime.output.calls import begin_call, call_directory, finish_call, pending_native_call
 from pace.runtime.output.events import (
     append_event,
     initialize_events,
     write_call_summary,
 )
 from pace.runtime.output.workspace import _write_json_atomic
-from pace.runtime.schema import (
-    validate_json_instance as _validate_json_instance,
-)
+from pace.runtime.schema import preflight_output_schema, validate_json_instance
 
 # Structured semantic calls
 
@@ -95,6 +93,23 @@ def begin_artifact_call(
     root = Path(workdir)
     input_refs = tuple(str(item) for item in input_refs)
     initialize_events(root)
+    recovered = pending_native_call(root, role=role, stage=stage, prompt=prompt,
+                                    input_refs=input_refs, metadata=metadata or {})
+    if recovered:
+        record, call_ref, attempt, response = recovered
+        transport = attempt / "transport_result.json"
+        saved = json.loads(transport.read_text()) if transport.is_file() else {}
+        if on_started is not None:
+            on_started(call_ref)
+        append_event(root, "SEMANTIC_CALL_RECOVERED", call_id=record["call_id"],
+                     call_name=call_name, role=role, stage=stage, call_ref=call_ref)
+        # Transport completion alone grants no acceptance. The artifact owner
+        # still validates, checkpoints and commits this exact saved delivery.
+        return ArtifactCallHandle(call_id=record["call_id"], call_name=call_name,
+            role=role, stage=stage, call_ref=call_ref,
+            response_ref=(attempt / "response.txt").relative_to(root).as_posix(),
+            invocation_id=saved.get("invocation_id", attempt.relative_to(root).as_posix()),
+            response_text=response, transport_status="SUCCESS")
     call_id = "SC-ARTIFACT-" + uuid.uuid4().hex
     call_ref = begin_call(
         root,
@@ -349,16 +364,19 @@ def _semantic_call_once(
     """Execute exactly one model call for one semantic task."""
 
     from pace.runtime.llm import (
+        CodexCallError,
         RETRY_DETERMINISTIC_HOST,
         RETRY_MODEL_REPRESENTATION,
         TransportFailure,
+        TransportSuccess,
     )
-    from pace.runtime.structured_output import complete_structured_result
 
     root = Path(workdir)
     allowed_inputs = tuple(str(item) for item in input_refs)
-    call_id = uuid.uuid4().hex
-    call_ref = begin_call(
+    recovered = pending_native_call(root, role=spec.role, stage=call_name, prompt=prompt,
+                                    input_refs=allowed_inputs, metadata=host_metadata or {})
+    call_id = recovered[0]["call_id"] if recovered else uuid.uuid4().hex
+    call_ref = recovered[1] if recovered else begin_call(
         root,
         call_id=call_id,
         role=spec.role,
@@ -370,7 +388,7 @@ def _semantic_call_once(
     initialize_events(root)
     append_event(
         root,
-        "SEMANTIC_CALL_STARTED",
+        "SEMANTIC_CALL_RECOVERED" if recovered else "SEMANTIC_CALL_STARTED",
         call_id=call_id,
         call_name=call_name,
         role=spec.role,
@@ -390,25 +408,62 @@ def _semantic_call_once(
     invocation_ids: list[str] = []
     payload: dict[str, Any] = {}
     acceptance_failed = False
-    transport = complete_structured_result(
-        llm,
-        str(prompt or ""),
-        workdir=root,
-        call_name=call_name,
-        output_schema=spec.semantic_schema,
-        input_refs=allowed_inputs,
-        ledger_context={
-            "call_id": call_id,
-            "call_ref": call_ref,
-            "role": spec.role,
-            "stage": call_name,
-            "output_refs": (host_metadata or {}).get(
-                "output_refs", [(host_metadata or {}).get("output_ref", "")]
-            ),
-            "output_dirs": (host_metadata or {}).get("output_dirs", ()),
-        },
-        fatal_scope=spec.fatal_scope,
-    )
+    scope = str(spec.fatal_scope or "RUN").upper()
+    if scope not in {"RUN", "CALL"}:
+        raise ValueError(f"unsupported fatal_scope: {spec.fatal_scope}")
+    preflight = preflight_output_schema(spec.semantic_schema)
+    if not preflight.ok:
+        transport = TransportFailure(
+            invocation_id="",
+            call_name=call_name,
+            error_code="HOST_SCHEMA_CONTRACT_ERROR",
+            retry_class=RETRY_DETERMINISTIC_HOST,
+            retryable=False,
+            exit_code=None,
+            terminal_event_type="schema.preflight.failed",
+            attempt_count=0,
+            diagnostics=preflight.diagnostics,
+            artifact_dir=root,
+            fatal_scope=scope,
+            authority_evidence={
+                "source": "LOCAL_PREFLIGHT",
+                "diagnostic_count": len(preflight.diagnostics),
+            },
+        )
+        if scope == "RUN":
+            from pace.runtime.sessions import record_model_failure
+
+            record_model_failure(
+                root, CodexCallError.from_result(transport, workdir=root, stage=call_name)
+            )
+    elif recovered:
+        attempt, response = recovered[2:]
+        transport = TransportSuccess(
+            text=response, invocation_id=attempt.relative_to(root).as_posix(), call_name=call_name,
+            exit_code=None, terminal_event_type="turn.completed", accepted_output_source="saved_native_response",
+            output_schema_valid=None, attempt_count=len(list(attempt.parent.iterdir())), artifact_dir=attempt,
+            authority_evidence={"source": "NATIVE_COMPLETION_RECOVERY", "os_exit_code_observed": False},
+        )
+    else:
+        transport = llm.complete_structured_result(
+            str(prompt or ""),
+            workdir=root,
+            call_name=call_name,
+            output_schema=spec.semantic_schema,
+            ledger_context={
+                "call_id": call_id,
+                "call_ref": call_ref,
+                "role": spec.role,
+                "stage": call_name,
+                "input_refs": allowed_inputs,
+                "output_refs": (host_metadata or {}).get(
+                    "output_refs", [(host_metadata or {}).get("output_ref", "")]
+                ),
+                "output_dirs": (host_metadata or {}).get("output_dirs", ()),
+            },
+        )
+        if isinstance(transport, TransportFailure):
+            transport = replace(transport, fatal_scope=scope)
     if transport.invocation_id:
         invocation_ids.append(transport.invocation_id)
     transport_metadata = {
@@ -441,11 +496,11 @@ def _semantic_call_once(
     else:
         try:
             payload = json.loads(raw)
-            diagnostics.extend(validate_semantic_payload(payload, spec.semantic_schema))
+            diagnostics.extend(validate_json_instance(payload, spec.semantic_schema))
             if not diagnostics and spec.normalizer is not None:
                 payload = spec.normalizer(payload)
                 diagnostics.extend(
-                    validate_semantic_payload(payload, spec.semantic_schema)
+                    validate_json_instance(payload, spec.semantic_schema)
                 )
             if not diagnostics and spec.validator is not None:
                 diagnostics.extend(spec.validator(payload))
@@ -610,13 +665,6 @@ def _semantic_call_once(
             diagnostics=tuple(diagnostics),
         )
     return SemanticInterfaceFailure(host=host, diagnostics=tuple(diagnostics))
-
-
-def validate_semantic_payload(
-    value: Any, schema: dict[str, Any], *, pointer: str = ""
-) -> list[dict[str, Any]]:
-    """Validate the JSON-Schema subset used by model semantic contracts."""
-    return _validate_json_instance(value, schema, pointer=pointer)
 
 
 def interface_failure_payload(

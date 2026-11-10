@@ -25,7 +25,7 @@ deliverable.
 Then formulate a small dependency graph of work items. Each item is a bounded
 mathematical objective for subsequent research, not a Host state or proof claim.
 Expose the available evidence and unknown mechanisms so the Director can judge
-whether a lightweight Research attempt or deeper SMI investigation is useful.
+whether a lightweight Research attempt or deeper RCI investigation is useful.
 A precise objective can still require substantial conjecture or mechanism
 search; framing does not prescribe the specialist or a startup sequence.
 Preserve materially different support chains instead of collapsing

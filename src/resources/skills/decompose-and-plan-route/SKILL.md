@@ -22,7 +22,7 @@ The literal target, available source/proof artifacts, current conditions, and la
 
 ## Output and handoff
 
-One coherent route with proved, conditional, and unresolved steps distinguished. Director dispatches; the plan does not authorize assumptions or decide mathematical acceptance. Write into the artifact requested by the role. Cite the source/proof
+One concise dependency route with proved, conditional, and unresolved steps distinguished, followed by one next bounded work ticket. Do not prewrite proofs or alternative specialist tasks; cite their canonical manuscripts. Preserve formulas needed to state each missing implication. Director dispatches; the plan does not authorize assumptions or decide mathematical acceptance. Write into the artifact requested by the role. Cite the source/proof
 references and retain unresolved dependencies. Skill text and worked examples
 are methods, not evidence for the current problem. Final acceptance still
 requires fresh review of the complete literal-target proof.

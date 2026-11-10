@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,81 @@ from typing import Any
 from pace.runtime.output.workspace import work_ref
 
 from .workspace import _write_json_atomic, _write_text_atomic, stage_ref
+
+
+def artifact_owner_metadata(root: Path, ref: str) -> dict[str, Any]:
+    """Attribute an editorial/control call to its saved artifact, not orientation."""
+    path = Path(ref)
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError("Artifact owner must be run-relative")
+    parts = path.parts
+    if len(parts) >= 5 and parts[0] == "work" and parts[2] == "stages":
+        owner = Path(*parts[:4]).as_posix()
+        round_index = int(parts[3]) if parts[3].isdigit() else 0
+    else:
+        owner, round_index = path.parent.as_posix(), 0
+    target = (root / Path(*parts[:2]) / "input/target_contract.json"
+              if len(parts) >= 2 and parts[0] == "work" else None)
+    contract = json.loads(target.read_text()) if target and target.is_file() else {}
+    return {"stage_ref": owner, "round_index": round_index,
+            "target_contract_id": contract.get("contract_id", ""),
+            "task_id": ref}
+
+
+def completed_native_response(record_path: Path) -> tuple[Path, str] | None:
+    """Read a completed native response whose protected inputs still match.
+
+    This proves transport completion only. The caller must reapply its current
+    receipt/file validators and Host commit; it is not mathematical acceptance.
+    Use only under the run execution lock, after orphan workers have stopped.
+    """
+    attempts = sorted((record_path.parent / "attempts").glob("*"))
+    if not attempts:
+        return None
+    attempt = attempts[-1]
+    protection = record_path.parent / "protected_inputs/manifest.json"
+    try:
+        transport = attempt / "transport_result.json"
+        if transport.is_file() and json.loads(transport.read_text()).get("status") != "SUCCESS":
+            return None
+        response = (attempt / "response.txt").read_text(encoding="utf-8")
+        events = [json.loads(line) for line in (attempt / "stdout.jsonl").read_text().splitlines() if line.strip()]
+        messages = [e["item"]["text"] for e in events if e.get("type") == "item.completed"
+                    and e.get("item", {}).get("type") == "agent_message"]
+        if (not events or events[-1].get("type") != "turn.completed"
+                or not messages or not response.strip() or messages[-1].strip() != response.strip()):
+            return None
+        protected = json.loads(protection.read_text())
+        if protected.get("restored_paths") or any(
+            not Path(row["path"]).is_file() or Path(row["path"]).is_symlink()
+            or Path(row["path"]).read_bytes() != (protection.parent / row["snapshot"]).read_bytes()
+            for row in protected["entries"]
+        ):
+            return None
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return attempt, response
+
+
+def pending_native_call(root: Path, *, role: str, stage: str, prompt: str,
+                        input_refs: Iterable[str], metadata: Mapping[str, Any]) -> tuple[dict, str, Path, str] | None:
+    """Find the exact unfinished request, never reuse a different task's response."""
+    owner = metadata.get("stage_ref") or stage_ref(int(metadata.get("round_index", 0) or 0), workdir=root)
+    for path in sorted((root / owner / "calls").glob("*/record.json"), reverse=True):
+        record = json.loads(path.read_text())
+        if (record.get("status") != "STARTED" or record.get("role") != role
+                or record.get("stage") != stage
+                or record.get("input_refs") != list(dict.fromkeys(input_refs))
+                or any(record.get(key, "") != str(metadata.get(key) or "")
+                       for key in ("target_contract_id", "task_id", "output_ref"))):
+            continue
+        if (record.get("prompt_sha256") and record["prompt_sha256"] != hashlib.sha256(prompt.encode()).hexdigest()
+                or (root / record["prompt_ref"]).read_text() != prompt):
+            continue
+        recovered = completed_native_response(path)
+        if recovered:
+            return record, path.relative_to(root).as_posix(), *recovered
+    return None
 
 
 def begin_call(
@@ -49,7 +125,9 @@ def begin_call(
             "parent_task_id": str(meta.get("parent_task_id") or ""),
             "status": "STARTED",
             "prompt_ref": prompt_ref,
+            "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
             "input_refs": list(dict.fromkeys(str(ref) for ref in input_refs)),
+            "output_ref": str(meta.get("output_ref") or ""),
             "response_ref": "",
             "deliverable_ref": "",
             "invocation_ids": [],
@@ -93,71 +171,6 @@ def finish_call(
     if terminal_metadata is not None:
         record["terminal_metadata"] = dict(terminal_metadata)
     _write_json_atomic(path, record)
-
-
-def _delivery_input_bytes(root: Path, ref: str) -> bytes:
-    path = root / ref
-    content = path.read_bytes()
-    if ref.endswith("/final_report.json") and ref == work_ref(root, "final_report.json"):
-        # Delivery progress may change while the mathematical verdict stays
-        # fixed. It must not invalidate a completed writing task on resume.
-        report = json.loads(content)
-        content = json.dumps(
-            {key: report.get(key) for key in (
-                "problem_id", "result", "answer_mode", "terminal_kind",
-                "execution_mode", "target_contract_id", "target_contract_unavailable",
-                "proof_binding", "reason_code", "termination_owner",
-            )}, sort_keys=True, ensure_ascii=False,
-        ).encode("utf-8")
-    return content
-
-
-def delivery_commit_metadata(root: Path, *, inputs, outputs, result) -> dict:
-    """Bind one terminal editorial task to its actual inputs and output bytes."""
-    outputs = tuple(dict.fromkeys(outputs))
-    folder = Path(outputs[0]).parent / "committed_files"
-    metadata = {"delivery_result": result}
-    for kind, refs in (("inputs", inputs), ("outputs", outputs)):
-        snapshots = {}
-        for index, ref in enumerate(dict.fromkeys(refs)):
-            if kind == "inputs" and not (root / ref).is_file():
-                continue
-            snapshot = folder / kind / f"{index:04d}"
-            (root / snapshot).parent.mkdir(parents=True, exist_ok=True)
-            content = (_delivery_input_bytes(root, ref) if kind == "inputs"
-                       else (root / ref).read_bytes())
-            (root / snapshot).write_bytes(content)
-            snapshots[ref] = snapshot.as_posix()
-        metadata[f"delivery_{kind}"] = snapshots
-    return metadata
-
-
-def checkpoint_artifact_call(root: Path, attempt: str, call_ref: str) -> None:
-    _write_json_atomic(root / attempt / "artifact_call.json", {"call_ref": call_ref})
-
-
-def completed_delivery_call(root: Path, attempt: str) -> dict | None:
-    """Read an explicitly checkpointed owner commit, never infer from a draft.
-
-    This is local terminal-delivery recovery, not a mathematical proof cache.
-    """
-    if not attempt:
-        return None
-    checkpoint = root / attempt / "artifact_call.json"
-    if not checkpoint.is_file():
-        return None
-    record = json.loads((root / json.loads(checkpoint.read_text())["call_ref"]).read_text())
-    metadata = record.get("terminal_metadata", {})
-    if record["status"] != "SUCCEEDED" or not metadata.get("delivery_outputs"):
-        return None
-    for ref, snapshot in metadata["delivery_inputs"].items():
-        if not (root / ref).is_file() or _delivery_input_bytes(root, ref) != (root / snapshot).read_bytes():
-            raise ValueError(f"Completed delivery input changed: {ref}; preserve the old task")
-    for ref, snapshot in metadata["delivery_outputs"].items():
-        if (not (root / ref).is_file()
-                or (root / ref).read_bytes() != (root / snapshot).read_bytes()):
-            raise ValueError(f"Completed delivery output changed: {ref}; preserve the old task")
-    return metadata
 
 
 def update_agent_call_deliverable(

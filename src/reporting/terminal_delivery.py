@@ -1,6 +1,6 @@
 """One saved report/paper delivery sequence after each completed research turn."""
 from pace.reporting.writing import read_state, writing_artifacts
-from pace.runtime.output.events import publish_progress
+from pace.runtime.output.events import publish_progress, read_updates
 from pace.runtime.output.workspace import _write_json_atomic, work_ref
 from pace.reporting.research_report import outline_state_ref, report_state_ref
 from pace.reporting.theory_paper import paper_outline_state_ref, paper_state_ref
@@ -10,10 +10,26 @@ def delivery_state(root):
     return read_state(root, work_ref(root, "state/terminal_delivery.json"))
 
 
+def delivery_complete(root):
+    """Include the final notice, including for older completed checkpoints."""
+    return delivery_state(root).get("status") == "completed" and any(
+        row.get("task_id") == "turn-delivery" and row.get("status") == "finished"
+        for row in read_updates(root)
+    )
+
+
+def _publish_completion(root):
+    publish_progress(root, task_id="turn-delivery", stage="run", status="finished",
+                     publication_refs=writing_artifacts(root, snapshots=True, scope=""))
+
+
 def complete_terminal_delivery(pipeline, ws):
     ref = ws.work_ref("state/terminal_delivery.json")
     state = delivery_state(ws.root) or {"completed": [], "status": "pending"}
     if state["status"] == "completed":
+        # Older versions committed completion before publishing the notice.
+        # The event writer is idempotent; only this local step needs recovery.
+        _publish_completion(ws.root)
         return
     policy = read_state(ws.root, ws.work_ref("state/research_execution_policy.json"))
     variant = policy["resource_variant"]
@@ -47,7 +63,6 @@ def complete_terminal_delivery(pipeline, ws):
             raise
         state["completed"].append(action)
         _write_json_atomic(ws.root / ref, state)
+    _publish_completion(ws.root)
     state.update(status="completed", action="")
     _write_json_atomic(ws.root / ref, state)
-    publish_progress(ws.root, task_id="turn-delivery", stage="run", status="finished",
-                     publication_refs=writing_artifacts(ws.root, snapshots=True))

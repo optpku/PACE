@@ -22,7 +22,7 @@ The literal target, exact source passage or current derivation, notation map, an
 
 ## Output and handoff
 
-An insertable adaptation with its conditions, or the first failed transfer and a concrete replacement obligation. Recommend deeper SMI work to Director when the missing ingredient needs exploration. Write into the artifact requested by the role. Cite the source/proof
+An insertable adaptation with its conditions, or the first failed transfer and a concrete replacement obligation. Recommend deeper RCI work to Director when the missing ingredient needs exploration. Write into the artifact requested by the role. Cite the source/proof
 references and retain unresolved dependencies. Skill text and worked examples
 are methods, not evidence for the current problem. Final acceptance still
 requires fresh review of the complete literal-target proof.

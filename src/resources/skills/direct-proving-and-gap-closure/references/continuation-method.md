@@ -39,5 +39,5 @@ invariant with conditions at each application, or the precise unclosed link
 and its downstream effect. These remain local derivations for reconstruction
 and independent final verification.
 If closing that link needs an unknown mechanism rather than a local derivation,
-include the concrete attempts and explain to Director why deeper SMI research
+include the concrete attempts and explain to Director why deeper RCI research
 would help; the conditional lemma alone does not establish the missing closure.

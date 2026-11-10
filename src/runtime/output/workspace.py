@@ -32,6 +32,61 @@ def utc_now() -> str:
 CURRENT_TURN_REF = "work/state/current_turn.json"
 
 
+def _record_unobserved_exit(root: Path, *, reason: str) -> None:
+    """Under the execution lock, correct operational state without changing math."""
+    path = root / CURRENT_TURN_REF
+    if not path.is_file():
+        return
+    state = json.loads(path.read_text())
+    if state.get("status") != "running":
+        return
+    state.update(status="interrupted", updated_at=utc_now(), interruption_reason=reason)
+    _write_json_atomic(path, state)
+    sessions = root / work_ref(root, "state/sessions.json")
+    if sessions.is_file():
+        rows = json.loads(sessions.read_text())
+        for row in rows:
+            if row.get("status") == "running" and not row.get("ended_at"):
+                row.update(status="end_unobserved", observed_inactive_at=utc_now(),
+                           measurement_gap="Host is no longer running. Exit time and OS exit code were not observed.")
+        _write_json_atomic(sessions, rows)
+    from pace.runtime.output.events import append_event
+
+    append_event(root, "EXECUTION_INTERRUPTED", reason=reason, exit_code=None)
+
+
+def reconcile_execution_state(root: Path) -> dict:
+    """Inspect liveness on list/open/resume; never infer death from elapsed time."""
+    root = Path(root).resolve()
+    path = root / CURRENT_TURN_REF
+    if any(owner[0] == os.getpid() and owner[2] == str(root) for owner in _OWNED_LOCKS.get()):
+        return json.loads(path.read_text())
+    with (root / "work/state/execution.lock").open("a") as stream:
+        try:
+            fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return json.loads(path.read_text())
+        try:
+            from pace.runtime.processes import assert_no_active_model_processes
+
+            try:
+                assert_no_active_model_processes(root)
+            except ValueError:
+                # Legacy workers may not inherit the lock. Their PID/start
+                # identity must be gone before a run can be resumed.
+                return json.loads(path.read_text())
+            _record_unobserved_exit(root, reason="execution lock is free and no owned worker is alive")
+            execution = root / "work/state/execution.json"
+            if execution.is_file():
+                row = json.loads(execution.read_text())
+                if row.get("status") == "running":
+                    row.update(status="end_unobserved", observed_inactive_at=utc_now())
+                    _write_json_atomic(execution, row)
+        finally:
+            fcntl.flock(stream, fcntl.LOCK_UN)
+    return json.loads(path.read_text())
+
+
 def current_turn(root: Path) -> str:
     return json.loads((Path(root) / CURRENT_TURN_REF).read_text(encoding="utf-8"))["turn_id"]
 
@@ -76,6 +131,11 @@ def path_has_symlink_component(root: Path, path: Path) -> bool:
 def is_call_path(path: Path) -> bool:
     """Call traces are provenance, never mathematical artifact inputs."""
     return "calls" in path.parts and "stages" in path.parts
+
+
+def is_private_transport_path(path: Path) -> bool:
+    """Exclude call traces and private transport files from mathematical artifacts."""
+    return is_call_path(path) or path.name.startswith("private_")
 
 
 def sanitize_id(raw: str) -> str:
@@ -152,15 +212,24 @@ class RunWorkspace:
                 raise ValueError("This problem already has an active exploration") from exc
             token = None
             try:
-                from pace.runtime.processes import assert_no_active_model_processes
+                from pace.runtime.processes import assert_no_active_model_processes, _process_identity
 
                 assert_no_active_model_processes(self.root)
+                # A previous session may have died before its finally block.
+                if self.path(self.work_ref("state/sessions.json")).is_file():
+                    _record_unobserved_exit(self.root, reason="previous execution ended without closing the turn")
                 token = _OWNED_LOCKS.set((*_OWNED_LOCKS.get(), owner))
+                execution = {"status": "running", "started_at": utc_now(),
+                             "host": _process_identity(os.getpid())}
+                self.write_json("work/state/execution.json", execution)
                 with _EXECUTION_FDS_MUTEX:
                     _EXECUTION_FDS[(owner[0], owner[2])] = stream.fileno()
                 yield
             finally:
                 if token is not None:
+                    _record_unobserved_exit(self.root, reason="execution ended with unfinished turn work")
+                    execution.update(status="ended", ended_at=utc_now())
+                    self.write_json("work/state/execution.json", execution)
                     _OWNED_LOCKS.reset(token)
                     with _EXECUTION_FDS_MUTEX:
                         _EXECUTION_FDS.pop((owner[0], owner[2]), None)
@@ -168,13 +237,14 @@ class RunWorkspace:
 
     @classmethod
     def open_existing(cls, root: Path) -> "RunWorkspace":
-        """Open one run directory without creating or rewriting any artifact."""
+        """Open a run and reconcile stale operational state, preserving math."""
 
         resolved = Path(root).expanduser().resolve()
         if not resolved.is_dir():
             raise ValueError(f"run directory does not exist: {resolved}")
         if not (resolved / work_ref(resolved, "input/problem.md")).is_file():
             raise ValueError(f"run directory is missing problem.md: {resolved}")
+        reconcile_execution_state(resolved)
         return cls(
             root=resolved,
             problem_id=resolved.name,
@@ -234,7 +304,7 @@ def list_problems(output_root: Path) -> list[dict]:
     rows = []
     for record in sorted(Path(output_root).glob(f"*/{CURRENT_TURN_REF}")):
         root = record.parents[2]
-        state = json.loads(record.read_text(encoding="utf-8"))
+        state = reconcile_execution_state(root)
         rows.append({"problem_id": root.name, "run_dir": str(root.resolve()), **state,
                      "title": problem_title(root),
                      "report": str(root / work_ref(root, "outcome.md"))})

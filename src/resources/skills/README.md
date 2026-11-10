@@ -9,7 +9,7 @@ Director may recommend a method in `prompt_brief` or name its file in
 | --- | --- | --- |
 | [Survey and source analysis](survey-and-source-analysis/SKILL.md) | Locate a theorem and determine what its proof actually supplies. | Survey |
 | [Evidence reuse](evidence-reuse/SKILL.md) | Carry an earlier result into a changed candidate or condition profile. | Planner, Research, Prover |
-| [SMI investigation](smi-investigation/SKILL.md) | Develop conjectures and mechanisms through support, coverage, and challenge. | Director, SMI |
+| [RCI investigation](rci-investigation/SKILL.md) | Develop conjectures and mechanisms through support, coverage, and challenge. | Director, RCI |
 | [Failure diagnosis](failure-diagnosis/SKILL.md) | Turn a failed attempt or review into a precise next obligation. | Planner, Research, Prover |
 | [Route planning](decompose-and-plan-route/SKILL.md) | Connect premises to the target through explicit dependencies. | Planner |
 | [Direct proving](direct-proving-and-gap-closure/SKILL.md) | Derive a scoped claim or repair the load-bearing gap. | Research, Prover |
@@ -30,6 +30,6 @@ configured, is a source retrieval option; it is not bundled here.
 
 Both prompt variants use this library. Skills and their illustrative examples
 remain search context. They cannot change the target, certify novelty, or
-grant a mathematical PASS. SMI phases receive their own method files; blind
+grant a mathematical PASS. RCI phases receive their own method files; blind
 probes retain their statement-only task boundary. Auditor/Kernel use independent
 verification prompts, and manuscript roles keep their assigned writing guides.

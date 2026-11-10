@@ -10,6 +10,6 @@ purpose stated; return changes to the assigned statement to Planner.
 
 Explain whether the residue supports another lightweight local attempt or needs
 deeper research into a conjecture, mechanism or construction. For the latter,
-recommend SMI to Director with the actual attempts, the point of failure and the
+recommend RCI to Director with the actual attempts, the point of failure and the
 open research question. Method changes within the assignment are allowed; a
 precise route node is not evidence that its mechanism is already available.

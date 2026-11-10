@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-real_codex="${NL_PROOF_REAL_CODEX:-codex}"
-auth_mode="${NL_PROOF_CODEX_AUTH_MODE:-api_key}"
-base_url="${NL_PROOF_CODEX_BASE_URL:-}"
-provider_name="${NL_PROOF_CODEX_PROVIDER_NAME:-pace}"
-wire_api="${NL_PROOF_CODEX_WIRE_API:-responses}"
-requires_openai_auth="${NL_PROOF_CODEX_REQUIRES_OPENAI_AUTH:-false}"
+real_codex="${PACE_REAL_CODEX:-codex}"
+auth_mode="${PACE_CODEX_AUTH_MODE:-api_key}"
+base_url="${PACE_CODEX_BASE_URL:-}"
+provider_name="${PACE_CODEX_PROVIDER_NAME:-pace}"
+wire_api="${PACE_CODEX_WIRE_API:-responses}"
+requires_openai_auth="${PACE_CODEX_REQUIRES_OPENAI_AUTH:-false}"
 
 config_args=()
 if [[ "$auth_mode" == "api_key" ]]; then
-  if [[ -z "$base_url" || -z "${NL_PROOF_CODEX_API_KEY:-}" ]]; then
+  if [[ -z "$base_url" || -z "${PACE_CODEX_API_KEY:-}" ]]; then
     echo "Codex API-key mode requires a nonempty base URL and API key." >&2
     exit 2
   fi
@@ -23,8 +23,7 @@ if [[ "$auth_mode" == "api_key" ]]; then
     -c "model_provider=\"$provider_name\""
     -c "model_providers.$provider_name.name=\"$provider_name\""
     -c "model_providers.$provider_name.base_url=\"$base_url\""
-    -c "model_providers.$provider_name.env_key=\"NL_PROOF_CODEX_API_KEY\""
-    -c "model_providers.$provider_name.env_http_headers={\"x-opencode-session\"=\"NL_PROOF_CODEX_SESSION_ID\"}"
+    -c "model_providers.$provider_name.env_key=\"PACE_CODEX_API_KEY\""
     -c "model_providers.$provider_name.wire_api=\"$wire_api\""
     -c "model_providers.$provider_name.requires_openai_auth=$requires_openai_auth"
   )

@@ -72,7 +72,7 @@ $$
 省略 `--mode` 时，首次目标定位会判断模式：只有适合直接证明的问题选择 `proof`；需要机制探索或判断不确定时选择 `research`，也可显式指定其中一种模式。research 采用下述研究流程；proof 在一次初始 Survey 后，围绕同一证明进行最多 5 轮写作、修订与核验，通过即结束。
 
 1. **规划与调研。** Director 选择目标，决定开展局部探索还是深入研究；Planner 制定数学路线。Survey 调研文献，也可通过单独提供的客户端与 Skill 选配 [ReasAtlas](https://atlas.reaslab.io)，检索数学来源，详见[检索配置](docs/configuration.md#reasatlas-source-retrieval)。
-2. **细化猜想与支撑论证。** 猜想细化过程 SMI 同时发展候选命题和支撑机制，即足以推出候选结论的中间命题。它检查这些命题是否有依据、是否存在循环论证，以及是否覆盖完整结论；通过证明尝试和反例搜索，区分论证尚不成立与命题本身为假，据此在原始请求范围内修补、修订或拆分问题。
+2. **细化猜想与支撑论证。** 猜想精化研究（Refined Conjecture Investigation，RCI）同时发展候选命题和支撑机制，即足以推出候选结论的中间命题。它检查这些命题是否有依据、是否存在循环论证，以及是否覆盖完整结论；通过证明尝试和反例搜索，区分论证尚不成立与命题本身为假，据此在原始请求范围内修补、修订或拆分问题。
 3. **构造与核验证明。** Prover 组织适用论证，Auditor 与 Kernel 针对原始目标分别审查候选证明，采用基于模型的自然语言核验。
 4. **保留证据，组织后续任务。** 带版本的记忆分别记录结果本身及其用途，保留假设、适用范围、来源、依赖和审查记录。候选或条件变化后，重新审查受影响的证据，已确立结果仍按原条件保留。复用前须检查这些条件，并建立旧结论通向新用途的论证。缺失步骤和失败路线指导下一步选题；任务上下文区分已核验前提、探索材料与未解决的证明义务。
 5. **汇报与继续研究。** 新增已核验成果及时更新进展；每个 proof 或 research 轮次完整结束后，启动一套中文报告与英文论文的写作和独立审阅流程，并交付论文 PDF。[resume](docs/user-guide.md#resume-an-interrupted-turn) 复用已完成工作、继续未完成环节；[continue](docs/user-guide.md#continue-with-a-new-question) 沿用已有发现开启新一轮研究。
@@ -147,7 +147,7 @@ pace run \
   --web-search-mode on
 ```
 
-这条命令会调用模型，请使用账号支持的模型与推理强度。示例使用 proof 模式：起证前做一次 Survey（按需检索），再直接证明与独立核验，证明阶段不调用 Director 或 SMI；结束后自动完成中文报告、英文论文、独立审阅和 PDF 交付。运行结果从 `outputs/even-square/work/turn001/outcome.md` 和同目录的 `final_report.json` 开始阅读。`--max-proof-states` 限制证明状态数，不限制总调用次数、总时长或费用，详见[预算配置](docs/configuration.md)。
+这条命令会调用模型，请使用账号支持的模型与推理强度。示例使用 proof 模式：起证前做一次 Survey（按需检索），再直接证明与独立核验，证明阶段不调用 Director 或 RCI；结束后自动完成中文报告、英文论文、独立审阅和 PDF 交付。运行结果从 `outputs/even-square/work/turn001/outcome.md` 和同目录的 `final_report.json` 开始阅读。`--max-proof-states` 限制证明状态数，不限制总调用次数、总时长或费用，详见[预算配置](docs/configuration.md)。
 
 ## 研究你的猜想
 

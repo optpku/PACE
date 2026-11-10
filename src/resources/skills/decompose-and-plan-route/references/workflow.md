@@ -63,9 +63,9 @@
   attempt it, and the mechanism that remains unknown. A precise formula or route
   node is not by itself evidence that its mechanism is ready for execution.
 - Recommend lightweight Research for a bounded local attempt, or deeper,
-  longer SMI research when conjecture formation, mechanism discovery, comparison
+  longer RCI research when conjecture formation, mechanism discovery, comparison
   of substantial alternatives, or a nontrivial construction is the main work.
-  Existing exact nodes can need SMI. Give the mathematical reason in the ordinary
+  Existing exact nodes can need RCI. Give the mathematical reason in the ordinary
   handoff; Director owns dispatch and Planner retains the canonical route.
 - Recommend at most two eligible workflow Skills as an advisory starting point.
 - Bind the recommendation objective to the key step, construction, or route-critical bridge.
@@ -95,6 +95,6 @@ hide cancellation or a controllable quantity. Prefer the weakest sufficient
 bridge; a uniform bound or full construction may exceed what the target needs.
 Separate what the proposed mechanism already explains from the ingredient still
 needing discovery. A precise relation with no supported way to obtain it can
-be a good SMI research question rather than a ready local derivation.
+be a good RCI research question rather than a ready local derivation.
 
 **Handoff:** return one scoped bridge, its dependencies and falsifier, or the exact route revision required.

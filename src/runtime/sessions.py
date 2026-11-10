@@ -26,7 +26,7 @@ def record_model_failure(root: Path, error) -> None:
 
 
 @contextmanager
-def run_session(root: Path, *, profile=False, config=None):
+def run_session(root: Path, *, config=None):
     root = root.resolve()
     ref = root / work_ref(root, "state/sessions.json")
     rows = json.loads(ref.read_text()) if ref.is_file() else []

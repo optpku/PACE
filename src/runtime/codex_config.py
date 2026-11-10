@@ -99,9 +99,9 @@ def isolated_codex_environment(
 
 def retry_codex_args() -> list[str]:
     """One internal recovery profile; custom wrapper endpoints remain selected."""
-    custom = os.environ.get("NL_PROOF_CODEX_AUTH_MODE") == "api_key"
+    custom = os.environ.get("PACE_CODEX_AUTH_MODE") == "api_key"
     provider = (
-        os.environ.get("NL_PROOF_CODEX_PROVIDER_NAME", "pace")
+        os.environ.get("PACE_CODEX_PROVIDER_NAME", "pace")
         if custom
         else "pace_openai"
     )

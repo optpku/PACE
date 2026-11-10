@@ -1,57 +1,61 @@
-"""Shared execution shell for model-facing semantic roles."""
+"""Declarative bindings for ordinary model-facing semantic roles."""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
-from pathlib import Path
-from typing import Any
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any, Final, cast
 
-from pace.runtime.roles import (
-    SemanticNormalizer,
-    SemanticRoleSpec,
-    SemanticValidator,
-)
-from pace.runtime.semantic import SemanticCallResult
+from pace.runtime.semantic import SemanticCallSpec
 
-SemanticCall = Callable[..., SemanticCallResult]
-_USE_ROLE_DEFAULT = object()
+SemanticSchemaFactory = Callable[[], dict[str, Any]]
+SemanticNormalizer = Callable[[dict[str, Any]], dict[str, Any]]
+SemanticValidator = Callable[[dict[str, Any]], list[dict[str, Any]]]
+
+_USE_ROLE_DEFAULT: Final = object()
 
 
-def run_semantic_role(
-    llm: Any,
-    prompt: str,
-    *,
-    workdir: Path,
-    call_name: str,
-    role: SemanticRoleSpec,
-    input_refs: Iterable[str | Path],
-    semantic_call_fn: SemanticCall,
-    host_metadata: dict[str, Any] | None = None,
-    normalizer: SemanticNormalizer | None | object = _USE_ROLE_DEFAULT,
-    validator: SemanticValidator | None | object = _USE_ROLE_DEFAULT,
-) -> SemanticCallResult:
-    """Run one role through the calling agent's patchable transport seam."""
+@dataclass(frozen=True)
+class SemanticRoleSpec:
+    """Declare the stable semantic contract for one ordinary model role."""
 
-    if normalizer is _USE_ROLE_DEFAULT and validator is _USE_ROLE_DEFAULT:
-        call_spec = role.call_spec()
-    elif normalizer is _USE_ROLE_DEFAULT:
-        call_spec = role.call_spec(validator=validator)
-    elif validator is _USE_ROLE_DEFAULT:
-        call_spec = role.call_spec(normalizer=normalizer)
-    else:
-        call_spec = role.call_spec(
-            normalizer=normalizer,
-            validator=validator,
+    role: str
+    schema: SemanticSchemaFactory
+    host_schema_version: str
+    authority: str
+    fatal_scope: str = "RUN"
+    normalizer: SemanticNormalizer | None = None
+    validator: SemanticValidator | None = None
+    on_accept: Callable[[dict[str, Any]], None] | None = None
+
+    def call_spec(
+        self,
+        *,
+        normalizer: SemanticNormalizer | None | object = _USE_ROLE_DEFAULT,
+        validator: SemanticValidator | None | object = _USE_ROLE_DEFAULT,
+    ) -> SemanticCallSpec:
+        """Materialize a fresh call contract, optionally binding invocation context."""
+
+        bound_normalizer = (
+            self.normalizer
+            if normalizer is _USE_ROLE_DEFAULT
+            else cast(SemanticNormalizer | None, normalizer)
         )
-    return semantic_call_fn(
-        llm,
-        prompt,
-        workdir=workdir,
-        call_name=call_name,
-        spec=call_spec,
-        input_refs=input_refs,
-        host_metadata=host_metadata,
-    )
+        bound_validator = (
+            self.validator
+            if validator is _USE_ROLE_DEFAULT
+            else cast(SemanticValidator | None, validator)
+        )
+        return SemanticCallSpec(
+            role=self.role,
+            semantic_schema=self.schema(),
+            host_schema_version=self.host_schema_version,
+            authority=self.authority,
+            fatal_scope=self.fatal_scope,
+            normalizer=bound_normalizer,
+            validator=bound_validator,
+            on_accept=self.on_accept,
+        )
 
 
-__all__ = ["run_semantic_role"]
+__all__ = ["SemanticRoleSpec"]

@@ -58,7 +58,7 @@
   within its bounded assignment. Lightweight work still requires complete
   justification for every claimed result. When the obstacle calls for deeper
   conjecture or mechanism discovery, return the actual attempts, failed relation
-  and needed research to Director with a reasoned SMI recommendation.
+  and needed research to Director with a reasoned RCI recommendation.
 - Prover uses adaptations to assemble the complete candidate, retaining
   unresolved mechanism obligations as gaps rather than assumptions.
 

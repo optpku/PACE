@@ -14,8 +14,8 @@ from dataclasses import replace
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
-from pace.contracts.problem.loader import Problem
-from pace.contracts.proof.binding import (
+from pace.contracts.problem import Problem, canonical_problem_text
+from pace.contracts.proof_binding import (
     ProofBindingError,
     load_active_target,
     resolve_verification,
@@ -35,12 +35,10 @@ from pace.reporting.terminal_report import (
 from pace.runtime.output.events import write_call_summary
 from pace.runtime.output.profiling import ProfileRecorder
 from pace.runtime.output.results import finding_entries, publish_finding
-from pace.runtime.output.workspace import RunWorkspace, is_call_path, work_ref, path_has_symlink_component
+from pace.runtime.output.workspace import RunWorkspace, is_call_path, is_private_transport_path, work_ref, path_has_symlink_component
 from pace.runtime.output.delivery_pause import delivery_pause
 
 logger = logging.getLogger(__name__)
-
-
 
 
 class DirectorLedFinalizationError(ValueError):
@@ -348,7 +346,7 @@ def _ensure_problem_file(ws: RunWorkspace, problem: Problem) -> str:
     # The pipeline commits the literal problem as UTF-8 with LF line endings
     # and exactly one terminal newline.  Normalize the supplied value the same
     # way before comparing it with an existing checkpoint.
-    expected = _canonical_problem_text(problem.text)
+    expected = canonical_problem_text(problem.text)
     if not path.is_file():
         _safe_write_text(ws, work_ref(ws.root, 'input/problem.md'), expected, "canonical problem.md")
         return ""
@@ -704,7 +702,7 @@ def _safe_workspace_path(
         relative = resolved.relative_to(root_path)
     except (OSError, RuntimeError, ValueError):
         return None
-    if _is_private_transport_path(relative):
+    if is_private_transport_path(relative):
         return None
     if require_file and not resolved.is_file():
         return None
@@ -754,7 +752,7 @@ def _safe_write_path(root: Path, ref: str, label: str) -> Path:
         raise DirectorLedFinalizationError(
             f"{label} escapes the run workspace: {normalized}"
         ) from exc
-    if _is_private_transport_path(relative):
+    if is_private_transport_path(relative):
         raise DirectorLedFinalizationError(
             f"{label} points to a private or transport artifact"
         )
@@ -778,22 +776,6 @@ def _is_safe_ref(ref: str) -> bool:
     if path.name.startswith("private_"):
         return False
     return True
-
-
-
-
-def _is_private_transport_path(path: Path) -> bool:
-    return is_call_path(path) or path.name.startswith("private_")
-
-
-def _canonical_problem_text(value: Any) -> str:
-    return (
-        str(value or "")
-        .replace("\r\n", "\n")
-        .replace("\r", "\n")
-        .rstrip("\n")
-        + "\n"
-    )
 
 
 def _read_object(path: Path) -> dict[str, Any]:

@@ -28,31 +28,27 @@ RESEARCH_OUTLINE_REF = "results/outline.md"
 RESEARCH_REPORT_REF = "results/research_report.md"
 
 
-def outline_state_ref(workdir: Path) -> str:
-    return work_ref(workdir, "state/research_outline.json")
+def outline_state_ref(workdir: Path, scope: str = "") -> str:
+    return work_ref(workdir, f"state/{scope + '/' if scope else ''}research_outline.json")
 
 
-def report_state_ref(workdir: Path) -> str:
-    return work_ref(workdir, "state/research_report.json")
+def report_state_ref(workdir: Path, scope: str = "") -> str:
+    return work_ref(workdir, f"state/{scope + '/' if scope else ''}research_report.json")
 
 
-def outline_artifacts(workdir: Path, *, snapshots: bool = False) -> dict[str, str]:
-    source = read_state(workdir, outline_state_ref(workdir)).get("outline_ref")
+def outline_artifacts(workdir: Path, *, scope: str = "") -> dict[str, str]:
+    source = read_state(workdir, outline_state_ref(workdir, scope)).get("outline_ref")
     if not source:
         return {}
-    ref = source if snapshots else RESEARCH_OUTLINE_REF
+    ref = source
     return {"research_outline": ref} if (Path(workdir) / ref).is_file() else {}
 
 
-def report_request(workdir: Path) -> dict[str, Any]:
-    return read_state(workdir, report_state_ref(workdir))
-
-
-def report_artifacts(workdir: Path, *, snapshots: bool = False) -> dict[str, str]:
-    state = report_request(workdir)
+def report_artifacts(workdir: Path, *, snapshots: bool = False, scope: str = "") -> dict[str, str]:
+    state = read_state(workdir, report_state_ref(workdir, scope))
     if not state.get("report_ref"):
         return {}
-    ref = state["report_ref"] if snapshots else RESEARCH_REPORT_REF
+    ref = state["report_ref"]
     if not (Path(workdir) / ref).is_file():
         return {}
     return {
@@ -62,12 +58,12 @@ def report_artifacts(workdir: Path, *, snapshots: bool = False) -> dict[str, str
 
 
 class ResearchReportOutliner:
-    """Keep only request, file delivery and Composer provenance in the Host."""
+    """Keep the writing request, assembled prompt and delivery state in the Host."""
 
-    def __init__(self, *, llm: Any, composer_llm: Any, workdir: Path) -> None:
+    def __init__(self, *, llm: Any, workdir: Path, scope: str = "") -> None:
         self.llm = llm
-        self.composer_llm = composer_llm
         self.workdir = Path(workdir)
+        self.scope = scope
 
     def _attempt(self) -> str:
         base = f"{stage_ref(workdir=self.workdir, final=True)}/reports/outline"
@@ -96,21 +92,26 @@ class ResearchReportOutliner:
                 destination=self.workdir / resources,
             )
         _write_json_atomic(
-            self.workdir / outline_state_ref(self.workdir),
+            self.workdir / outline_state_ref(self.workdir, self.scope),
             {"request_ref": request_ref, "resources_ref": resources, "outline_ref": ""},
         )
-        (self.workdir / report_state_ref(self.workdir)).unlink(missing_ok=True)
+        (self.workdir / report_state_ref(self.workdir, self.scope)).unlink(missing_ok=True)
 
     def update(self, *, round_index: int = 0, completed_result_refs: tuple[str, ...] = ()) -> bool:
-        if outline_artifacts(self.workdir):
+        if outline_artifacts(self.workdir, scope=self.scope):
+            state = read_state(self.workdir, outline_state_ref(self.workdir, self.scope))
+            if state.get("draft_ref") and not state.get("publication_complete"):
+                self._publish_draft(state)
             return True
-        if not read_state(self.workdir, outline_state_ref(self.workdir)):
+        if not read_state(self.workdir, outline_state_ref(self.workdir, self.scope)):
             self.request("根据原始问题、用户历次输入及已有研究，为完整研究报告生成提纲。")
-        state = read_state(self.workdir, outline_state_ref(self.workdir))
+        state = read_state(self.workdir, outline_state_ref(self.workdir, self.scope))
         if state.get("draft_ref"):
             self._publish_draft(state)
             return True
-        attempt = self._attempt()
+        attempt = state.get("pending_attempt") or self._attempt()
+        state["pending_attempt"] = attempt
+        _write_json_atomic(self.workdir / outline_state_ref(self.workdir, self.scope), state)
         output_ref = f"{attempt}/outline.md"
         task_id = f"reporter-artifacts-outline-{Path(attempt).name}"
         resources = state["resources_ref"]
@@ -121,7 +122,6 @@ class ResearchReportOutliner:
         required = (state["request_ref"], *guides)
         candidates = (
             *required,
-            "work/state/current_turn.json",
             "memory/README.md",
             "results/findings/README.md",
             "results/findings/archive.md",
@@ -143,7 +143,6 @@ class ResearchReportOutliner:
         )
         try:
             composed = compose_prompt(
-                llm=self.composer_llm,
                 workdir=self.workdir,
                 assembly=PromptAssembly(
                     stage="HOST_RESEARCH_REPORT_OUTLINE",
@@ -156,8 +155,6 @@ class ResearchReportOutliner:
                     output_artifact_ref=output_ref,
                 ),
                 input_refs=refs,
-                call_name="prompt_composer_research_report_outline",
-                round_index=round_index,
             )
             _write_text_atomic(self.workdir / attempt / "final_prompt.md", composed.final_prompt)
             handle = begin_artifact_call(
@@ -177,6 +174,7 @@ class ResearchReportOutliner:
                     "stage_ref": stage_ref(workdir=self.workdir, final=True),
                     "request_ref": state["request_ref"],
                     "composer_call_id": composed.call_id,
+                    "output_ref": output_ref,
                 },
             )
             if handle.transport_status != "SUCCESS":
@@ -184,8 +182,8 @@ class ResearchReportOutliner:
             source = self.workdir / output_ref
             if not source.read_text(encoding="utf-8").strip():
                 raise ValueError("Writing output is empty")
-            state.update(draft_ref=output_ref, draft_inputs=list(refs))
-            _write_json_atomic(self.workdir / outline_state_ref(self.workdir), state)
+            state.update(draft_ref=output_ref, draft_inputs=list(refs), task_id=task_id, round_index=round_index)
+            _write_json_atomic(self.workdir / outline_state_ref(self.workdir, self.scope), state)
             accepted_handle, handle = handle, None
             commit_artifact_call_success(accepted_handle, workdir=self.workdir, artifact_ref=output_ref)
             self._publish_draft(state)
@@ -216,36 +214,30 @@ class ResearchReportOutliner:
                 round_index=round_index,
             )
             return False
-        publish_progress(
-            self.workdir,
-            task_id=task_id,
-            stage="reporter",
-            status="completed",
-            round_index=round_index,
-            publication_refs={"research_outline": output_ref},
-        )
         return True
 
 
     def _publish_draft(self, state):
         ref = review_draft(llm=self.llm, root=self.workdir, state=state,
-                           state_ref=outline_state_ref(self.workdir), source_ref=state["draft_ref"],
+                           state_ref=outline_state_ref(self.workdir, self.scope), source_ref=state["draft_ref"],
                            input_refs=tuple(state["draft_inputs"]), markdown=True,
-                           independent=False)
+                           independent=False, continuous=True)
         source = self.workdir / ref
         destination = self.workdir / RESEARCH_OUTLINE_REF
         _write_text_atomic(destination, relocate_links(source.read_text(encoding="utf-8"), source, destination))
         state["outline_ref"] = ref
-        _write_json_atomic(self.workdir / outline_state_ref(self.workdir), state)
+        _write_json_atomic(self.workdir / outline_state_ref(self.workdir, self.scope), state)
+        _publish_reviewed(self.workdir, state, outline_state_ref(self.workdir, self.scope),
+                          {"research_outline": ref})
 
 
 class ResearchReportWriter:
     """Write one complete report using a frozen outline and the full user request."""
 
-    def __init__(self, *, llm: Any, composer_llm: Any, workdir: Path) -> None:
+    def __init__(self, *, llm: Any, workdir: Path, scope: str = "") -> None:
         self.llm = llm
-        self.composer_llm = composer_llm
         self.workdir = Path(workdir)
+        self.scope = scope
 
     def _attempt(self) -> str:
         base = f"{stage_ref(workdir=self.workdir, final=True)}/reports/report"
@@ -262,9 +254,15 @@ class ResearchReportWriter:
         requirements: str = "",
         resource_variant: str,
     ) -> None:
-        parent = read_state(self.workdir, outline_state_ref(self.workdir))
+        parent = read_state(self.workdir, outline_state_ref(self.workdir, self.scope))
         if outline == RESEARCH_OUTLINE_REF and parent and (not parent["outline_ref"]):
             raise ValueError("The current outline request has not delivered an outline")
+        if not parent and self.scope:
+            parent = read_state(self.workdir, outline_state_ref(self.workdir))
+        if outline == RESEARCH_OUTLINE_REF and parent:
+            if not parent.get("outline_ref"):
+                raise ValueError("The selected outline is not complete")
+            outline = parent["outline_ref"]
         source = (self.workdir / outline).resolve()
         body = source.read_text(encoding="utf-8")
         if not body.strip():
@@ -296,7 +294,7 @@ class ResearchReportWriter:
             self.workdir, resource_variant=resource_variant, destination=self.workdir / resources
         )
         _write_json_atomic(
-            self.workdir / report_state_ref(self.workdir),
+            self.workdir / report_state_ref(self.workdir, self.scope),
             {
                 "request_ref": request_ref,
                 "outline_ref": frozen_ref,
@@ -309,13 +307,18 @@ class ResearchReportWriter:
         )
 
     def update(self, *, round_index: int = 0) -> bool:
-        if report_artifacts(self.workdir):
+        if report_artifacts(self.workdir, snapshots=True, scope=self.scope):
+            state = read_state(self.workdir, report_state_ref(self.workdir, self.scope))
+            if state.get("draft_ref") and not state.get("publication_complete"):
+                self._publish_draft(state)
             return True
-        state = report_request(self.workdir)
+        state = read_state(self.workdir, report_state_ref(self.workdir, self.scope))
         if state.get("draft_ref"):
             self._publish_draft(state)
             return True
-        attempt = self._attempt()
+        attempt = state.get("pending_attempt") or self._attempt()
+        state["pending_attempt"] = attempt
+        _write_json_atomic(self.workdir / report_state_ref(self.workdir, self.scope), state)
         output_ref = f"{attempt}/research_report.md"
         task_id = f"reporter-artifacts-report-{Path(attempt).name}"
         resources = state["resources_ref"]
@@ -346,7 +349,6 @@ class ResearchReportWriter:
         handle = None
         try:
             composed = compose_prompt(
-                llm=self.composer_llm,
                 workdir=self.workdir,
                 assembly=PromptAssembly(
                     stage="HOST_RESEARCH_REPORT_WRITING",
@@ -359,8 +361,6 @@ class ResearchReportWriter:
                     output_artifact_ref=output_ref,
                 ),
                 input_refs=refs,
-                call_name="prompt_composer_research_report_writer",
-                round_index=round_index,
             )
             _write_text_atomic(self.workdir / attempt / "final_prompt.md", composed.final_prompt)
             handle = begin_artifact_call(
@@ -381,6 +381,7 @@ class ResearchReportWriter:
                     "request_ref": state["request_ref"],
                     "outline_ref": state["outline_ref"],
                     "composer_call_id": composed.call_id,
+                    "output_ref": output_ref,
                 },
             )
             if handle.transport_status != "SUCCESS":
@@ -388,8 +389,8 @@ class ResearchReportWriter:
             source = self.workdir / output_ref
             if not source.read_text(encoding="utf-8").strip():
                 raise ValueError("Writing output is empty")
-            state.update(draft_ref=output_ref, draft_inputs=list(refs))
-            _write_json_atomic(self.workdir / report_state_ref(self.workdir), state)
+            state.update(draft_ref=output_ref, draft_inputs=list(refs), task_id=task_id, round_index=round_index)
+            _write_json_atomic(self.workdir / report_state_ref(self.workdir, self.scope), state)
             accepted_handle, handle = handle, None
             commit_artifact_call_success(accepted_handle, workdir=self.workdir, artifact_ref=output_ref)
             self._publish_draft(state)
@@ -425,26 +426,27 @@ class ResearchReportWriter:
                 round_index=round_index,
             )
             return False
-        publish_progress(
-            self.workdir,
-            task_id=task_id,
-            stage="reporter",
-            status="completed",
-            round_index=round_index,
-            publication_refs={
-                "research_report": output_ref,
-                "report_outline": state["outline_ref"],
-            },
-        )
         return True
 
     def _publish_draft(self, state):
         ref = review_draft(llm=self.llm, root=self.workdir, state=state,
-                           state_ref=report_state_ref(self.workdir), source_ref=state["draft_ref"],
+                           state_ref=report_state_ref(self.workdir, self.scope), source_ref=state["draft_ref"],
                            input_refs=tuple(state["draft_inputs"]), markdown=True,
-                           independent=True)
+                           independent=True, continuous=True)
         source = self.workdir / ref
         destination = self.workdir / RESEARCH_REPORT_REF
         _write_text_atomic(destination, relocate_links(source.read_text(encoding="utf-8"), source, destination))
         state["report_ref"] = ref
-        _write_json_atomic(self.workdir / report_state_ref(self.workdir), state)
+        _write_json_atomic(self.workdir / report_state_ref(self.workdir, self.scope), state)
+        _publish_reviewed(self.workdir, state, report_state_ref(self.workdir, self.scope),
+                          {"research_report": ref, "report_outline": state["outline_ref"]})
+
+
+def _publish_reviewed(root, state, state_ref, publications):
+    if state.get("publication_complete"):
+        return
+    publish_progress(root, task_id=state.get("task_id", "reporter-" + state_ref),
+                     stage="reporter", status="completed", round_index=state.get("round_index", 0),
+                     publication_refs=publications)
+    state["publication_complete"] = True
+    _write_json_atomic(root / state_ref, state)

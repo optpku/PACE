@@ -17,6 +17,29 @@ from urllib.parse import urlparse
 from pace.runtime.output.workspace import RunWorkspace
 
 
+def survey_source_index(root: Path, record: dict) -> str:
+    """Expose source locations on demand, not every downloaded file as required input."""
+    folder = Path(record["deliverable_ref"]).parent
+    ref = (folder / "source_index.json").as_posix()
+    path = root / ref
+    if not path.is_file():
+        from .workspace import _write_json_atomic
+
+        _write_json_atomic(path, {
+            "authority": "SEARCH_CONTEXT_ONLY",
+            "survey_ref": record["deliverable_ref"],
+            "usage": "Read the source and exact locator needed for this task. Archives and alternate formats are optional. No source here is an automatically applicable premise.",
+            "source_refs": list(dict.fromkeys(
+                item for item in record.get("published_refs", ())
+                if (root / item).is_file() and (
+                    (folder / "sources") in Path(item).parents
+                    or Path(item).name == "source_manifest.json"
+                )
+            )),
+        })
+    return ref
+
+
 def process_survey_sources(*, workdir: Path, report_ref: str, allow_network: bool) -> tuple[str, ...]:
     """Process explicit file/URL requests; mathematical source claims stay opaque."""
 

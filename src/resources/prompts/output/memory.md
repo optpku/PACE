@@ -27,3 +27,10 @@ assumptions, and preserve the original target reference. A follow-up can change
 the target while retaining the same problem identifier. Old approval never
 grants approval to a new candidate. Record a later correction as a new note with
 a link to the earlier one; leave earlier notes unchanged.
+
+
+Use the current research index to distinguish an established result from a
+proposed application. For a failed application, preserve the conditional result
+and identify the failed bridge, consumer and changed condition. Record new
+objections as new evidence; do not erase historical findings. Planner's relation
+map is navigation and scheduling context, not independent mathematical approval.

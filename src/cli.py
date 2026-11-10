@@ -8,11 +8,11 @@ import threading
 import sys
 from pathlib import Path
 
-from pace.contracts.problem.loader import Problem, load_problem
+from pace.contracts.problem import Problem, load_problem
 from pace.orchestrator.recovery import RecoveryError, resume_existing_run
 from pace.reporting.postmortem import postmortem_rescan
 from pace.reporting.research_report import RESEARCH_OUTLINE_REF
-from pace.reporting.theory_paper import PAPER_OUTLINE_REF, paper_artifacts, paper_build_status
+from pace.reporting.theory_paper import PAPER_OUTLINE_REF
 from pace.reporting.writing import active_writing_request
 from pace.runtime.output.workspace import RunWorkspace, list_problems
 
@@ -127,6 +127,10 @@ def _main(argv: list[str] | None = None) -> int:
     doctor.add_argument("--json", action="store_true")
 
     args = parser.parse_args(argv)
+    if getattr(args, "run_dir", None) is not None:
+        from pace.runtime.pinned_runtime import reexec_pinned_runtime
+
+        reexec_pinned_runtime(args.run_dir, list(sys.argv[1:] if argv is None else argv))
     if args.command == "doctor":
         from pace.reporting.diagnostics import check_environment
         checks = check_environment(pdf=args.pdf)
@@ -180,6 +184,8 @@ def _main(argv: list[str] | None = None) -> int:
         try:
             ws = RunWorkspace.open_existing(run_dir)
             with ws.execution_lock():
+                from pace.reporting.writing import release_completed_writing_task
+                release_completed_writing_task(ws.root)
                 writing = active_writing_request(ws.root)
                 args.model = args.model or "gpt-5.6-sol"
                 args.reasoning_effort = args.reasoning_effort or ("high" if writing else "xhigh")
@@ -221,8 +227,14 @@ def print_writing_result(output: Path, *, run_dir: Path, action: str, machine: b
         "outline": "research_outline", "report": "research_report",
         "paper-outline": "paper_outline", "paper": "paper_source",
     }[action]
-    details = ({**{key: str(run_dir / ref) for key, ref in paper_artifacts(run_dir).items()},
-                "paper_build": paper_build_status(run_dir)} if action == "paper" else {})
+    details = {}
+    if action == "paper":
+        build = json.loads((output.parent / "build.json").read_text())
+        details = {"paper_build": build["status"]}
+        if output.with_name("references.bib").is_file():
+            details["paper_bibliography"] = str(output.with_name("references.bib"))
+        if build["status"] == "COMPLETE" and output.with_suffix(".pdf").is_file():
+            details["paper_pdf"] = str(output.with_suffix(".pdf"))
     if machine:
         print(json.dumps({"event": f"{action.replace('-', '_')}_completed", "run_dir": str(run_dir),
                           key: str(output), **details},
@@ -276,7 +288,7 @@ def add_execution_args(parser: argparse.ArgumentParser) -> None:
         "--web-search-mode",
         choices=["off", "on"],
         default="on",
-        help="on allows every role to search as needed (default); off disables external retrieval",
+        help="on enables Survey retrieval only (default); off disables it; all other roles always have retrieval disabled",
     )
     parser.add_argument(
         "--web-search-model",

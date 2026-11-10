@@ -11,21 +11,23 @@ promoted to a deliverable.
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
-from pace.contracts.research.director_protocol import (
+from pace.runtime.json_values import unique_strings
+
+from pace.contracts.director_protocol import (
     DISPATCHABLE_AGENT_IDS,
     specialist_spec,
 )
 
 from pace.runtime.output.results import FINDINGS_INDEX_REF
-from pace.runtime.output.workspace import is_call_path, work_ref
-from pace.runtime.prompt_composer import compose_prompt
+from pace.runtime.output.workspace import is_call_path, work_ref, _write_text_atomic, _write_json_atomic, path_has_symlink_component
+from pace.runtime.output.delivery_pause import DeliveryPaused
+from pace.runtime.output.memory import ROUTE_RELATIONS_POLICY
+from pace.reporting.editorial import repair_artifact_batch
 from pace.runtime.prompt_policy import PromptAssembly, build_prompt_assembly
 from pace.runtime.prompts import skill_index_ref
 from pace.runtime.semantic import (
@@ -36,7 +38,57 @@ from pace.runtime.semantic import (
 )
 
 
+from pace.runtime.output.finding_manifest import (
+    FINDING_MANIFEST_POLICY, current_finding_drafts, ensure_finding_inventory, scoped_stage,
+)
+
 SPECIALIST_STAGE = "DIRECTOR_LED_SPECIALIST"
+_ARTIFACT_DELIVERY_POLICY = (
+    "\n\nHost delivery policy for this execution: preserve the mathematical task and evidence. "
+    "Keep each complete research argument in one canonical manuscript. If a finding draft "
+    "contains the full proof in a Research task, its main handoff only states the result, conditions, new increment "
+    "and remaining gap with links to that draft. Memory records a brief delta and references; "
+    "do not copy proofs into it. If no complete finding exists, retain partial reasoning in the "
+    "assigned main deliverable. A Prover's complete candidate is its canonical manuscript; "
+    "do not duplicate that candidate as a standalone finding. Separate findings are for distinct, "
+    "independently useful results. Prover candidates must still be self-contained. "
+    "Write TeX using raw literals or correct escaping at every string/JSON/shell layer. "
+    "Check mathematics as needed; the Host batches format and local-link preflight after "
+    "delivery. Avoid repeated whole-file formatting scans and ad hoc regex repair loops. "
+    "Do not write terminal reports or papers.\n"
+)
+_PLANNER_DELIVERY_POLICY = (
+    "Planner output is a dependency route and one next bounded work ticket, not a proof draft. "
+    "For each obligation give available premises, the exact unresolved relation, its consumer "
+    "and a failure exit. Cite existing arguments instead of deriving them. The single next "
+    "ticket states its fixed question, inputs, scope and return condition. Do not precompute "
+    "full proofs, parameter expansions or alternative work tickets. Preserve necessary formulas "
+    "and all target clauses. Keep the route a current view, not a cumulative history: "
+    "replace closed or superseded detailed branches with their scoped conclusion and evidence link. "
+    "Preserve unaffected mathematical obligations, not obsolete prose. The exact original versions "
+    "remain immutable. Write a fresh compact current route to the assigned deliverable, even "
+    "for REVISE_ROUTE; do not use revision.json to append to a cumulative route. This route "
+    "delivery policy supersedes an older instruction to patch and preserve unrelated prose. "
+    "Each open obligation appears once; completed or abandoned branches retain only their "
+    "scoped conclusion, applicability caveat and evidence link. A route is not the canonical "
+    "home of a proof: preserve any unique mathematical argument in a separate referenced "
+    "manuscript before removing it from the current view. Do not delete historical files. "
+    "State the changed dependencies briefly; no chronological recap. The original versions "
+    "remain archived; do not copy historical derivations or repeatedly recount failed attempts. "
+    "Write the ONE next task to next_task.md beside the route, as a self-contained problem "
+    "statement with definitions, hypotheses, quantifiers, permitted output, direct source refs "
+    "and the return condition; put no proof, mechanism or review verdict in this statement. "
+    "The route links it instead of duplicating it. Also write route_relations.json there: "
+    '{"relations":[{"relation":"supports",'
+    '"from_ref":"run-relative file#optional-heading","to_ref":"run-relative file#optional-heading",'
+    '"explanation":"brief use or missing bridge","review_ref":"optional actual review file"}],'
+    '"open_obligations":["run-relative route file#heading"]}. '
+    + ROUTE_RELATIONS_POLICY +
+    "Use existing file references (including this new route and next_task.md). Omit review_ref "
+    "when absent. These are declared relations, never new verification verdicts. Distinguish "
+    "a true conditional result from an unproved use of it. Keep all currently relevant dependencies "
+    "in this small current map, preserving earlier maps in their original stage.\n"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,10 +103,6 @@ class SpecialistAdapterResult:
     reason_code: str = ""
     diagnostics_ref: str = ""
     response_ref: str = ""
-
-    @property
-    def succeeded(self) -> bool:
-        return self.status == "SUCCEEDED" and bool(self.deliverable_ref)
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -85,9 +133,9 @@ def build_default_specialist_handlers(
     root = Path(workdir)
     handlers: dict[str, Callable[..., dict[str, Any]]] = {}
     for agent_id in sorted(DISPATCHABLE_AGENT_IDS):
-        if agent_id == "smi":
-            from pace.orchestrator.smi_adapter import build_smi_handler
-            handlers[agent_id] = build_smi_handler(llm=llm, workdir=root)
+        if agent_id == "rci":
+            from pace.orchestrator.rci_adapter import build_rci_handler
+            handlers[agent_id] = build_rci_handler(llm=llm, workdir=root)
             continue
         handlers[agent_id] = _handler_for(
             llm=llm,
@@ -124,18 +172,19 @@ def build_specialist_prompt_assembly(
         and decision.prompt_brief.startswith("REVISE_ROUTE")
         and route_state.is_file()
     ):
-        from pace.runtime.text_revisions import revision_instruction
-
         base = json.loads(route_state.read_text())["route_ref"]
         if not base:
             raise ValueError("REVISE_ROUTE requires a frozen route base")
         inputs = (*inputs, base)
-        revision_task = revision_instruction(
-            base, str(Path(output_ref).parent / "revision.json")
+        revision_task = (
+            f"Use `{base}` as the immutable previous route. Write a new compact current route "
+            f"to `{output_ref}`, not an append-only patch. Preserve all live obligations and "
+            "necessary definitions; replace closed or superseded detail with scoped evidence "
+            "links. Explain changed uses without repeating their proofs. Also write next_task.md "
+            "and route_relations.json. Never change the original route or mathematical manuscripts. "
         )
-        revision_task += " Write only revision.json; the Host materializes the assigned complete route. "
 
-    method_refs = (skill_index_ref(workdir),) if decision.agent_id != "smi" else ()
+    method_refs = (skill_index_ref(workdir),) if decision.agent_id != "rci" else ()
 
     role_prompt_ref = (
         work_ref(workdir, "resources/prompts/roles/research_framing.md")
@@ -205,26 +254,6 @@ def build_specialist_prompt_assembly(
     )
 
 
-def build_default_composer(*, llm: Any) -> Callable[..., Any]:
-    """Return the production Prompt Composer adapter for Director assignments."""
-
-    def compose(**kwargs: Any) -> Any:
-        decision = kwargs["decision"]
-        return compose_prompt(
-            llm=llm,
-            workdir=Path(kwargs["workdir"]),
-            assembly=kwargs["assembly"],
-            input_refs=kwargs["input_refs"],
-            round_index=int(kwargs["round_index"]),
-            call_name=(
-                f"prompt_composer_director_led_{decision.agent_id}_"
-                f"{int(kwargs['round_index']):04d}"
-            ),
-        )
-
-    return compose
-
-
 def run_default_specialist(
     *,
     llm: Any,
@@ -260,18 +289,21 @@ def run_default_specialist(
             diagnostics_ref="",
         ).to_json() | {"message": str(exc)}
 
-    root = Path(workdir)
+    root = Path(workdir).resolve()
     metadata = {
         "agent_id": normalized_agent,
         "round_index": int(round_index or 1),
         "task_id": str((context or {}).get("task_id") or f"round-{int(round_index or 1):04d}"),
-        "prompt_ref": prompt_ref,
+        # The Composer checkpoint is immutable. begin_call must save the actual
+        # execution prompt (including Host delivery policy) in this call's own
+        # file; reusing prompt_ref here would silently discard the suffix.
+        "composed_prompt_ref": prompt_ref,
         "target_contract_id": str((context or {}).get("target_contract_id") or ""),
-        "input_refs": list(_unique_strings(input_refs)),
+        "input_refs": list(unique_strings(input_refs)),
     }
     if decision is not None:
         metadata["decision"] = _jsonable(decision)
-    reading_refs = _unique_strings(input_refs)
+    reading_refs = unique_strings(input_refs)
     if normalized_agent == "survey":
         metadata["external_retrieval_enabled"] = bool(getattr(llm, "web_search", False))
         prompt += (
@@ -306,13 +338,23 @@ def run_default_specialist(
     metadata["output_ref"] = requested_ref
     metadata["output_refs"] = [
         requested_ref, *(str(destination.with_name(name).relative_to(root)) for name in
-                        ("revision.json", "memory_note.md",
+                        ("revision.json", "memory_note.md", "next_task.md", "route_relations.json", "finding_manifest.json",
                          "source_manifest.json", "catalogue_request.json"))
     ]
     metadata["output_dirs"] = [str((destination.parent / "findings").relative_to(root))]
     if normalized_agent == "survey":
         metadata["output_dirs"].append(str((destination.parent / "sources").relative_to(root)))
-    if destination.exists():
+    delivery_path = destination.parent / "artifact_delivery.json"
+    delivery = None
+    if delivery_path.exists():
+        if path_has_symlink_component(root, delivery_path):
+            raise ValueError("Specialist delivery checkpoint must not be a symlink")
+        delivery = json.loads(delivery_path.read_text(encoding="utf-8"))
+        if (delivery["output_ref"] != requested_ref
+                or delivery["agent_id"] != normalized_agent
+                or delivery["target_contract_id"] != metadata["target_contract_id"]):
+            raise ValueError("Specialist delivery checkpoint belongs to another assignment")
+    if destination.exists() and delivery is None:
         return _write_failure(
             root,
             agent_id=normalized_agent,
@@ -325,9 +367,11 @@ def run_default_specialist(
 
     call_name = f"director_led_{normalized_agent}_{max(1, int(round_index or 1)):02d}"
     try:
-        handle = begin_artifact_call(
+        handle = ArtifactCallHandle(**delivery["handle"]) if delivery else begin_artifact_call(
             llm,
-            str(prompt or ""),
+            str(prompt or "") + _ARTIFACT_DELIVERY_POLICY
+            + (_PLANNER_DELIVERY_POLICY if normalized_agent == "planner" else "")
+            + ((FINDING_MANIFEST_POLICY + " Read assignment/context.json for required inputs. Its archive_refs are on-demand sources, not an additional reading list. Select only a needed definition or proof from the archive; record the dependency used. ") if scoped_stage(root, destination.parent) else ""),
             workdir=root,
             call_name=call_name,
             role=spec.role,
@@ -360,10 +404,10 @@ def run_default_specialist(
             metadata=metadata,
         )
 
-    if normalized_agent == "planner":
+    if normalized_agent == "planner" and delivery is None:
         route_state = destination.parent / "route_context.json"
         patch = destination.parent / "revision.json"
-        if patch.is_file() and route_state.is_file():
+        if patch.is_file() and route_state.is_file() and not destination.is_file():
             from pace.runtime.text_revisions import apply_revision
 
             try:
@@ -397,11 +441,67 @@ def run_default_specialist(
             metadata=metadata,
         )
 
-    if normalized_agent == "planner":
-        from pace.runtime.output.workspace import _write_json_atomic
+    if delivery is None:
+        refs = tuple(path.relative_to(root).as_posix() for path in (
+            destination, destination.with_name("memory_note.md"),
+            *((destination.with_name("next_task.md"),) if normalized_agent == "planner" else ()),
+            *sorted((destination.parent / "findings").glob("*.md")),
+        ) if path.suffix == ".md" and path.is_file())
+        delivery = {"output_ref": requested_ref, "agent_id": normalized_agent,
+                    "target_contract_id": metadata["target_contract_id"],
+                    "handle": asdict(handle), "refs": list(refs)}
+        if normalized_agent == "planner":
+            delivery["planner_contract"] = "route-and-task/v1"
+        _write_json_atomic(delivery_path, delivery)
+    if normalized_agent == "planner" and delivery.get("planner_contract"):
+        from pace.runtime.output.memory import validate_route_relations
 
+        try:
+            task = destination.with_name("next_task.md")
+            error = validate_specialist_output(task)
+            if error:
+                raise ValueError(f"next_task.md: {error}")
+            validate_route_relations(root, destination.with_name("route_relations.json").relative_to(root).as_posix())
+            task_ref = task.relative_to(root).as_posix()
+            if task_ref not in delivery["refs"]:
+                delivery["refs"].append(task_ref)
+                _write_json_atomic(delivery_path, delivery)
+        except (OSError, ValueError, TypeError) as exc:
+            raise DeliveryPaused(f"Planner delivery saved; repair its task/relation references before resume (author will not rerun): {exc}") from exc
+    if scoped_stage(root, destination.parent):
+        try:
+            # Batch format repair may install a corrected copy at its logical
+            # path. Publication freezes that final version, not the preflight.
+            current_drafts = ensure_finding_inventory(
+                llm=llm, root=root, stage=destination.parent, delivery=delivery,
+                state_ref=delivery_path.relative_to(root).as_posix(),
+            )
+            delivery["refs"] = [ref for ref in delivery["refs"]
+                                if (root / ref).parent != destination.parent / "findings"]
+            delivery["refs"].extend(p.relative_to(root).as_posix() for p in current_drafts)
+            _write_json_atomic(delivery_path, delivery)
+        except (OSError, ValueError) as exc:
+            raise DeliveryPaused(f"Author delivery saved; correct the finding inventory before resume: {exc}") from exc
+    try:
+        repair_artifact_batch(llm=llm, root=root, state=delivery,
+                              state_ref=delivery_path.relative_to(root).as_posix(),
+                              refs=tuple(delivery["refs"]))
+    except (OSError, UnicodeError, ValueError) as exc:
+        # The author is complete. Preserve the pending assignment and resume
+        # only its saved representation repair, without another proof state.
+        raise DeliveryPaused(f"Specialist format delivery paused; use pace resume: {exc}") from exc
+
+    if normalized_agent == "planner":
+        route_state = {"ref": requested_ref}
+        if scoped_stage(root, destination.parent):
+            frozen = json.loads((destination.parent / "route_context.json").read_text())
+            route_state["incorporated_finding_ids"] = frozen.get("finding_ids", [])
+            route_state["milestone_decision_ref"] = str((context or {}).get("directive_ref") or "")
+        if delivery.get("planner_contract"):
+            route_state.update(next_task_ref=destination.with_name("next_task.md").relative_to(root).as_posix(),
+                               relations_ref=destination.with_name("route_relations.json").relative_to(root).as_posix())
         _write_json_atomic(
-            root / work_ref(root, "state/current_route.json"), {"ref": requested_ref}
+            root / work_ref(root, "state/current_route.json"), route_state
         )
     response_ref = handle.response_ref
     result = SpecialistAdapterResult(
@@ -419,6 +519,8 @@ def run_default_specialist(
     memory_draft = destination.with_name("memory_note.md")
     if memory_draft.is_file():
         published.append(memory_draft.relative_to(root).as_posix())
+    if normalized_agent == "planner" and delivery.get("planner_contract"):
+        published.extend((route_state["next_task_ref"], route_state["relations_ref"]))
     if normalized_agent == "survey":
         result["external_retrieval_enabled"] = metadata["external_retrieval_enabled"]
         published.extend(
@@ -443,6 +545,66 @@ def run_default_specialist(
         metadata={**metadata, "response_ref": response_ref},
     )
     return result
+
+
+def recover_completed_specialist_delivery(root: Path, output_ref: str) -> bool:
+    """Recover a native completed turn lost before Host delivery, never a bare draft.
+
+    Called only while holding the run execution lock. Native completion, assigned
+    output, response and unchanged protected inputs must all agree.
+    """
+    directory = (root / output_ref).parent
+    checkpoint = directory / "artifact_delivery.json"
+    if checkpoint.is_file():
+        return True
+    for file in sorted(directory.glob("calls/*/record.json"), reverse=True):
+        record = json.loads(file.read_text())
+        if record.get("status") != "STARTED" or record.get("stage") != SPECIALIST_STAGE:
+            continue
+        prompt = (root / record["prompt_ref"]).read_text()
+        bound = record.get("output_ref")
+        if not bound:
+            # Older calls have an explicit, frozen assignment and Host prompt.
+            assignment = directory / "assignment/task.json"
+            if not assignment.is_file():
+                continue
+            task = json.loads(assignment.read_text())
+            if task.get("agent_id") != record["agent_id"] or f"Write the requested deliverable to `{output_ref}`." not in prompt:
+                continue
+            bound = task.get("output_ref")
+        if bound != output_ref:
+            continue
+        from pace.runtime.output.calls import completed_native_response
+
+        native = completed_native_response(file)
+        if native is None:
+            continue
+        attempt, response_text = native
+        response = attempt / "response.txt"
+        log = attempt / "stdout.jsonl"
+        if validate_specialist_output(root / output_ref, allow_json=record["agent_id"] == "framer"):
+            continue
+        handle = ArtifactCallHandle(
+            call_id=record["call_id"], call_name=f"director_led_{record['agent_id']}_{record['round_index']:02d}",
+            role=record["role"], stage=SPECIALIST_STAGE,
+            call_ref=file.relative_to(root).as_posix(), response_ref=response.relative_to(root).as_posix(),
+            invocation_id=attempt.relative_to(root).as_posix(), response_text=response.read_text(), transport_status="SUCCESS",
+        )
+        refs = [p.relative_to(root).as_posix() for p in (
+            root / output_ref, directory / "memory_note.md", directory / "next_task.md",
+            *sorted((directory / "findings").glob("*.md")),
+        ) if p.is_file()]
+        delivery = {"output_ref": output_ref, "agent_id": record["agent_id"],
+                    "target_contract_id": record["target_contract_id"], "handle": asdict(handle), "refs": refs}
+        if record["agent_id"] == "planner" and "route_relations.json" in prompt:
+            delivery["planner_contract"] = "route-and-task/v1"
+        _write_json_atomic(checkpoint, delivery)
+        from pace.runtime.output.events import append_event
+
+        append_event(root, "AUTHOR_DELIVERY_RECOVERED", call_id=record["call_id"], output_ref=output_ref,
+                     evidence_ref=log.relative_to(root).as_posix())
+        return True
+    return False
 
 
 def validate_specialist_output(path: Path, *, allow_json: bool = False) -> str:
@@ -584,26 +746,12 @@ def _atomic_write_text(
 
     root_path = Path(root)
     target = Path(path)
-    if _path_has_symlink_component(root_path, target):
+    if path_has_symlink_component(root_path, target):
         raise ValueError(f"{label} must not contain a symlink")
     target.parent.mkdir(parents=True, exist_ok=True)
-    if _path_has_symlink_component(root_path, target):
+    if path_has_symlink_component(root_path, target):
         raise ValueError(f"{label} must not contain a symlink")
-    descriptor, temporary = tempfile.mkstemp(
-        dir=target.parent,
-        prefix=target.name + ".",
-        suffix=".tmp",
-    )
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
-            output.write(content)
-        os.replace(temporary, target)
-    except BaseException:
-        try:
-            os.unlink(temporary)
-        except OSError:
-            pass
-        raise
+    _write_text_atomic(target, content)
 
 
 def _safe_output_path(root: Path, output_ref: str) -> Path:
@@ -620,7 +768,7 @@ def _safe_output_path(root: Path, output_ref: str) -> Path:
         raise ValueError("specialist output ref must be a relative path under the run workspace")
     root_path = Path(root)
     lexical = root_path / raw
-    if _path_has_symlink_component(root_path, lexical):
+    if path_has_symlink_component(root_path, lexical):
         raise ValueError("specialist output ref must not contain a symlink")
     destination = lexical.resolve()
     try:
@@ -628,35 +776,6 @@ def _safe_output_path(root: Path, output_ref: str) -> Path:
     except (OSError, RuntimeError, ValueError) as exc:
         raise ValueError("specialist output ref escapes the run workspace") from exc
     return destination
-
-
-def _path_has_symlink_component(root: Path, path: Path) -> bool:
-    """Return whether an output path uses a lexical symlink component."""
-
-    root_path = Path(root)
-    candidate = Path(path)
-    try:
-        relative = candidate.relative_to(root_path)
-    except ValueError:
-        return True
-    current = root_path
-    for part in relative.parts:
-        current = current / part
-        try:
-            if current.is_symlink():
-                return True
-        except OSError:
-            return True
-    return False
-
-
-def _unique_strings(values: Iterable[Any]) -> tuple[str, ...]:
-    result: list[str] = []
-    for value in values:
-        text = str(value or "").strip()
-        if text and text not in result:
-            result.append(text)
-    return tuple(result)
 
 
 def _jsonable(value: Any) -> Any:

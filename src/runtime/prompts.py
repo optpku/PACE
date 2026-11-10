@@ -12,6 +12,20 @@ from pace.runtime.output.workspace import work_ref, path_has_symlink_component
 _TOKEN = re.compile(r"\{\{([a-z][a-z0-9_]*)\}\}")
 _PACKAGED_RESOURCES = Path(__file__).resolve().parents[1] / "resources"
 
+# Source layout is independent of persisted run references. Keep the snapshot
+# paths (and their Markdown content) unchanged so existing checkpoints resume.
+_SNAPSHOT_PATHS = {
+    "prompts/transport.md": "prompts/shared/transport.md",
+    **{
+        f"skills/rci-investigation/references/critic/{name}.md":
+        f"skills/rci-investigation/references/critic/raw_seed/{name}.md"
+        for name in (
+            "attack_correctness", "attack_counterexamples", "attack_novelty_value",
+            "attack_readiness_for_next_stage",
+        )
+    },
+}
+
 
 def prompt_root(workdir: Path) -> Path:
     """Return the prompt snapshot owned by this run."""
@@ -63,7 +77,7 @@ def materialize_run_resources(
     selected = _PACKAGED_RESOURCES / "variants" / resource_variant
     sources = [
         (_PACKAGED_RESOURCES / "prompts", destination / "prompts"),
-        (selected / "prompts", destination / "prompts"),
+        (selected, destination / "prompts" / "roles"),
         (_PACKAGED_RESOURCES / "skills", destination / "skills"),
         (_PACKAGED_RESOURCES / "templates", destination / "templates"),
     ]
@@ -74,7 +88,8 @@ def materialize_run_resources(
             for path in sorted(source.rglob("*")):
                 if not path.is_file() or path.suffix not in {".md", ".json", ".py", ".yaml", ".sty"}:
                     continue
-                output = temporary / target.relative_to(destination) / path.relative_to(source)
+                relative = (target.relative_to(destination) / path.relative_to(source)).as_posix()
+                output = temporary / _SNAPSHOT_PATHS.get(relative, relative)
                 output.parent.mkdir(parents=True, exist_ok=True)
                 with output.open("xb") as stream:
                     stream.write(path.read_bytes())
@@ -96,8 +111,8 @@ def validate_resource_snapshot(destination: Path, *, resource_variant: str) -> N
                 "prompts/roles/global_research_director.md", "templates/neurips2026/neurips_2026.sty",
                 "skills/direct-proving-and-gap-closure/SKILL.md"}
     if manifest.get("skill_layout") == "shared/v1":
-        required.update({"skills/README.md", "skills/smi-investigation/SKILL.md",
-                         "skills/smi-investigation/references/smi_search_core.md"})
+        required.update({"skills/README.md", "skills/rci-investigation/SKILL.md",
+                         "skills/rci-investigation/references/rci_search_core.md"})
     if (manifest.get("schema_version") != "resource_snapshot/v1"
             or manifest.get("resource_variant") != resource_variant
             or not isinstance(manifest.get("files"), list)

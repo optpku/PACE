@@ -45,3 +45,14 @@ be independently checked before publication. Do not write verification verdicts
 or edit `results/`, shared state, another task's drafts or previously published
 findings. A later strengthening is a new manuscript, with an explicit reference
 to the result it strengthens.
+
+For executions using the Host finding-inventory contract, write the requested
+`finding_manifest.json`. Identify the current manuscript of each result and any
+explicit old-to-new replacement, with a short reason. Keep superseded drafts as
+history. Do not present them as current deliverables or overwrite them. An
+inventory entry only selects a version for independent checking; it grants no
+mathematical approval and cannot withdraw a previously published result.
+Submit the inventory in the same delivery as the manuscripts. If the Host asks
+for an inventory correction, change only its file references and explicit
+version relationships; keep the mathematical files unchanged. Report ambiguity
+instead of inventing a replacement or selecting a version by mathematical merit.

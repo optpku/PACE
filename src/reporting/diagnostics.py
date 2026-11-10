@@ -17,7 +17,10 @@ from pace.runtime.codex_config import check_codex_isolation
 from pace.runtime.output.paper import build_paper
 
 
-def _probe(name: str, executable: str, args: list[str], expected: str) -> dict[str, Any]:
+def _probe(
+    name: str, executable: str, args: list[str], expected: str,
+    *, allowed_exit_codes: tuple[int, ...] = (0,),
+) -> dict[str, Any]:
     resolved = shutil.which(executable)
     row = {"name": name, "ok": False, "path": resolved or "", "detail": "not found on PATH"}
     if resolved is None:
@@ -27,7 +30,10 @@ def _probe(name: str, executable: str, args: list[str], expected: str) -> dict[s
             [resolved, *args], capture_output=True, text=True, timeout=15,
             stdin=subprocess.DEVNULL, check=False,
         )
-        row["ok"] = result.returncode == 0 and re.search(expected, result.stdout + result.stderr, re.I) is not None
+        row["ok"] = (
+            result.returncode in allowed_exit_codes
+            and re.search(expected, result.stdout + result.stderr, re.I) is not None
+        )
         row["detail"] = "available" if row["ok"] else f"local probe failed (exit {result.returncode})"
     except (OSError, subprocess.SubprocessError) as exc:
         row["detail"] = f"cannot run executable ({type(exc).__name__})"
@@ -35,7 +41,7 @@ def _probe(name: str, executable: str, args: list[str], expected: str) -> dict[s
 
 
 def check_environment(*, pdf: bool = False) -> dict[str, Any]:
-    executable = os.environ.get("CODEX_CLI_PATH", "codex")
+    executable = os.environ.get("PACE_CODEX_CLI_PATH", "codex")
     checks = [
         {"name": "python", "ok": sys.version_info >= (3, 11), "path": sys.executable,
          "detail": platform.python_version()},
@@ -48,11 +54,14 @@ def check_environment(*, pdf: bool = False) -> dict[str, Any]:
         checks.extend([
             _probe("xelatex", "xelatex", ["--version"], "XeTeX|MiKTeX"),
             _probe("bibtex", "bibtex", ["--version"], "BibTeX"),
-            _probe("pdffonts", "pdffonts", ["-v"], r"pdffonts\s+version"),
+            # Xpdf prints its version and exits 99; Poppler exits 0. The
+            # production font inspection still requires a successful PDF read.
+            _probe("pdffonts", "pdffonts", ["-v"], r"pdffonts\s+version",
+                   allowed_exit_codes=(0, 99)),
         ])
         build = {"name": "pdf_compile", "ok": False, "path": "", "detail": "required PDF tools are unavailable"}
         if all(row["ok"] for row in checks[-3:]):
-            with TemporaryDirectory(prefix="nl-proof-doctor-") as directory:
+            with TemporaryDirectory(prefix="pace-doctor-") as directory:
                 source = Path(directory)
                 style = files("pace.resources").joinpath("templates/neurips2026/neurips_2026.sty")
                 (source / "neurips_2026.sty").write_bytes(style.read_bytes())
@@ -63,7 +72,7 @@ def check_environment(*, pdf: bool = False) -> dict[str, Any]:
                     r"\bibliographystyle{plainnat}\bibliography{references}\end{document}", encoding="utf-8",
                 )
                 (source / "references.bib").write_text(
-                    "@book{check,author={NL Proof Contributors},title={Local Build Check},year={2026}}\n",
+                    "@book{check,author={PACE Contributors},title={Local Build Check},year={2026}}\n",
                     encoding="utf-8",
                 )
                 result = build_paper(source)

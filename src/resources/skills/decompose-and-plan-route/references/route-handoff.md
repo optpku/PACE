@@ -17,7 +17,7 @@ bridge failed, state whether a weaker relation would serve the consumer before
 discarding the target or changing its assumptions.
 
 Explain whether the next work is a lightweight local attempt for Research or
-deeper, longer investigation for SMI into a conjecture, mechanism or construction.
-Existing precise nodes can need SMI. Give the mathematical reason rather than
+deeper, longer investigation for RCI into a conjecture, mechanism or construction.
+Existing precise nodes can need RCI. Give the mathematical reason rather than
 equating a formula with readiness. Recommend canonical route revisions separately;
 Director chooses dispatch and Planner retains route ownership.

@@ -26,7 +26,7 @@ from pace.orchestrator.recovery import (
     load_operational_checkpoint,
 )
 from pace.reporting.writing import active_writing_request, writing_complete
-from pace.runtime.output.workspace import RunWorkspace, work_ref
+from pace.runtime.output.workspace import RunWorkspace, work_ref, _write_json_atomic
 from pace.runtime.processes import terminate_process_tree
 from pace.runtime.output.setup import load_setup
 from pace.orchestrator.finding_publication import pending_finding_checks
@@ -474,8 +474,8 @@ def _is_resumable_run(run_dir: Path | None) -> bool:
         return False
     try:
         workspace = RunWorkspace.open_existing(run_dir)
-        if active_writing_request(run_dir):
-            return not writing_complete(run_dir)
+        if active_writing_request(run_dir) and not writing_complete(run_dir):
+            return True
         setup = load_setup(run_dir)
         if setup is not None and setup["phase"] != "READY":
             return True
@@ -796,28 +796,18 @@ def _subprocess_environment(
     real_codex: str,
 ) -> dict[str, str]:
     environment = os.environ.copy()
-    environment["CODEX_CLI_PATH"] = str(RUN_ROOT / "codex_wrapper.sh")
-    environment["NL_PROOF_REAL_CODEX"] = real_codex
-    environment["NL_PROOF_CODEX_AUTH_MODE"] = str(codex["authentication_mode"])
-    environment["NL_PROOF_CODEX_BASE_URL"] = str(credentials["base_url"])
-    environment["NL_PROOF_CODEX_API_KEY"] = str(credentials["api_key"])
-    environment["NL_PROOF_CODEX_PROVIDER_NAME"] = str(codex["provider_name"])
-    environment["NL_PROOF_CODEX_WIRE_API"] = str(codex["wire_api"])
-    environment["NL_PROOF_CODEX_REQUIRES_OPENAI_AUTH"] = (
+    environment["PACE_CODEX_CLI_PATH"] = str(RUN_ROOT / "codex_wrapper.sh")
+    environment["PACE_REAL_CODEX"] = real_codex
+    environment["PACE_CODEX_AUTH_MODE"] = str(codex["authentication_mode"])
+    environment["PACE_CODEX_BASE_URL"] = str(credentials["base_url"])
+    environment["PACE_CODEX_API_KEY"] = str(credentials["api_key"])
+    environment["PACE_CODEX_PROVIDER_NAME"] = str(codex["provider_name"])
+    environment["PACE_CODEX_WIRE_API"] = str(codex["wire_api"])
+    environment["PACE_CODEX_REQUIRES_OPENAI_AUTH"] = (
         "true" if bool(codex.get("requires_openai_auth")) else "false"
     )
-    environment["NL_PROOF_CLI_MAX_RETRIES"] = str(pipeline["transport_max_retries"])
+    environment["PACE_CLI_MAX_RETRIES"] = str(pipeline["transport_max_retries"])
     return environment
-
-
-def _atomic_write_json(path: Path, value: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temporary.write_text(
-        json.dumps(value, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    os.replace(temporary, path)
 
 
 def _result_from_run(
@@ -977,7 +967,7 @@ def _write_batch_state(
     records: list[dict[str, Any]],
     finished: bool,
 ) -> None:
-    _atomic_write_json(
+    _write_json_atomic(
         path,
         {
             "schema_version": RESULT_SCHEMA,
