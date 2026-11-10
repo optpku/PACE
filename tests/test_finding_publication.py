@@ -108,7 +108,7 @@ def test_research_finalization_obeys_the_kernel_publication_action(tmp_path, act
     _publish_report(ws, report)
     assert report["result"] == "PASS"
     assert "report" not in report["artifact_refs"]
-    assert not (root / "work/turn001/outcome.md").exists()
+    assert not (ws.root / "work/turn001/outcome.md").exists()
     assert len(report["artifact_refs"]["findings"]) == (0 if action == "NONE" else 1)
     if action == "UPDATE":
         assert finding_entries(ws.root)[0]["source_ref"] == proof
