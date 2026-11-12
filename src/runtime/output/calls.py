@@ -3,22 +3,18 @@
 from __future__ import annotations
 
 import json
-import hashlib
+import re
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
 from pace.runtime.output.workspace import work_ref
 
-from .workspace import _write_json_atomic, _write_text_atomic, stage_ref
+from .workspace import _write_json_atomic, _write_text_atomic, artifact_attempt, stage_ref
 
 
 def artifact_owner_metadata(root: Path, ref: str) -> dict[str, Any]:
     """Attribute an editorial/control call to its saved artifact, not orientation."""
-    if (root / ref).is_file() and Path(ref).suffix == ".json":
-        value = json.loads((root / ref).read_text())
-        if isinstance(value, dict) and value.get("schema_version") == "writing_pointer/v1":
-            ref = value["task_ref"] + "/state.json"
     path = Path(ref)
     if path.is_absolute() or ".." in path.parts:
         raise ValueError("Artifact owner must be run-relative")
@@ -83,8 +79,7 @@ def pending_native_call(root: Path, *, role: str, stage: str, prompt: str,
                 or any(record.get(key, "") != str(metadata.get(key) or "")
                        for key in ("target_contract_id", "task_id", "output_ref"))):
             continue
-        if (record.get("prompt_sha256") and record["prompt_sha256"] != hashlib.sha256(prompt.encode()).hexdigest()
-                or (root / record["prompt_ref"]).read_text() != prompt):
+        if (root / record["prompt_ref"]).read_text() != prompt:
             continue
         recovered = completed_native_response(path)
         if recovered:
@@ -129,7 +124,6 @@ def begin_call(
             "parent_task_id": str(meta.get("parent_task_id") or ""),
             "status": "STARTED",
             "prompt_ref": prompt_ref,
-            "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
             "input_refs": list(dict.fromkeys(str(ref) for ref in input_refs)),
             "output_ref": str(meta.get("output_ref") or ""),
             "response_ref": "",
@@ -192,3 +186,38 @@ def update_agent_call_deliverable(
     record["deliverable_ref"] = str(deliverable_ref)
     _write_json_atomic(path, record)
     return True
+
+
+def select_reader_attempts(
+    workdir: Path, records: Iterable[dict[str, Any]], *, publication_refs: Iterable[str] = (),
+) -> tuple[dict[str, dict[str, Any]], dict[Path, Path]]:
+    """Select committed call attempts; mathematical iterations keep their own task IDs."""
+    root = Path(workdir)
+    records = tuple(records)
+    attempt_tasks = {(row["stage_ref"], row["agent_id"], row["task_id"])
+                     for row in records if row["task_id"] and row["deliverable_ref"]
+                     and artifact_attempt(root / row["deliverable_ref"]) is not None}
+
+    def key(row):
+        task = row["task_id"]
+        name = re.sub(r"-attempt-\d+$", "", task)
+        name = "/".join(part for part in Path(name).parts if not re.fullmatch(r"attempt[-_]\d+", part))
+        return ((row["stage_ref"], row["agent_id"], name)
+                if name != task or (row["stage_ref"], row["agent_id"], task) in attempt_tasks
+                else row["call_id"])
+
+    chosen = {}
+    for row in records:
+        identity = key(row)
+        previous = chosen.get(identity)
+        if previous is None or row["status"] == "SUCCEEDED" or previous["status"] != "SUCCEEDED":
+            chosen[identity] = row
+    aliases = {row["call_id"]: chosen[key(row)] for row in records}
+    attempts = {}
+    refs = [row["deliverable_ref"] for row in records
+            if aliases[row["call_id"]] is row and row["status"] == "SUCCEEDED" and row["deliverable_ref"]]
+    for ref in (*refs, *publication_refs):
+        attempt = artifact_attempt(root / ref)
+        if attempt is not None:
+            attempts[attempt.parent] = attempt
+    return aliases, attempts

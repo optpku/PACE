@@ -42,17 +42,9 @@ def finding_entries(workdir: Path) -> list[dict]:
 
 
 def _findings_state(root: Path) -> dict:
-    state = _read_state(root / FINDINGS_STATE_REF, {"entries": [], "publications": []})
-    # Upgrade the index only; never renumber or reverify old manuscripts.
-    if "publications" not in state:
-        state["publications"] = [{**row, "action": "CREATE"} for row in state["entries"]]
-    for row in [*state["entries"], *state["publications"]]:
-        if "title" not in row:
-            source = root / row["source_ref"]
-            with source.open(encoding="utf-8") as stream:
-                row["title"] = next((line[2:].strip() for line in stream if line.startswith("# ")), source.name)
-    state["schema_version"] = "findings/v2"
-    return state
+    return _read_state(root / FINDINGS_STATE_REF, {
+        "schema_version": "findings/v2", "entries": [], "publications": [],
+    })
 
 
 def finding_publications(root: Path) -> list[dict]:

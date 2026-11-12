@@ -75,7 +75,7 @@ $$
 2. **细化猜想与支撑论证。** 猜想精化研究（Refined Conjecture Investigation，RCI）同时发展候选命题和支撑机制，即足以推出候选结论的中间命题。它检查这些命题是否有依据、是否存在循环论证，以及是否覆盖完整结论；通过证明尝试和反例搜索，区分论证尚不成立与命题本身为假，据此在原始请求范围内修补、修订或拆分问题。
 3. **构造与核验证明。** Prover 组织适用论证，Auditor 与 Kernel 针对原始目标分别审查候选证明，采用基于模型的自然语言核验。
 4. **保留证据，组织后续任务。** 带版本的记忆分别记录结果本身及其用途，保留假设、适用范围、来源、依赖和审查记录。候选或条件变化后，重新审查受影响的证据，已确立结果仍按原条件保留。复用前须检查这些条件，并建立旧结论通向新用途的论证。缺失步骤和失败路线指导下一步选题；任务上下文区分已核验前提、探索材料与未解决的证明义务。
-5. **查看、写作与继续研究。** Host 在研究中更新事实性目录和已核验成果。研究结束后保存数学结果与证据，不自动启动长报告写作；用户可另行调用 `outline`、`report`、`paper-outline`、`paper`。请求的报告和论文保留独立审阅、必要修订及 PDF 断点恢复。[resume](docs/user-guide.md#resume-an-interrupted-turn) 复用已完成阶段；[continue](docs/user-guide.md#continue-with-a-new-question) 沿用成果开启新 turn。
+5. **查看、写作与继续研究。** Host 在研究中更新事实性目录和已核验成果。研究结束后保存数学结果与证据，不自动启动长报告写作；用户可另行调用 `outline`、`report`、`paper-outline`、`paper`。提纲、报告和论文各使用一次作者任务，PDF 构建失败后可从保存的源稿恢复。[resume](docs/user-guide.md#resume-an-interrupted-turn) 复用已完成阶段；[continue](docs/user-guide.md#continue-with-a-new-question) 沿用成果开启新 turn。
 
 ## 快速开始
 
@@ -122,7 +122,7 @@ PACE 使用 `--dangerously-bypass-approvals-and-sandbox` 调用 Codex 执行无�
 
 ### 3. 准备 PDF 工具
 
-用户请求论文交付时，需安装提供 `xelatex`、`bibtex` 和 `pdffonts` 的 TeX 发行版与 Poppler，详见 [PDF 工具安装说明](docs/installation.md#paper-pdf-tools)。工具缺失时保留已审阅源稿和上一份成功交付，修复环境后用 `resume` 继续。
+用户请求论文交付时，需安装提供 `xelatex`、`bibtex` 和 `pdffonts` 的 TeX 发行版与 Poppler，详见 [PDF 工具安装说明](docs/installation.md#paper-pdf-tools)。构建失败时保留已交付源稿与诊断信息，修复环境后用 `resume` 继续。
 
 ### 4. 检查运行环境
 
@@ -169,7 +169,7 @@ pace problems --output outputs
 
 ## 阅读研究输出
 
-PACE 保存数学原稿、断点、运行记录及经过独立审阅的文稿。CLI 用户可以直接打开或复制下列文件；Reaslab 网页应用单独提供，不包含在此仓库内。
+PACE 保存数学原稿、断点、运行记录及作者交付的文稿。CLI 用户可以直接打开或复制下列文件；Reaslab 网页应用单独提供，不包含在此仓库内。
 
 实验、turn 和 `round0001` 的目录页链接任务、成果、核验与调用日志。`results/` 提供当前阅读入口，`work/turnNNN/` 保留历史原稿；同一成果更新后沿用稳定编号。新实验保存固定运行代码供恢复，旧实验保留原布局。详见[实验文件结构](docs/user-guide.md#experiment-files)，可用 `pace index` 在不调用模型的情况下重建目录页。
 
@@ -178,9 +178,9 @@ PACE 保存数学原稿、断点、运行记录及经过独立审阅的文稿。
 | `README.md`、`work/turnNNN/README.md`、`roundNNNN/README.md` | Host 生成的实验、turn 和调度轮次入口，不调用模型。 |
 | `work/turnNNN/final_report.json` | 数学结论、模式选择及研究执行状态。 |
 | `results/findings/` | 使用稳定编号的当前成果，以及不可变原稿和核验记录的链接。 |
-| `results/outline.md`、`results/research_report.md` | 中文报告提纲与经过独立审阅的报告。 |
-| `results/paper_outline.md`、`results/paper/main.tex`、`main.pdf` | 英文论文提纲、审阅后的源稿及构建成功后的 PDF。 |
-| `work/turnNNN/finalization/report-001/`、`paper-001/` | 每次用户请求的原稿、审稿、修订和恢复状态。 |
+| `results/outline.md`、`results/research_report.md` | 中文报告提纲与作者交付的完整报告。 |
+| `results/paper_outline.md`、`results/paper/main.tex`、`main.pdf` | 英文论文提纲、作者交付的源稿及构建成功后的 PDF。 |
+| `work/turnNNN/finalization/reports/`、`finalization/papers/` | 每次写作请求、冻结的提纲、作者原稿和保存状态。 |
 
 报告和论文保留原假设、证明范围及未解决问题。数学结论与写作、PDF 状态分别保存。使用手册介绍[写作与修订](docs/user-guide.md#write-a-report-or-paper)和[结果汇总](docs/user-guide.md#summarize-recorded-results)。
 

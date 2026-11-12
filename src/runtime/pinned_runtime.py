@@ -1,6 +1,6 @@
 """Resume archived runs with their recorded executable version, without migration."""
 
-import hashlib
+import base64
 import json
 import os
 from pathlib import Path
@@ -16,7 +16,7 @@ def pin_runtime(root: Path) -> None:
     source = Path(__file__).resolve().parents[1]
     package = Path(root) / "work/runtime/initial/pace"
     shutil.copytree(source, package, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".DS_Store"))
-    files = {p.relative_to(package).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+    files = {p.relative_to(package).as_posix(): base64.b64encode(p.read_bytes()).decode("ascii")
              for p in sorted(package.rglob("*")) if p.is_file()}
     _write_json_atomic(Path(root) / "work/state/runtime_binding.json", {
         "schema_version": "pace_runtime_binding/v1", "package_ref": package.relative_to(root).as_posix(), "files": files,
@@ -24,7 +24,7 @@ def pin_runtime(root: Path) -> None:
 
 
 def reexec_pinned_runtime(run_dir: Path, arguments: list[str]) -> None:
-    """Honor a local run's explicit, hash-bound runtime before touching its state."""
+    """Honor a local run's explicit, recorded runtime before touching its state."""
     root = Path(run_dir).expanduser().resolve()
     binding_path = root / "work/state/runtime_binding.json"
     if not binding_path.exists() and not binding_path.is_symlink():
@@ -54,10 +54,10 @@ def reexec_pinned_runtime(run_dir: Path, arguments: list[str]) -> None:
         raise ValueError("Runtime binding must contain a complete pace package")
     if any(p.is_symlink() for p in package.rglob("*")):
         raise ValueError("Pinned runtime must not contain symlinks")
-    for ref, digest in files.items():
+    for ref, content in files.items():
         file = local_file(package, ref)
-        if (not file.is_file() or not isinstance(digest, str)
-                or hashlib.sha256(file.read_bytes()).hexdigest() != digest):
+        if (not file.is_file() or not isinstance(content, str)
+                or file.read_bytes() != base64.b64decode(content)):
             raise ValueError(f"Pinned runtime changed or is missing: {ref}")
     actual = {p.relative_to(package).as_posix() for p in package.rglob("*")
               if p.is_file() and "__pycache__" not in p.relative_to(package).parts}

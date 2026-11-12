@@ -15,19 +15,29 @@ from pace.runtime.output.memory import commit_memory_notes
 from pace.runtime.processes import cancellable_model_calls
 from pace.orchestrator.recovery import load_operational_checkpoint
 from pace.orchestrator.director_led import (
-    DIRECTOR_LED_ASSIGNMENT_SCHEMA_VERSION, DirectorLedEngine, DirectorLedState,
+    DIRECTOR_LED_ASSIGNMENT_SCHEMA_VERSION, DirectorBudgetExhausted, DirectorLedEngine, DirectorLedState,
     _coerce_decision, _read_json, _write_json,
 )
 
 
 def reserve_batch(engine, state, decision):
-    tasks = (replace(decision, parallel_tasks=()), *decision.parallel_tasks)
-    engine._check_task_budget(tasks, state)
+    proposed = (replace(decision, parallel_tasks=()), *decision.parallel_tasks)
+    slots = engine.max_rounds - state.round_index if engine.max_rounds is not None else len(proposed)
+    credits = state.max_proof_states - state.proof_states_used
+    tasks = []
+    for task in proposed:
+        if len(tasks) == slots:
+            break
+        cost = engine._proof_state_cost(task)
+        if cost <= credits:
+            tasks.append(task)
+            credits -= cost
+    if not tasks:
+        raise DirectorBudgetExhausted("no proposed task fits the remaining proof states")
     first = state.round_index + 1
     manifest_ref = engine._round_ref(first, "batch.json")
     reserved = replace(state, round_index=state.round_index + len(tasks),
-                       proof_states_used=state.proof_states_used + sum(
-                           engine._proof_state_cost(task) for task in tasks),
+                       proof_states_used=state.max_proof_states - credits,
                        phase="PENDING_BATCH", pending_assignment_ref=manifest_ref)
     _write_json(engine.workdir / manifest_ref, {
         "reserved_state": reserved.to_json(),
@@ -35,7 +45,6 @@ def reserve_batch(engine, state, decision):
         "tasks": [task.to_json() for task in tasks],
         "input_snapshot": state.to_json(),
     })
-    # Freeze every worker's context before any sibling can publish a new route.
     engine._freeze_route_context(state, first)
     context = _read_json(engine.workdir / engine._round_ref(first, "route_context.json"))
     for offset in range(1, len(tasks)):

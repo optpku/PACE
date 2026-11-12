@@ -86,14 +86,13 @@ def _recoverable_check(llm, prompt, *, workdir, call_name, spec, input_refs, hos
     In-flight native completions still use semantic_call's transport recovery.
     This covers the later boundary, after the semantic receipt has committed.
     """
-    import hashlib
     from pace.runtime.output.workspace import stage_ref
     owner = host_metadata.get("stage_ref") or stage_ref(host_metadata.get("round_index", 0), workdir=workdir)
     for record_path in sorted((workdir / owner / "calls").glob("*/record.json"), reverse=True):
         record = json.loads(record_path.read_text())
         if (record.get("status") not in {"SUCCEEDED", "REPRESENTATION_FAILED"}
                 or record.get("role") != spec.role or record.get("stage") != call_name
-                or record.get("prompt_sha256") != hashlib.sha256(prompt.encode()).hexdigest()
+                or (workdir / record["prompt_ref"]).read_text() != prompt
                 or record.get("input_refs") != list(dict.fromkeys(input_refs))):
             continue
         trace = json.loads(record_path.with_name("interface_result.json").read_text())
@@ -122,14 +121,13 @@ def _recoverable_check(llm, prompt, *, workdir, call_name, spec, input_refs, hos
 def _checked_publication_call(llm, prompt, *, workdir, spec, cache_ref, manuscript_ref,
                               call_name, input_refs, host_metadata):
     """Save the independent check; repair only a rejected publication directive."""
-    import hashlib
     from dataclasses import replace
     from pace.runtime.output.workspace import _write_json_atomic
     root = Path(workdir)
     path = root / cache_ref
-    identity = {"manuscript_sha256": hashlib.sha256((root / manuscript_ref).read_bytes()).hexdigest(),
+    identity = {"manuscript_ref": manuscript_ref, "manuscript_text": (root / manuscript_ref).read_text(),
                 "target_contract_id": host_metadata.get("target_contract_id", ""), "role": spec.role,
-                "inputs": {ref: hashlib.sha256((root / ref).read_bytes()).hexdigest()
+                "inputs": {ref: (root / ref).read_bytes().hex()
                            for ref in input_refs if (root / ref).is_file()
                            and ref not in {FINDINGS_INDEX_REF, FINDINGS_CATALOG_REF}}}
     host_metadata = {**host_metadata, "verification_identity": identity}

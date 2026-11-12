@@ -6,6 +6,7 @@ from typing import Any
 
 from pace.reporting.research_report import (
     RESEARCH_OUTLINE_REF,
+    RESEARCH_REPORT_REF,
     ResearchReportOutliner,
     ResearchReportWriter,
     outline_state_ref,
@@ -13,6 +14,7 @@ from pace.reporting.research_report import (
 )
 from pace.reporting.theory_paper import (
     PAPER_OUTLINE_REF,
+    PAPER_SOURCE_REF,
     TheoryPaperWriter,
     paper_outline_state_ref,
     paper_state_ref,
@@ -233,45 +235,45 @@ class ProofPipeline:
         )
         with ws.execution_lock():
             if writing_action == "outline":
-                outliner = self._outliner(ws, scope="")
+                outliner = self._outliner(ws)
                 outliner.request(
                     problem.text,
                     requirements=additional_requirements,
                     resource_variant=self.config.resource_variant,
                 )
-                selected_state = outline_state_ref(ws.root, "")
+                selected_state = outline_state_ref(ws.root)
             elif writing_action == "report":
-                writer = self._writer(ws, scope="")
+                writer = self._writer(ws)
                 writer.request(
                     outline=outline_ref or RESEARCH_OUTLINE_REF,
                     message=problem.text,
                     requirements=additional_requirements,
                     resource_variant=self.config.resource_variant,
                 )
-                selected_state = report_state_ref(ws.root, "")
+                selected_state = report_state_ref(ws.root)
             elif writing_action == "paper-outline":
-                self._paper_writer(ws, scope="").request_outline(
+                self._paper_writer(ws).request_outline(
                     problem.text,
                     requirements=additional_requirements,
                     resource_variant=self.config.resource_variant,
                 )
-                selected_state = paper_outline_state_ref(ws.root, "")
+                selected_state = paper_outline_state_ref(ws.root)
             elif writing_action == "paper":
-                self._paper_writer(ws, scope="").request(
+                self._paper_writer(ws).request(
                     outline=outline_ref or PAPER_OUTLINE_REF,
                     message=problem.text,
                     requirements=additional_requirements,
                     resource_variant=self.config.resource_variant,
                 )
-                selected_state = paper_state_ref(ws.root, "")
+                selected_state = paper_state_ref(ws.root)
             elif writing_action:
                 raise ValueError(f"Unknown writing action: {writing_action}")
             if writing_action:
                 from pace.runtime.sessions import run_session
 
-                select_writing_task(ws.root, writing_action, selected_state, scope="")
+                select_writing_task(ws.root, writing_action, selected_state)
                 with run_session(ws.root, config=self.config):
-                    return self._complete_writing(ws, writing_action, scope="", selected=True)
+                    return self._complete_writing(ws, writing_action)
             if run_dir is not None:
                 from pace.runtime.input_protection import (
                     recover_open_input_snapshots,
@@ -333,37 +335,36 @@ class ProofPipeline:
             ws.finish_turn("completed")
             return result
 
-    def _outliner(self, ws: RunWorkspace, *, scope: str = "") -> ResearchReportOutliner:
+    def _outliner(self, ws: RunWorkspace) -> ResearchReportOutliner:
         return ResearchReportOutliner(
-            llm=self._llm(), workdir=ws.root, scope=scope)
+            llm=self._llm(),
+            workdir=ws.root,
+        )
 
-    def _writer(self, ws: RunWorkspace, *, scope: str = "") -> ResearchReportWriter:
+    def _writer(self, ws: RunWorkspace) -> ResearchReportWriter:
         return ResearchReportWriter(
-            llm=self._llm(), workdir=ws.root, scope=scope)
+            llm=self._llm(), workdir=ws.root
+        )
 
-    def _paper_writer(self, ws: RunWorkspace, *, scope: str = "") -> TheoryPaperWriter:
+    def _paper_writer(self, ws: RunWorkspace) -> TheoryPaperWriter:
         return TheoryPaperWriter(
-            llm=self._llm(), workdir=ws.root, scope=scope)
+            llm=self._llm(), workdir=ws.root
+        )
 
-    def _complete_writing(self, ws: RunWorkspace, action: str, *, scope: str = "",
-                          selected: bool = False) -> Path:
-        from pace.reporting.writing import writing_artifacts, release_completed_writing_task
+    def _complete_writing(self, ws: RunWorkspace, action: str) -> Path:
         if action == "outline":
-            completed, key = self._outliner(ws, scope=scope).update(), "research_outline"
+            completed, output = self._outliner(ws).update(), RESEARCH_OUTLINE_REF
         elif action == "report":
-            completed, key = self._writer(ws, scope=scope).update(), "research_report"
+            completed, output = self._writer(ws).update(), RESEARCH_REPORT_REF
         elif action == "paper-outline":
-            completed, key = self._paper_writer(ws, scope=scope).update_outline(), "paper_outline"
+            completed, output = self._paper_writer(ws).update_outline(), PAPER_OUTLINE_REF
         elif action == "paper":
-            completed, key = self._paper_writer(ws, scope=scope).update(), "paper_source"
+            completed, output = self._paper_writer(ws).update(), PAPER_SOURCE_REF
         else:
             raise ValueError(f"Unknown writing action: {action}")
         if not completed:
             raise ValueError(f"{action} failed; resume its saved writing task")
-        output = ws.root / writing_artifacts(ws.root, snapshots=True, scope=scope)[key]
-        if selected:
-            release_completed_writing_task(ws.root)
-        return output
+        return ws.root / output
 
     def _prepare_turn_handoff(self, ws: RunWorkspace, source_turn_id: str) -> None:
         """Bind the prior committed records for the next mathematical task."""
@@ -400,6 +401,7 @@ class ProofPipeline:
                 "control_context": policy["control_context"],
                 "max_calls": policy.get("max_calls"),
                 "max_seconds": policy.get("max_seconds"),
+                "max_rounds": policy.get("max_rounds"),
             },
         )
 
@@ -425,6 +427,7 @@ class ProofPipeline:
                     "max_proof_states": self.config.max_proof_states,
                     "max_calls": self.config.max_calls,
                     "max_seconds": self.config.max_seconds,
+                    "max_rounds": self.config.max_rounds,
                     "mode": self.config.mode,
                     "requested_mode": self.config.mode,
                     "control_context": _director_control_context(
@@ -612,30 +615,9 @@ class ProofPipeline:
 
         with workspace.execution_lock():
             if continuation_action == "WRITING":
-                continuing_turn = False
-                try:
-                    recover_open_input_snapshots(workspace.root)
-                    with run_session(workspace.root, config=self.config):
-                        output = self._resume(workspace, checkpoint, continuation_action, **kwargs)
-                        from pace.reporting.writing import turn_continuation_pending
-                        if turn_continuation_pending(workspace.root) and not active_writing_request(workspace.root):
-                            from pace.orchestrator.recovery import resume_existing_run
-                            continuing_turn = True
-                            workspace.finish_turn("running")
-                            output = resume_existing_run(
-                                workspace.root,
-                                continue_pipeline=lambda request: self._resume(
-                                    request.workspace, request.checkpoint,
-                                    request.continuation_action, **kwargs,
-                                ),
-                            )
-                except BaseException:
-                    if continuing_turn:
-                        workspace.finish_turn("interrupted")
-                    raise
-                if continuing_turn:
-                    workspace.finish_turn("completed")
-                return output
+                recover_open_input_snapshots(workspace.root)
+                with run_session(workspace.root, config=self.config):
+                    return self._resume(workspace, checkpoint, continuation_action, **kwargs)
             workspace.finish_turn("running")
             try:
                 recover_open_input_snapshots(workspace.root)
@@ -674,8 +656,7 @@ class ProofPipeline:
                     "invalid_writing_checkpoint",
                     "the writing request changed before resume",
                 )
-            return self._complete_writing(workspace, checkpoint["action"],
-                                          scope=checkpoint.get("scope", ""), selected=True)
+            return self._complete_writing(workspace, checkpoint["action"])
         if continuation_action == "PROOF":
             from pace.orchestrator.proof_mode import run_proof
             from pace.orchestrator.recovery import RecoveryError
@@ -987,6 +968,7 @@ class ProofPipeline:
         target_contract_id: str,
     ) -> DirectorLedEngine:
         llm = self._llm()
+        policy = json.loads(ws.path(work_ref(ws.root, "state/research_execution_policy.json")).read_text())
         max_proof_states = json.loads(
             ws.path(work_ref(ws.root, "state/director_state.json")).read_text(
                 encoding="utf-8"
@@ -1005,6 +987,8 @@ class ProofPipeline:
                     + ("enabled" if self.config.web_search_mode == "on" else "disabled")
                     + ". Role-local restrictions do not disable Survey.\nRemaining shared proof states: "
                     + str(kwargs["proof_states_remaining"])
+                    + "\nRemaining research rounds (including the next dispatch): "
+                    + str(kwargs["research_rounds_remaining"])
                 ),
                 host_metadata={
                     "round_index": int(kwargs["round_index"]),
@@ -1046,6 +1030,7 @@ class ProofPipeline:
             ),
             target_contract_id=target_contract_id,
             max_proof_states=max_proof_states,
+            max_rounds=policy.get("max_rounds"),
             on_round_committed=publish_results,
         )
 

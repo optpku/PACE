@@ -33,12 +33,12 @@ Explain the first unresolved implication and the evidence available to address
 it. Identify independent work only when its committed premises are already
 available; dependent work must wait for its producer.
 
-Respect the Host's saved proof-state and time budgets. Research and Prover
-consume proof-states; planning, Survey, RCI and fixed verification still cost
-time but do not consume that unit. Account for complete-candidate assembly and
-any planned repair. Do not reserve proof-states for Auditor, Kernel or terminal
-writing. Reports and papers belong to separately requested writing tasks; substantive mathematical, computational and reproduction obligations
-remain part of the route when the literal request requires them.
+Respect the Host's saved budgets. Each Research or RCI dispatch consumes one
+proof-state, including partial or failed attempts; RCI subphases share that
+reservation. Prover assembly and repair, planning, Survey, fixed verification
+and explicit writing consume no proof-states. All tasks remain subject to the
+round, call and time limits. Reports and papers require separate writing requests;
+mathematical and reproduction obligations remain in the research route.
 
 If the request permits a partial research answer, plan that answer with its
 established results and precise open boundaries. Otherwise retain every required

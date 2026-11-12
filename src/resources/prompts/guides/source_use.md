@@ -5,6 +5,9 @@ use. When a proof relies on a source, cite the exact result and locator and
 establish its hypotheses and relevance at the point of use. An unchecked lead
 or blueprint cannot discharge a proof obligation.
 
-External acquisition, including ReasAtlas queries, belongs to Survey and follows
-the Host's retrieval setting. Mathematical roles use the acquired records and
-request Survey when additional external source text is needed.
+External retrieval follows both the Host's setting and the assigned role's
+instructions. During mathematical research, Survey acquires external sources,
+including ReasAtlas records; other mathematical roles use acquired material and
+request Survey for missing source text. Manuscript roles follow their writing
+instructions for permitted citation checks, preserving the established
+mathematical scope. A source-analysis method does not expand retrieval authority.

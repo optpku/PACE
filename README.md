@@ -73,7 +73,7 @@ When `--mode` is omitted, the first target-location call selects `proof` only fo
 2. **Refine conjectures and their supporting arguments.** Refined Conjecture Investigation (RCI) develops candidate statements and mechanisms: intermediate claims intended to establish them. It checks whether the claims are justified without circular reasoning and whether they cover the full candidate. Proof attempts and counterexample searches distinguish an unsupported argument from a false statement, guiding repair, revision, or decomposition within the original request.
 3. **Construct and review proofs.** The Prover assembles the relevant arguments. Auditor and Kernel independently review the candidate proof against the original target using model-based natural-language verification.
 4. **Retain evidence for the next task.** Versioned memory records results separately from their uses, preserving assumptions, scope, sources, dependencies, and review findings. Changes to a candidate or condition trigger renewed review of affected evidence; established results retain their original conditions. Reuse requires checking those conditions and the argument connecting the old conclusion to its new use. Missing steps and failed routes guide the next objective, with checked premises, exploratory material, and unresolved obligations kept distinct in task-specific context.
-5. **Inspect, write and continue.** The Host updates factual navigation and checked findings during research. Research ends with its mathematical result and saved evidence; it does not start long-form writing. Request `outline`, `report`, `paper-outline` or `paper` separately. Requested reports and papers retain independent review, necessary revision and resumable PDF delivery. [Resume](docs/user-guide.md#resume-an-interrupted-turn) reuses completed work; [continue](docs/user-guide.md#continue-with-a-new-question) starts another turn with prior findings.
+5. **Inspect, write and continue.** The Host updates factual navigation and checked findings during research. Research ends with its mathematical result and saved evidence; it does not start long-form writing. Request `outline`, `report`, `paper-outline` or `paper` separately. Each requested outline, report or paper uses one author task; PDF recovery reuses the saved source. [Resume](docs/user-guide.md#resume-an-interrupted-turn) reuses completed work; [continue](docs/user-guide.md#continue-with-a-new-question) starts another turn with prior findings.
 
 ## Quick start
 
@@ -120,7 +120,7 @@ PACE runs Codex with `--dangerously-bypass-approvals-and-sandbox` for unattended
 
 ### 3. Prepare PDF tools
 
-For requested paper delivery, install a TeX distribution and Poppler providing `xelatex`, `bibtex` and `pdffonts`; see [PDF tool setup](docs/installation.md#paper-pdf-tools). Missing tools pause PDF delivery while preserving the reviewed source and previous successful reading copy.
+For requested paper delivery, install a TeX distribution and Poppler providing `xelatex`, `bibtex` and `pdffonts`; see [PDF tool setup](docs/installation.md#paper-pdf-tools). Build failures preserve the delivered source and diagnostics; resume retries compilation without another author call.
 
 ### 4. Check the environment
 
@@ -167,7 +167,7 @@ The user guide covers [report and paper writing](docs/user-guide.md#write-a-repo
 
 ## Read the research output
 
-PACE saves mathematical originals, checkpoints, factual runtime records and reviewed manuscripts. These files are usable directly from the CLI; the separate Web application is optional.
+PACE saves mathematical originals, checkpoints, factual runtime records and author-delivered manuscripts. These files are usable directly from the CLI; the separate Web application is optional.
 
 Run, turn and `round0001` pages link tasks, findings, checks and call logs. Current reading copies live in `results/`; historical originals live in `work/turnNNN/`. Finding IDs remain stable across checked updates. New runs freeze their runtime for recovery; existing experiments keep their original layout. See [experiment files](docs/user-guide.md#experiment-files), including `pace index` for rebuilding navigation without model calls.
 
@@ -176,9 +176,9 @@ Run, turn and `round0001` pages link tasks, findings, checks and call logs. Curr
 | `README.md`, `work/turnNNN/README.md`, `roundNNNN/README.md` | Host-generated run, turn and dispatch navigation; no model calls. |
 | `work/turnNNN/final_report.json` | Bound mathematical result, mode selection and execution status. |
 | `results/findings/` | Current findings under stable IDs, with links to immutable originals and verification records. |
-| `results/outline.md`, `results/research_report.md` | Chinese report outline and independently reviewed report. |
-| `results/paper_outline.md`, `results/paper/main.tex`, `main.pdf` | English paper outline and independently reviewed manuscript; PDF exists only after a successful build. |
-| `work/turnNNN/finalization/report-001/`, `paper-001/` | Each requested writing task, its immutable drafts, reviews, revisions and saved checkpoint. |
+| `results/outline.md`, `results/research_report.md` | Chinese report outline and complete author-delivered report. |
+| `results/paper_outline.md`, `results/paper/main.tex`, `main.pdf` | English paper outline, author-delivered manuscript and a PDF after successful compilation. |
+| `work/turnNNN/finalization/reports/`, `finalization/papers/` | Writing requests, frozen outlines, original author outputs and saved task state. |
 
 Reports and papers preserve the original hypotheses, proof scope and open gaps. Read [writing instructions](docs/user-guide.md#write-a-report-or-paper) for the two writing paths and [recorded result summaries](docs/user-guide.md#summarize-recorded-results) for batch inspection. Mathematical acceptance is separate from writing completion and Web delivery.
 

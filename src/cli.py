@@ -193,8 +193,6 @@ def _main(argv: list[str] | None = None) -> int:
         try:
             ws = RunWorkspace.open_existing(run_dir)
             with ws.execution_lock():
-                from pace.reporting.writing import release_completed_writing_task
-                release_completed_writing_task(ws.root)
                 writing = active_writing_request(ws.root)
                 args.model = args.model or "gpt-5.6-sol"
                 args.reasoning_effort = args.reasoning_effort or ("high" if writing else "xhigh")
@@ -280,6 +278,8 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--max-seconds", type=int, default=None, help="research wall-time soft budget"
     )
+    parser.add_argument("--max-rounds", type=int, default=None,
+                        help="maximum research dispatch rounds per user turn; resume keeps the saved limit")
     add_execution_args(parser)
 
 
@@ -323,6 +323,7 @@ def make_config(
         mode=getattr(args, "mode", None),
         max_calls=getattr(args, "max_calls", None),
         max_seconds=getattr(args, "max_seconds", None),
+        max_rounds=getattr(args, "max_rounds", None),
         profile=bool(args.profile),
         provider=args.provider,
         model=args.model,

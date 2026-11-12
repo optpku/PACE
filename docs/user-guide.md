@@ -98,10 +98,10 @@ in use. Keep the whole run directory, including `work/`, for recovery.
         │           └── frontier_explorer_02/
         └── finalization/
             ├── README.md
-            ├── report-outline-001/
-            ├── report-001/
-            ├── paper-outline-001/
-            └── paper-001/
+            ├── reports/outline/attempt-0001/
+            ├── reports/report/attempt-0001/
+            ├── papers/outline/attempt-0001/
+            └── papers/paper/attempt-0001/
 ```
 
 Auxiliary files are omitted. Each `roundNNNN` is a dispatch round, distinct from a
@@ -162,8 +162,8 @@ pace resume --run-dir outputs/even-square \
 `resume` continues the selected saved task. It preserves target, mode, resources, proof budget and committed outputs. Mode and budget are not resume options. An unfinished explicit writing task completes first, then recovery continues the same turn’s paused proof/research checkpoint. Completed writing and review stages are reused; completed mathematics does not trigger writing.
 
 Every new run saves its executable package under `work/runtime/initial/pace` and
-binds its file hashes in `work/state/runtime_binding.json`. For a bound run, CLI resume, continue
-and writing commands first verify the package hashes and use that runtime.
+records its exact file contents in `work/state/runtime_binding.json`. For a bound run, CLI resume, continue
+and writing commands first compare the package bytes with that inventory and use that runtime.
 Keep its `work/runtime/` directory when moving the run. Historical identifiers,
 prompts, manuscripts and reviews remain unchanged; new runs use RCI throughout.
 
@@ -175,8 +175,6 @@ A completed artifact and its owning task checkpoint are saved before call succes
 
 ## Write a report or paper
 
-Research ends without starting long-form writing. Request the commands below when a report or paper is wanted. Each requested report/paper has independent review and necessary revisions. `resume` retains accepted authorship and reviews. Missing tools pause PDF delivery; concrete compiler source errors trigger local revision and review before rebuilding.
-
 Writing uses two independent paths over the run's existing evidence. Supply the complete writing request in `writing-request.md` and optional additional requirements in a UTF-8 file.
 
 ```bash
@@ -187,13 +185,13 @@ pace paper-outline --run-dir outputs/even-square --message writing-request.md
 pace paper --run-dir outputs/even-square --outline results/paper_outline.md
 ```
 
-Each command accepts execution settings such as `--model` and `--reasoning-effort`. Writing roles always keep retrieval disabled, including when the shared `--web-search-mode on` option is supplied. Add `--requirements FILE` for additional requirements. Report and paper writing save the selected outline as a read-only snapshot together with the original request. The paper path can use the existing research directly.
+Each command accepts execution settings such as `--model`, `--reasoning-effort` and `--web-search-mode`. Add `--requirements FILE` for additional requirements. Report and paper writing save the selected outline as a read-only snapshot together with the original request. The paper path can use the existing research directly.
 
-Each request owns one task directory under `work/turnNNN/finalization/`: `report-outline-001`, `report-001`, `paper-outline-001` or `paper-001`. Its `request.md`, `selected_outline.md`, drafts, reviews, revisions and `state.json` remain together. A new user request increments the task number; restart and resume do not. The turn’s writing pointer selects that task. A writing command alone does not advance paused mathematics; subsequent `resume` can finish writing and continue its saved mathematical workflow. Formatting repairs first use conservative local rules, then constrained patches at fixed `medium` effort; independent editorial review remains required.
+Each step uses one author task with its Composer provenance, saved output and delivery/format checks. Writing preserves mathematical targets, evidence and verifier decisions. It cannot fill a missing mathematical proof or turn an unfinished target into PASS. A new request starts a new writing attempt; `pace resume --run-dir PATH` continues the selected unfinished attempt.
 
-The latest completed reading copies are `results/outline.md`, `results/research_report.md`, `results/paper_outline.md` and `results/paper/`. A report under revision or failed PDF build does not replace the previous successful delivery. Commands return exact historical version paths. A paper task keeps its initial complete source bundle in `draft/`, later bundles in `revision-001/`, and independent reviews beside them as `review-001.md`. Each accepted paper bundle is independently compilable. Default paper language is English; the NeurIPS preprint style is retained without a checklist.
+Reports are written to `results/research_report.md`. Paper sources and their local dependencies are written under `results/paper/`, with a successful build at `results/paper/main.pdf`. Paper prose defaults to English unless the user explicitly requests another language. The saved NeurIPS preprint template is used without a checklist or submission questionnaire.
 
-PDF compilation uses XeLaTeX, BibTeX when cited, and `pdffonts`. The source delivery and build status are separate. Build failures keep the source and diagnostic. Environment or unclassified build failures pause for inspection. Recognized source errors trigger local patches, review and recompilation until the PDF builds. Reports and papers have no fixed revision-count limit. The first review collects the required corrections; follow-up reviews check unresolved issues and the impact of changes, and may identify new substantive defects. Empty or cyclic patches and persistent identical compiler errors receive a focused correction before a resumable pause. Ordinary revisions continue automatically, with completed writing and reviews retained across recovery. Optional style preferences do not block delivery. Writing and build status do not alter the committed mathematical verdict. The external Web application organizes reader copies and download archives.
+PDF compilation uses XeLaTeX, BibTeX when cited, and `pdffonts`. The source delivery and build status are separate. Build failures keep the source and diagnostic, and recovery can retry compilation without calling the author again. Writing and build status do not alter the committed mathematical verdict. The external Web application organizes reader copies and download archives.
 
 ## Run a batch
 

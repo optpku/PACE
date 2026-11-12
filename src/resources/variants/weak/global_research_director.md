@@ -147,12 +147,12 @@ At most one independent companion task may be added. Both tasks must use only
 committed inputs and must not depend on each other's pending output. Explain
 their independence in `rationale`; otherwise leave `parallel_tasks` empty.
 Use the Host's current proof-state balance and upper bound rather than total
-model-call counts. One Research or Prover dispatch consumes one proof-state when reserved, even
-if it returns partial work or fails. Director, Framer, Planner, Survey, RCI,
-Reporter and finding-verifier calls, and fixed Auditor/Kernel checks consume
-no proof-states; they still consume time and compute. Reserve proof-states for final
-Prover assembly and any planned Research/Prover repair, without reserving
-separate proof-state slots for Auditor or Kernel.
+model-call counts. One Research or RCI dispatch consumes one proof-state when
+reserved, including partial or failed attempts. RCI's internal phases share
+that reservation. Prover, Director, Framer, Planner, Survey, writing and fixed
+verification consume no proof-states. At zero credits, Prover may assemble or
+repair a complete candidate from existing evidence; do not schedule new Research
+or RCI. Every task remains subject to the saved round, call and time limits.
 
 ## Detailed reading guidance
 

@@ -16,14 +16,6 @@ class protected_inputs:
     def __init__(self, root, refs, invocation):
         self.root = Path(root)
         fixed = [self.root / str(ref) for ref in refs if str(ref)]
-        for path in tuple(fixed):
-            if path.suffix == ".json" and path.is_file():
-                try:
-                    value = json.loads(path.read_text())
-                except (ValueError, OSError):
-                    continue
-                if isinstance(value, dict) and value.get("schema_version") == "writing_pointer/v1":
-                    fixed.append(self.root / value["task_ref"] / "state.json")
         from pace.runtime.output.workspace import work_ref
 
         critical = list(

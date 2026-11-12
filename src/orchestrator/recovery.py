@@ -98,8 +98,6 @@ def resume_existing_run(
     except (OSError, ValueError, TypeError) as exc:
         raise RecoveryError("invalid_setup_checkpoint", str(exc)) from exc
     setup_failure = terminal.is_file() and _read_json_object(terminal).get("terminal_kind") == "SETUP_FAILURE"
-    from pace.reporting.writing import release_completed_writing_task
-    release_completed_writing_task(workspace.root)
     writing = active_writing_request(workspace.root)
     if writing:
         if continue_pipeline is not None:
@@ -258,14 +256,13 @@ def _project_terminal_result(
     from pace.runtime.output.events import read_events
     profile = workspace.path(work_ref(workspace.root, 'events.jsonl'))
     profiled = any(row["event_kind"] == "PROFILE_SPAN" for row in read_events(workspace.root))
-    from pace.reporting.writing import with_writing_outputs
-    return with_writing_outputs(envelope.project(
+    return envelope.project(
         run_root=workspace.root,
         default_problem_id=workspace.problem_id,
         resolve_artifact=resolve_artifact,
         profile_file=profile if profiled else None,
         final_report_file=workspace.path(work_ref(workspace.root, 'final_report.json')),
-    ))
+    )
 
 
 def _validate_terminal_report_binding(

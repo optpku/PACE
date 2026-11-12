@@ -634,6 +634,8 @@ def _default_reason(
         return "director_stopped"
     if stop_reason == "PROOF_STATE_BUDGET_EXHAUSTED":
         return "proof_state_budget_exhausted"
+    if stop_reason == "RESEARCH_ROUND_LIMIT_REACHED":
+        return "research_round_limit_reached"
     if stop_reason == "USER_REQUESTED_FINALIZATION":
         return "user_requested_finalization"
     if chain_error:

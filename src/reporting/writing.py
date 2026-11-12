@@ -9,38 +9,16 @@ from pace.runtime.output.workspace import _write_json_atomic, work_ref
 
 def read_state(root: Path, ref: str) -> dict[str, Any]:
     path = Path(root) / ref
-    value = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
-    if value.get("schema_version") == "writing_pointer/v1":
-        return json.loads((Path(root) / value["task_ref"] / "state.json").read_text(encoding="utf-8"))
-    return value
-
-
-def save_writing_state(root: Path, ref: str, state: dict) -> None:
-    """The task owns its checkpoint; the turn only selects the latest request."""
-    if state.get("task_ref"):
-        _write_json_atomic(Path(root) / state["task_ref"] / "state.json", state)
-        _write_json_atomic(Path(root) / ref, {"schema_version": "writing_pointer/v1", "task_ref": state["task_ref"]})
-    else:
-        _write_json_atomic(Path(root) / ref, state)
-
-
-def new_writing_task(root: Path, kind: str) -> str:
-    from pace.runtime.output.workspace import stage_ref
-    base = Path(root) / stage_ref(workdir=root, final=True)
-    numbers = [int(path.name[len(kind) + 1:]) for path in base.glob(kind + "-*")
-               if path.is_dir() and path.name[len(kind) + 1:].isdigit()]
-    task = base / f"{kind}-{max(numbers, default=0) + 1:03d}"
-    task.mkdir(parents=True, exist_ok=False)
-    return task.relative_to(root).as_posix()
+    return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
 
 
 def writing_task_ref(root: Path) -> str:
     return work_ref(root, "state/writing_task.json")
 
 
-def select_writing_task(root: Path, action: str, state_ref: str, *, scope: str = "") -> None:
+def select_writing_task(root: Path, action: str, state_ref: str) -> None:
     _write_json_atomic(
-        Path(root) / writing_task_ref(root), {"action": action, "state_ref": state_ref, "scope": scope}
+        Path(root) / writing_task_ref(root), {"action": action, "state_ref": state_ref}
     )
 
 
@@ -49,35 +27,19 @@ def active_writing_request(root: Path) -> dict[str, Any]:
     return {**task, "request": read_state(root, task["state_ref"])} if task else {}
 
 
-def writing_artifacts(root: Path, *, snapshots: bool = False, scope: str | None = None) -> dict[str, str]:
+def writing_artifacts(root: Path, *, snapshots: bool = False) -> dict[str, str]:
     from .research_report import outline_artifacts, report_artifacts
     from .theory_paper import paper_artifacts, paper_outline_artifacts
 
-    if scope is None:
-        scope = active_writing_request(root).get("scope", "")
     return {
-        **outline_artifacts(root, scope=scope),
-        **report_artifacts(root, snapshots=snapshots, scope=scope),
-        **paper_outline_artifacts(root, scope=scope),
-        **paper_artifacts(root, snapshots=snapshots, scope=scope),
+        **outline_artifacts(root, snapshots=snapshots),
+        **report_artifacts(root, snapshots=snapshots),
+        **paper_outline_artifacts(root, snapshots=snapshots),
+        **paper_artifacts(root, snapshots=snapshots),
     }
 
 
-def turn_continuation_pending(root: Path) -> bool:
-    """A saved mathematical workflow still owns the turn.
-
-    Only detect ownership here. The recovery dispatcher validates the saved
-    checkpoint and chooses its exact action; writing never reconstructs it.
-    A standalone writing workspace has no mathematical checkpoint to resume.
-    """
-    terminal = read_state(root, work_ref(root, "final_report.json"))
-    if terminal.get("run_status") == "completed":
-        return False
-    return any((Path(root) / work_ref(root, f"state/{name}.json")).is_file()
-               for name in ("setup_state", "proof_state", "director_state"))
-
-
-def selected_writing_complete(root: Path) -> bool:
+def writing_complete(root: Path) -> bool:
     task = active_writing_request(root)
     if not task:
         return True
@@ -87,39 +49,10 @@ def selected_writing_complete(root: Path) -> bool:
         "paper-outline": "paper_outline",
         "paper": "paper_source",
     }[task["action"]]
-    if key not in writing_artifacts(root, snapshots=True):
+    if key not in writing_artifacts(root):
         return False
-    state = task["request"]
-    if task["action"] in {"outline", "report"} and state.get("draft_ref"):
-        # The accepted manuscript can precede its local publication receipt.
-        # Finish that Host-only step before relinquishing the selected task.
-        if not state.get("publication_complete"):
-            return False
     if task["action"] == "paper":
         from .theory_paper import paper_build_status
 
-        return (paper_build_status(root, task.get("scope", "")) == "COMPLETE"
-                and (not state.get("draft_ref") or state.get("build_publication")
-                     == [state.get("build_ref"), "COMPLETE"]))
+        return paper_build_status(root) == "COMPLETE"
     return True
-
-
-def release_completed_writing_task(root: Path) -> None:
-    """Release navigation only; keep accepted writing and review checkpoints."""
-    if turn_continuation_pending(root) and selected_writing_complete(root):
-        (Path(root) / writing_task_ref(root)).unlink(missing_ok=True)
-
-
-def writing_complete(root: Path) -> bool:
-    return selected_writing_complete(root)
-
-
-def with_writing_outputs(result):
-    """Expose delivered files without changing the bound mathematical report."""
-    from dataclasses import replace
-    artifacts = writing_artifacts(result.run_dir, snapshots=True, scope="")
-    fields = {"outline_file": "research_outline", "research_report_file": "research_report",
-              "paper_outline_file": "paper_outline", "paper_source_file": "paper_source",
-              "paper_pdf_file": "paper_pdf"}
-    return replace(result, **{field: result.run_dir / artifacts[key] if key in artifacts else None
-                              for field, key in fields.items()})

@@ -6,7 +6,6 @@ source text. In particular, prose and code spelling out TeX commands are valid.
 
 from __future__ import annotations
 
-import hashlib
 import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -291,14 +290,14 @@ def format_repair_plan(root: Path, ref: str, *, text: str | None = None) -> dict
             spans[-1][1] = max(spans[-1][1], hi)
         else:
             spans.append([lo, hi])
-    return {"version": 1, "source_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+    return {"version": 1, "source_text": text,
             "logical_ref": ref, "issues": issues,
             "excerpts": [{"offset": a, "text": text[a:b]} for a, b in spans]}
 
 
 def local_format_repair(text: str, plan: dict) -> str:
     """Apply only the plan's unambiguous edits, preserving every other byte."""
-    if hashlib.sha256(text.encode("utf-8")).hexdigest() != plan["source_sha256"]:
+    if text != plan["source_text"]:
         raise ValueError("Format plan belongs to a different source version")
     for issue in sorted(plan["issues"], key=lambda row: row["offset"], reverse=True):
         if issue["automatic"]:
@@ -309,7 +308,7 @@ def local_format_repair(text: str, plan: dict) -> str:
 
 def validate_format_revision(original: str, updated: str, plan: dict, *, root: Path | None = None) -> None:
     """Accept only declared token substitutions, not edits to adjacent mathematics."""
-    if hashlib.sha256(original.encode("utf-8")).hexdigest() != plan["source_sha256"]:
+    if original != plan["source_text"]:
         raise ValueError("Format plan belongs to a different source version")
     pieces, links, end = [], {}, 0
     for index, issue in enumerate(sorted(plan["issues"], key=lambda row: row["offset"])):

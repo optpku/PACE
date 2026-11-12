@@ -29,7 +29,7 @@ from pace.runtime.output.results import FINDINGS_INDEX_REF
 from pace.runtime.output.workspace import is_call_path, work_ref, _write_text_atomic, _write_json_atomic, path_has_symlink_component
 from pace.runtime.output.delivery_pause import DeliveryPaused
 from pace.runtime.output.memory import ROUTE_RELATIONS_POLICY
-from pace.reporting.editorial import repair_artifact_batch
+from pace.runtime.artifact_format import repair_artifact_batch
 from pace.runtime.prompt_policy import PromptAssembly, build_prompt_assembly
 from pace.runtime.prompts import skill_index_ref
 from pace.runtime.semantic import (

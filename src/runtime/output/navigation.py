@@ -49,10 +49,9 @@ def _refresh(root: Path, *, stage: str, rebuild: bool) -> None:
     turn_id = current_turn(root)
     turns = sorted((root / "work").glob("turn[0-9]*")) if rebuild else [root / "work" / turn_id]
     for turn in turns:
-        # Old experiments can receive navigation without changing their evidence layout.
-        base = turn / "stages" if (turn / "stages").is_dir() else turn
+        base = turn
         rounds = sorted(p for p in base.iterdir() if p.is_dir() and
-                        (p.name.startswith("round") or p.name.isdigit() or p.name in {"orientation", "finalization"}))
+                        (p.name.startswith("round") or p.name in {"orientation", "finalization"}))
         page = turn / "README.md"
         from .events import read_events
         events = read_events(root, turn_id=turn.name)
@@ -82,7 +81,7 @@ def _refresh(root: Path, *, stage: str, rebuild: bool) -> None:
             relative = directory.relative_to(root).as_posix()
             update = rebuild or relative == stage or relative not in cache or not (directory / "README.md").exists()
             if update:
-                assignment = _read(directory / "task.json") or _read(directory / "assignment/task.json")
+                assignment = _read(directory / "task.json")
                 task = assignment.get("task", assignment.get("decision", assignment))
                 result = _read(directory / "agent_result.json")
                 cache[relative] = {"role": result.get("agent_id") or task.get("agent_id", directory.name),

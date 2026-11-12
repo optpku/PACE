@@ -453,6 +453,7 @@ class DirectorLedEngine:
         specialists: Mapping[str, SpecialistHandler],
         target_contract_id: str = "",
         max_proof_states: int = 18,
+        max_rounds: int | None = None,
         state_ref: str | None = None,
         verifier: VerifierHandler | None = None,
         on_round_committed: Callable[..., Any] | None = None,
@@ -480,6 +481,9 @@ class DirectorLedEngine:
         if max_proof_states < 1:
             raise ValueError("max_proof_states must be positive")
         self.max_proof_states = max_proof_states
+        if max_rounds is not None and (type(max_rounds) is not int or max_rounds < 1):
+            raise ValueError("max_rounds must be a positive integer")
+        self.max_rounds = max_rounds
         normalized_state_ref = _safe_relative_ref(
             state_ref,
             default=work_ref(workdir, 'state/director_state.json'),
@@ -591,16 +595,9 @@ class DirectorLedEngine:
                 )
                 self._persist_state(state)
                 break
-            if state.proof_states_used >= state.max_proof_states:
-                # Reaching the search budget without a verifier PASS is a
-                # failed search.  FINALIZE is the publication boundary, while
-                # terminal_result carries the only admissible terminal value.
-                state = replace(
-                    state,
-                    phase="FINALIZE",
-                    stop_reason="PROOF_STATE_BUDGET_EXHAUSTED",
-                    terminal_result="FAILED",
-                )
+            if self.max_rounds is not None and state.round_index >= self.max_rounds:
+                state = replace(state, phase="FINALIZE", stop_reason="RESEARCH_ROUND_LIMIT_REACHED",
+                                terminal_result="FAILED")
                 self._persist_state(state)
                 break
             state = self._run_round(
@@ -988,6 +985,8 @@ class DirectorLedEngine:
                         "input_refs": unique_strings((*self._director_input_refs(state), *self._route_context_refs(round_index))),
                         "completed_result_refs": state.completed_result_refs,
                         "proof_states_remaining": state.max_proof_states - state.proof_states_used,
+                        "research_rounds_remaining": (self.max_rounds - state.round_index
+                                                       if self.max_rounds is not None else None),
                         "control_context": str(control_context or ""),
                         "context": context,
                     },
@@ -1069,8 +1068,14 @@ class DirectorLedEngine:
                 terminal_result="" if decision.action is DirectorAction.DISPATCH else "FAILED",
             )
             self._persist_state(state)
-        except DirectorBudgetExhausted as exc:
-            return self._fail_round(state, round_index, "DIRECTOR", exc, continue_search=True)
+        except DirectorBudgetExhausted:
+            state = replace(state, round_index=round_index, phase="FINALIZE",
+                            stop_reason="PROOF_STATE_BUDGET_EXHAUSTED", terminal_result="FAILED")
+            self._persist_state(state)
+            publish_progress(self.workdir, task_id=f'round-{round_index:04d}-director',
+                             stage='director', status='completed', round_index=round_index,
+                             notice='search_stopped')
+            return state
         except Exception as exc:
             return self._fail_round(state, max(state.round_index, round_index), "DIRECTOR", exc)
         if decision.action is DirectorAction.STOP:
@@ -1213,7 +1218,7 @@ class DirectorLedEngine:
     def _proof_state_cost(self, decision: DirectorDecision) -> int:
         if decision.action is not DirectorAction.DISPATCH:
             return 0
-        return 1 if decision.agent_id in {"research", "prover"} else 0
+        return 1 if decision.agent_id in {"research", "rci"} else 0
 
     def _check_task_budget(self, tasks: tuple[DirectorDecision, ...], state: DirectorLedState) -> None:
         cost = sum(self._proof_state_cost(task) for task in tasks)
@@ -1985,15 +1990,7 @@ class DirectorLedEngine:
                 terminal_result="PASS",
                 stop_reason="Auditor and Kernel accepted the same candidate.",
             )
-        elif verification_status == "FAILED":
-            if state.proof_states_used >= state.max_proof_states:
-                state = replace(
-                    state,
-                    phase="FINALIZE",
-                    terminal_result="FAILED",
-                    stop_reason="candidate_failed_verification",
-                )
-        else:
+        elif verification_status != "FAILED":
             raise DirectorLedEngineError("verifier returned no recognized terminal status")
         if self.commit_progress and isinstance(value, Mapping):
             commit_verified_progress(self.workdir, (value,))
@@ -2008,8 +2005,6 @@ class DirectorLedEngine:
         round_index: int,
         phase: str,
         exc: Exception,
-        *,
-        continue_search: bool = False,
     ) -> DirectorLedState:
         safe_round = max(1, int(round_index or 1))
         diagnostic_ref = self._round_ref(safe_round, "diagnostics.json")
@@ -2030,19 +2025,16 @@ class DirectorLedEngine:
             self.workdir / diagnostic_ref,
             diagnostic,
         )
-        next_phase = "DIRECTOR" if continue_search and state.proof_states_used < state.max_proof_states else "FAILED"
         next_state = replace(
             state,
             round_index=max(state.round_index, safe_round),
-            phase=next_phase,
+            phase="FAILED",
             pending_dispatch_ref="",
             pending_prompt_ref="",
             pending_assignment_ref="",
             pending_verifier_request_ref="",
             diagnostics_ref=diagnostic_ref,
-            terminal_result=(
-                "" if continue_search and state.proof_states_used < state.max_proof_states else "FAILED"
-            ),
+            terminal_result="FAILED",
         )
         self._persist_state(next_state)
         task_id = f"round-{safe_round:04d}"
@@ -2050,7 +2042,7 @@ class DirectorLedEngine:
             task_id += "-director"
         elif phase == "VERIFY":
             task_id += "-verification"
-        publish_progress(self.workdir, task_id=task_id, stage={'DIRECTOR': 'director', 'VERIFY': 'verification'}.get(phase, 'research'), status='failed', round_index=safe_round, notice='stage_failed_retry' if next_phase == 'DIRECTOR' else 'stage_failed_final')
+        publish_progress(self.workdir, task_id=task_id, stage={'DIRECTOR': 'director', 'VERIFY': 'verification'}.get(phase, 'research'), status='failed', round_index=safe_round, notice='stage_failed_final')
         return next_state
 
     def _round_ref(self, round_index: int, filename: str) -> str:
@@ -2428,7 +2420,7 @@ def _validate_assignment(
 
     assignment_path = Path(str(assignment_ref).replace("\\", "/"))
     directive_path = Path(str(directive_ref).replace("\\", "/"))
-    expected_assignment = directive_path.parent / "assignment" / "task.json"
+    expected_assignment = directive_path.parent / "task.json"
     if assignment_path.as_posix() != expected_assignment.as_posix():
         raise DirectorLedEngineError(
             "Director assignment ref is not bound to its directive round"

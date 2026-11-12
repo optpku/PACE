@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import uuid
@@ -17,13 +16,14 @@ from pace.runtime.output.results import (
 )
 from pace.runtime.output.workspace import (
     _write_json_atomic,
+    _write_text_atomic,
     is_call_path,
     path_has_symlink_component,
     work_ref,
 )
 from pace.runtime.semantic import StructuredSemanticResult, SemanticInterfaceFailure
 from pace.runtime.math_format import artifact_format_issues
-from pace.reporting.editorial import review_draft
+from pace.runtime.artifact_format import repair_artifact_batch
 
 from pace.runtime.output.finding_manifest import current_finding_drafts
 
@@ -46,7 +46,7 @@ def pending_finding_checks(workdir: Path) -> bool:
         for path in (draft.with_suffix(".format.json") for draft in active):
             if not path.is_file():
                 continue
-            if not json.loads(path.read_text())["editorial"].get("approved"):
+            if not json.loads(path.read_text())["format_batch"].get("applied"):
                 return True
         for path in (draft.with_suffix(".verification.json") for draft in active):
             if not path.is_file():
@@ -119,48 +119,29 @@ def publish_stage_findings(
 
 
 def _finding_format_state(root: Path, draft: Path) -> dict | None:
-    """Bind saved revisions to this finding's directory and original manuscript."""
-    source_ref = draft.relative_to(root).as_posix()
     state_path = draft.with_suffix(".format.json")
     if not state_path.is_file():
         return None
-    state = json.loads(state_path.read_text(encoding="utf-8"))
-    if state["source_ref"] != source_ref:
+    state = json.loads(state_path.read_text())
+    if state["source_ref"] != draft.relative_to(root).as_posix():
         raise ValueError("finding format repair belongs to another manuscript")
-    editorial = state["editorial"]
-    refs = (editorial["current_ref"], *editorial.get("revision_refs", ()),
-            *((editorial["revision"]["output_ref"],) if editorial.get("revision") else ()),
-            *((editorial["revision"]["patch_ref"],)
-              if (editorial.get("revision") or {}).get("patch_ref") else ()))
-    for ref in refs:
-        path = root / ref
-        if (path.parent != draft.parent or path.relative_to(root).as_posix() != ref
-                or path_has_symlink_component(root, path)):
-            raise ValueError("finding format revision must stay beside its original manuscript")
     return state
 
 
 def _formatted_finding(*, llm: Any, root: Path, draft: Path) -> Path:
-    """Repair a new finding's format without recalling its completed researcher."""
-    if path_has_symlink_component(root, draft):
-        raise ValueError("finding manuscript must not contain a symlink")
+    """Resume research-format repair without repeating the completed researcher."""
     source_ref = draft.relative_to(root).as_posix()
-    state_path = draft.with_suffix(".format.json")
     state = _finding_format_state(root, draft)
+    if state is None and not artifact_format_issues(root, source_ref):
+        return draft
     if state is None:
-        if not artifact_format_issues(root, source_ref):
-            return draft
-        state = {"source_ref": source_ref}
-    # This is format-only approval. Mathematical acceptance still requires a
-    # fresh finding verifier on the corrected copy, with the original retained.
-    corrected = review_draft(
-        llm=llm, root=root, state=state,
-        state_ref=state_path.relative_to(root).as_posix(),
-        source_ref=source_ref, input_refs=(), markdown=True, independent=False,
-    )
-    if artifact_format_issues(root, corrected):
-        raise ValueError("Finding still has formatting or local-link defects")
-    return root / corrected
+        output_ref = draft.with_suffix(".formatted.md").relative_to(root).as_posix()
+        _write_text_atomic(root / output_ref, draft.read_bytes().decode("utf-8"))
+        state = {"source_ref": source_ref, "output_ref": output_ref}
+    repair_artifact_batch(llm=llm, root=root, state=state,
+                          state_ref=draft.with_suffix(".format.json").relative_to(root).as_posix(),
+                          refs=(state["output_ref"],))
+    return root / state["output_ref"]
 
 
 def _check_and_publish(
@@ -177,7 +158,7 @@ def _check_and_publish(
     verification_path = draft.with_suffix(".verification.json")
     state = _finding_format_state(root, draft)
     if state is not None:
-        draft = root / state["editorial"]["current_ref"]
+        draft = root / state["output_ref"]
     draft_ref = draft.relative_to(root).as_posix()
     record = None
     if verification_path.is_file():
@@ -234,7 +215,7 @@ def _check_and_publish(
         record = {
             "draft_ref": draft_ref,
             "source_draft_ref": source_ref,
-            "draft_sha256": hashlib.sha256(body).hexdigest(),
+            "draft_text": body.decode("utf-8"),
             "target_contract_id": target_id,
             "call_id": outcome.host.get("call_id", ""),
             "verdict": verdict,
@@ -242,9 +223,7 @@ def _check_and_publish(
         _write_json_atomic(verification_path, record)
     if record["draft_ref"] != draft_ref or record["target_contract_id"] != target_id:
         raise ValueError("finding verification belongs to another manuscript or target")
-    if record.get("draft_sha256") and record["draft_sha256"] != hashlib.sha256(
-        draft.read_bytes()
-    ).hexdigest():
+    if record["draft_text"] != draft.read_bytes().decode("utf-8"):
         raise ValueError("finding manuscript changed after independent verification")
     verdict = record["verdict"]
     if verdict.get("stage_status") == "VERIFIER_ERROR":

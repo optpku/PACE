@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from pace.runtime.output.workspace import _write_text_atomic, path_has_symlink_component
+from pace.runtime.output.workspace import _write_text_atomic
 
 
 def render_revision(root: Path, patch_ref: str, *, base_ref: str) -> str:
@@ -40,41 +40,6 @@ def _render_edits(original: str, edits: list) -> str:
     return text
 
 
-def apply_bundle_revision(root: Path, patch_ref: str, *, base_ref: str, output_ref: str,
-                          format_plans: dict | None = None) -> None:
-    """Patch existing TeX/bibliography files in an already copied source bundle."""
-    source, destination = (root / base_ref).parent, (root / output_ref).parent
-    if source.resolve() == destination.resolve():
-        raise ValueError("bundle revision must use a new directory")
-    payload = json.loads((root / patch_ref).read_text(encoding="utf-8"))
-    files = payload.get("files") if isinstance(payload, dict) else None
-    if not isinstance(files, list) or not files:
-        raise ValueError("bundle revision requires a nonempty files list")
-    rendered = {}
-    originals = {}
-    for item in files:
-        if not isinstance(item, dict) or not isinstance(item.get("path"), str):
-            raise ValueError("bundle revision requires relative file paths")
-        relative = Path(item["path"])
-        if (relative.is_absolute() or ".." in relative.parts or "\\" in item["path"]
-                or relative.suffix not in {".tex", ".bib", ".bbl"} or relative in rendered
-                or path_has_symlink_component(root, source / relative)
-                or path_has_symlink_component(root, destination / relative)):
-            raise ValueError("bundle revision must select distinct local TeX or bibliography files")
-        originals[relative] = (source / relative).read_bytes().decode("utf-8")
-        rendered[relative] = _render_edits(originals[relative], item.get("edits"))
-        if format_plans is not None:
-            from pace.runtime.math_format import validate_format_revision
-            if relative.as_posix() not in format_plans:
-                raise ValueError("Format patch targets a file without a diagnosed defect")
-            validate_format_revision(originals[relative], rendered[relative], format_plans[relative.as_posix()], root=root)
-    # Validate the entire patch before writing any part. Reapplying after a
-    # partial install always renders from the unchanged original bundle.
-    for relative, original in originals.items():
-        if (source / relative).read_bytes().decode("utf-8") != original:
-            raise ValueError("bundle revision base changed during application")
-    for relative, text in rendered.items():
-        _write_text_atomic(destination / relative, text)
 
 
 def apply_revision(root: Path, patch_ref: str, *, base_ref: str, output_ref: str,

@@ -1,6 +1,5 @@
 """Explicit draft versions; selection never confers mathematical acceptance."""
 
-import hashlib
 import json
 from pathlib import Path
 
@@ -78,13 +77,12 @@ def current_finding_drafts(root: Path, stage: Path, *, freeze: bool = True,
     checkpoint = findings / "publication.json"
     if checkpoint.is_file():
         saved = json.loads(checkpoint.read_text())
-        for ref, digest in saved["versions"].items():
+        for ref, expected_text in saved["versions"].items():
             file = root / ref
-            if path_has_symlink_component(root, file) or hashlib.sha256(file.read_bytes()).hexdigest() != digest:
+            if path_has_symlink_component(root, file) or file.read_bytes().hex() != expected_text:
                 raise ValueError("frozen finding inventory changed")
         return [root / ref for ref in saved["current_refs"]]
-    revisions = {ref for p in findings.glob("*.format.json")
-                 for ref in json.loads(p.read_text())["editorial"].get("revision_refs", ())}
+    revisions = {json.loads(p.read_text())["output_ref"] for p in findings.glob("*.format.json")}
     drafts = {p.relative_to(root).as_posix() for p in findings.glob("*.md")
               if p.relative_to(root).as_posix() not in revisions}
     manifests = ([stage / "finding_manifest.json"] if (stage / "finding_manifest.json").is_file() else [])
@@ -111,9 +109,9 @@ def current_finding_drafts(root: Path, stage: Path, *, freeze: bool = True,
             seen.add(ref); ref = superseded[ref]
     if scoped_stage(root, stage) and drafts - declared - superseded.keys():
         raise ValueError("finding manifests do not cover all delivered drafts")
-    # Older checkpoints predate inventories; their exact versions remain usable.
+    # Proof-mode deliveries can select drafts without a Director route manifest.
     selected = sorted((declared if scoped_stage(root, stage) else drafts | declared) - superseded.keys())
-    versions = {ref: hashlib.sha256((root / ref).read_bytes()).hexdigest()
+    versions = {ref: (root / ref).read_bytes().hex()
                 for ref in sorted(drafts | {p.relative_to(root).as_posix() for p in manifests})}
     if freeze:
         _write_json_atomic(checkpoint, {"current_refs": selected, "superseded": superseded,
@@ -139,18 +137,18 @@ def ensure_finding_inventory(*, llm, root: Path, stage: Path,
     def check_sources():
         if not repair:
             return
-        for ref, digest in repair["source_hashes"].items():
-            allowed = {digest}
+        for ref, expected_text in repair["source_contents"].items():
+            allowed = {expected_text}
             batch = delivery.get("format_batch", {})
             # A later saved format batch can atomically replace logical files.
             # Resume must recognize that exact transition, including a partial
             # install; the batch separately validates its saved repair copies.
             if (batch.get("materializing")
-                    and batch.get("source_hashes", {}).get(ref) == digest
-                    and ref in batch.get("hashes", {})):
-                allowed.add(batch["hashes"][ref])
+                    and batch.get("original_contents", {}).get(ref) == expected_text
+                    and ref in batch.get("contents", {})):
+                allowed.add(batch["contents"][ref])
             if (path_has_symlink_component(root, root / ref)
-                    or hashlib.sha256((root / ref).read_bytes()).hexdigest() not in allowed):
+                    or (root / ref).read_bytes().hex() not in allowed):
                 raise ValueError(f"Finding inventory repair input changed: {ref}")
     check_sources()
     try:
@@ -169,7 +167,7 @@ def ensure_finding_inventory(*, llm, root: Path, stage: Path,
         if any(path_has_symlink_component(root, root / ref) or not (root / ref).is_file() for ref in refs):
             raise ValueError("Finding inventory repair requires regular local artifacts")
         repair = delivery["manifest_repair"] = {
-            "source_hashes": {ref: hashlib.sha256((root / ref).read_bytes()).hexdigest() for ref in refs},
+            "source_contents": {ref: (root / ref).read_bytes().hex() for ref in refs},
             "original_manifest": manifest.read_text() if manifest.is_file() else None,
             "error": error,
         }
@@ -218,7 +216,7 @@ def ensure_finding_inventory(*, llm, root: Path, stage: Path,
             "Return JSON only; do not write files. The Host installs and validates the inventory.\n"
             + json.dumps({"stage_ref": stage.relative_to(root).as_posix(),
                           "original_manifest": repair["original_manifest"], "error": repair["error"],
-                          "artifacts": list(repair["source_hashes"])}, ensure_ascii=False),
+                          "artifacts": list(repair["source_contents"])}, ensure_ascii=False),
             workdir=root, call_name="finding_manifest_repair",
             spec=SemanticCallSpec(role="FINDING_MANIFEST_REPAIR", authority="DRAFT_SELECTION_ONLY",
                 host_schema_version="finding_manifest_repair/v1",
@@ -230,9 +228,9 @@ def ensure_finding_inventory(*, llm, root: Path, stage: Path,
                             "required": ["old_ref", "new_ref", "reason"], "additionalProperties": False}}},
                     "required": ["action", "current_refs", "superseded", "brief"]},
                 validator=validate, on_accept=accept),
-            input_refs=tuple(repair["source_hashes"]),
+            input_refs=tuple(repair["source_contents"]),
             host_metadata={**artifact_owner_metadata(root, state_ref),
-                           "protected_input_refs": (*repair["source_hashes"], state_ref,
+                           "protected_input_refs": (*repair["source_contents"], state_ref,
                                                     manifest.relative_to(root).as_posix()),
                            "output_refs": []},
         )

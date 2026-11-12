@@ -5,13 +5,12 @@ from __future__ import annotations
 import json
 import logging
 import os
-import hashlib
 import re
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 
 from pace.runtime.context_state import empty_search_progress
-from .results import FINDINGS_ARCHIVE_REF, FINDINGS_INDEX_REF, relocate_links, finding_entries, finding_publications
+from .results import FINDINGS_ARCHIVE_REF, FINDINGS_INDEX_REF, relocate_links, finding_entries
 from .workspace import RunWorkspace, work_ref, path_has_symlink_component, is_call_path
 
 logger = logging.getLogger(__name__)
@@ -205,7 +204,7 @@ def refresh_research_index(root: Path) -> None:
             "id": row["finding_id"], "kind": "verified_finding",
             "statement_scope_and_proof_ref": row["source_ref"],
             "verification_ref": row["verification_ref"],
-            "version": hashlib.sha256((root / row["source_ref"]).read_bytes()).hexdigest(),
+            "version": row["source_ref"],
             "application_status": "CHECK_CURRENT_USE",
         })
     route_path = root / work_ref(root, "state/current_route.json")
@@ -235,17 +234,7 @@ def refresh_research_index(root: Path) -> None:
     task_status = task_uses[-1]["status"] if task_uses else "PROPOSED" if task_ref else "NONE"
     state_path = root / work_ref(root, "state/director_state.json")
     state = json.loads(state_path.read_text()) if state_path.is_file() else {}
-    incorporated = route.get("incorporated_finding_versions")
-    if incorporated is None:
-        # Recover the versions available at that historical route, never the latest R view.
-        route_parts = Path(route.get("ref", "")).parts
-        route_turn = route_parts[1] if len(route_parts) > 1 else ""
-        round_name = route_parts[2] if len(route_parts) > 2 else ""
-        route_round = int(round_name[5:]) if round_name.startswith("round") and round_name[5:].isdigit() else 0
-        incorporated = {row["finding_id"]: hashlib.sha256((root / row["source_ref"]).read_bytes()).hexdigest()
-                        for row in finding_publications(root) if row.get("finding_id") and
-                        (row.get("turn_id", "") < route_turn or
-                         row.get("turn_id") == route_turn and row.get("round_index", 0) <= route_round)}
+    incorporated = route.get("incorporated_finding_versions", {})
     versions_by_id = {row["id"]: row["version"] for row in records}
     unincorporated = [row["ref"] for row in finding_entries(root)
                      if incorporated.get(row["finding_id"]) != versions_by_id[row["finding_id"]]]
@@ -258,7 +247,7 @@ def refresh_research_index(root: Path) -> None:
         for field in ("from_ref", "to_ref", "review_ref"):
             if row.get(field):
                 ref = row[field].split("#", 1)[0]
-                versions[ref] = hashlib.sha256((root / ref).read_bytes()).hexdigest()
+                versions[ref] = (root / ref).read_bytes().hex()
     workspace.write_json("memory/research_index.json", {
         "authority": "SEARCH_CONTEXT_ONLY",
         "usage": "For objective g, select checked results WITH their conditions, exploratory records, and relevant open obligations. A checked result is not automatically an applicable premise. Read original manuscripts and bound reviews; keep missing application bridges open. Empty historical Kernel blockers do not mean the current target is complete.",
