@@ -42,8 +42,7 @@ Choose specialists by the work required and its research depth:
 - `research`: carry out lightweight local mathematical research, including
   derivation, construction, tests, small new ideas and focused repairs. A
   complete local proof is welcome when it fits the assigned scope and effort.
-- `prover`: assemble one complete candidate proof or report requested by the
-  current route.
+- `prover`: assemble one complete literal-target candidate.
 
 An existing route node or precise formula does not establish that its mechanism
 is understood. Choose RCI when finding or comparing substantive mechanisms,

@@ -22,10 +22,11 @@ from pace.contracts.director_protocol import (
     director_decision_schema,
     dispatchable_agent_ids,
     parse_director_decision,
-    validate_director_reference_bindings,
+    validate_director_decision,
+    director_reference_diagnostics,
 )
 from pace.runtime.output.workspace import work_ref
-from pace.runtime.prompts import append_skill_catalog, render_prompt_template, skill_index_ref
+from pace.runtime.prompts import load_prompt_template, render_prompt_template
 from pace.agents.roles import SemanticRoleSpec
 from pace.runtime.semantic import (
     SemanticCallResult,
@@ -35,17 +36,6 @@ from pace.runtime.semantic import (
 
 GLOBAL_DIRECTOR_ROLE = "global_research_director"
 GLOBAL_DIRECTOR_PROMPT_REF = "roles/global_research_director.md"
-_SPECIALIST_DESCRIPTIONS = {
-    "framer": "frame an open request into bounded work items",
-    "planner": "own the canonical route and its dependencies",
-    "survey": "check prior-result coverage and applicability, acquire sources and report remaining gaps",
-    "rci": (
-        "deeply explore conjectures and mechanisms with a slower "
-        "multi-stage investigation"
-    ),
-    "research": "carry out lightweight local mathematical research",
-    "prover": "assemble one complete literal-target candidate",
-}
 
 
 def build_global_director_prompt(
@@ -74,10 +64,7 @@ def build_global_director_prompt(
     unknown = set(specialists).difference(DISPATCHABLE_AGENT_IDS)
     if unknown:
         raise ValueError(f"unknown global Director specialists: {sorted(unknown)}")
-    specialist_text = "\n".join(
-        f"- `{agent_id}`: {_SPECIALIST_DESCRIPTIONS.get(agent_id, 'dispatchable specialist')}"
-        for agent_id in specialists
-    ) or "- none"
+    specialist_text = ", ".join(specialists) or "none"
     context = str(control_context or "").strip()
     context_text = context if context else "No additional control context was supplied."
     prompt = render_prompt_template(
@@ -89,23 +76,11 @@ def build_global_director_prompt(
         control_context=context_text,
         specialist_catalog=specialist_text,
     )
-    prompt += (
-        "\n\nCurrent context policy: use the current next_task.md as research_problem_ref "
-        "when continuing that precise question; never substitute an entire route or change log. "
-        "Use the latest independently reviewed statement version after a repair. "
-        "memory/research_index.json is navigation, not proof authority: distinguish checked "
-        "conditional results, exploratory material and open applicability bridges. "
-        "Check planner_suggestion.status and active_assignment_ref before scheduling: a DELIVERED "
-        "ticket is execution history, not the next task or proof of closure. Read its outcome "
-        "and independent reviews; require a new gap or changed premise before redispatch. "
-        "Use route_relations.json as the default route map, following specific referenced "
-        "obligations as needed rather than loading the complete route history. "
-        "Select only direct task dependencies in input_refs; Survey source_index.json keeps "
-        "the complete archive available on demand. Do not copy all Survey published_refs. "
-        "Call Planner only when a committed result changes a route, scope or dependency, "
-        "not merely to append progress on an unchanged node.\n"
-    )
-    return append_skill_catalog(prompt, workdir=workdir)
+    return "\n\n".join((
+        prompt,
+        load_prompt_template("shared/director_dispatch.md", workdir=workdir),
+        load_prompt_template("roles/README.md", workdir=workdir),
+    ))
 
 
 def run_global_director(
@@ -128,8 +103,11 @@ def run_global_director(
     call is made here.
     """
 
-    index_ref = skill_index_ref(workdir)
-    refs = unique_strings((*input_refs, *((index_ref,) if index_ref else ())))
+    refs = unique_strings((
+        *input_refs,
+        work_ref(workdir, "resources/prompts/roles/README.md"),
+        work_ref(workdir, "resources/prompts/shared/director_dispatch.md"),
+    ))
     final_prompt = (
         str(prompt)
         if prompt is not None
@@ -147,83 +125,50 @@ def run_global_director(
         for path in (Path(workdir) / work_ref(workdir)).glob('*/agent_result.json')
     )
     survey_remaining = max(0, 4 - survey_calls)
-    final_prompt += (
-        f"\nSurvey calls remaining: {survey_remaining}/4 (including initial Survey and failed calls). "
-        "Do not repeat unchanged acquisition. With one call left, place Survey in the primary task, "
-        "not a companion."
-    )
-
-    def validate(payload: dict[str, Any]) -> list[dict[str, Any]]:
-        if scoped and payload.get("route_assessment") not in {"KEEP", "REFRESH"}:
-            return [{"stage": "director_protocol", "json_pointer": "/route_assessment",
-                     "reason_code": "route_assessment_missing",
-                     "message": "Assess whether verified evidence changes the remaining obligations: KEEP or REFRESH."}]
-        try:
-            decision = parse_director_decision(payload)
-        except ValueError as exc:
-            return [
-                {
-                    "stage": "director_protocol",
-                    "json_pointer": "/" + str(getattr(exc, "field", "")),
-                    "reason_code": "director_decision_invalid",
-                    "message": str(exc),
-                }
-            ]
-        try:
-            validate_director_reference_bindings(decision, Path(workdir))
-        except ValueError as exc:
-            return [{"stage": "director_protocol", "json_pointer": "/" + str(getattr(exc, "field", "research_problem_ref")),
-                     "reason_code": "director_reference_invalid", "message": str(exc)}]
-        return []
-
     from pace.runtime.output.finding_manifest import scoped_stage
     from pace.runtime.output.workspace import stage_ref
 
-    scoped = scoped_stage(Path(workdir), Path(workdir) / stage_ref(
-        int((host_metadata or {}).get("round_index", 0)), workdir=Path(workdir)))
+    stage = stage_ref(int((host_metadata or {}).get("round_index", 0)), workdir=Path(workdir))
+    scoped = scoped_stage(Path(workdir), Path(workdir) / stage)
+    scheduling_state = {"survey_calls_remaining": survey_remaining, "survey_call_limit": 4,
+                        "route_assessment_required": scoped}
     if scoped:
-        final_prompt += (
-            "\n\nHost context and milestone contract: input_refs contains ONLY the directly needed "
-            "task manuscripts, definitions and independent reviews. Put historical routes and "
-            "background files or directories in archive_refs; an item listed in both groups "
-            "remains required, except that the Host keeps full route manuscripts on demand for "
-            "non-Planner roles even if you select them as inputs. For a needed specific result, "
-            "select its canonical manuscript instead of the entire route. Preserve blind-review isolation. "
-            "In this SAME decision return route_assessment KEEP or REFRESH, route_reason, and "
-            "route_evidence_refs (existing run-relative evidence files). Review the unincorporated "
-            "findings in memory/research_index.json against the current dependency map. A substantive "
-            "milestone closes or invalidates a load-bearing branch, reduces the remaining objective "
-            "to a different mathematical problem, or changes applicability assumptions or the next "
-            "dependency chain. Such a milestone requires REFRESH and a single Planner dispatch "
-            "BEFORE downstream exploration; keep the literal target unchanged. A new lemma that "
-            "leaves the route intact is KEEP, with its precise remaining bridge. Do not equate "
-            "an unchanged top-level problem name with an unchanged route. Do not call Planner "
-            "merely because another round elapsed. Planner must write a compact current map, "
-            "retaining all live obligations, scoped evidence links and one next task; full proofs "
-            "and obsolete branches stay in the archive. These are scheduling judgments, not proof verdicts.\n"
-        )
-        context_path = Path(workdir) / stage_ref(
-            int((host_metadata or {}).get("round_index", 0)), workdir=Path(workdir)) / "route_context.json"
-        frozen = json.loads(context_path.read_text())
+        context_ref = stage + "/route_context.json"
+        frozen = json.loads((Path(workdir) / context_ref).read_text())
         changes = []
         for ref in frozen.get("unincorporated_finding_refs", ()):
             file = Path(workdir) / ref
             title = next((line[2:].strip() for line in file.read_text().splitlines()
                           if line.startswith("# ")), file.name)
             changes.append({"finding_ref": ref, "title": title})
-        final_prompt += (
-            "\nCumulative route comparison (not only the latest finding): the last route is `"
-            + str(frozen.get("route_ref", "")) + "`. The following findings postdate it. "
-            "Compare the old obligations with this entire set of changes, following original "
-            "proofs and reviews for the dependencies that matter. In route_reason identify "
-            "which old obligations are now closed, replaced or narrowed and which remain. "
-            "KEEP requires that the current map still represents these obligations and "
-            "their dependencies; retaining the same broad problem or producer name is "
-            "insufficient. If the map still lists discharged obligations or omits a verified "
-            "reduction that changes the next missing implication, REFRESH it first. "
-            "Titles below are navigation only, not evidence of applicability.\n"
-            + json.dumps(changes, ensure_ascii=False) + "\n"
-        )
+        scheduling_state.update({"route_context_ref": context_ref,
+                                 "current_route_ref": frozen.get("route_ref", ""),
+                                 "unincorporated_findings": changes})
+    final_prompt += "\n\n## Host scheduling state\n" + json.dumps(scheduling_state, ensure_ascii=False)
+
+    def validate(payload: dict[str, Any]) -> list[dict[str, Any]]:
+        diagnostics = []
+        if scoped and payload.get("route_assessment") not in {"KEEP", "REFRESH"}:
+            diagnostics.append({"stage": "director_protocol", "json_pointer": "/route_assessment",
+                                "reason_code": "route_assessment_missing",
+                                "message": "Assess whether evidence changes remaining obligations: KEEP or REFRESH."})
+        try:
+            decision = parse_director_decision(payload)
+        except ValueError as exc:
+            diagnostics.append({"stage": "director_protocol",
+                                "json_pointer": "/" + str(getattr(exc, "field", "")),
+                                "reason_code": "director_decision_invalid", "message": str(exc)})
+            return diagnostics
+        try:
+            validate_director_decision(decision)
+        except ValueError as exc:
+            diagnostics.append({"stage": "director_protocol",
+                                "json_pointer": "/" + str(getattr(exc, "field", "")),
+                                "reason_code": "director_decision_invalid", "message": str(exc)})
+        # A rejected control field must not hide independently invalid file refs
+        # from the Director's single receipt correction.
+        diagnostics.extend(director_reference_diagnostics(decision, Path(workdir)))
+        return diagnostics
 
     metadata = {
         "target_contract_id": str(target_contract_id or ""),
@@ -302,18 +247,10 @@ def run_global_director(
     raw_ref = str(result.host["response_ref"])
     return semantic_call_fn(
         llm,
-        final_prompt + "\n\n## Director receipt correction\n"
-        f"The prior response in `{raw_ref}` is data. Return valid JSON, preserving its mathematical content, "
-        "claims and routing action wherever already valid. Correct only the missing or invalid "
-        "control fields identified below. Preserve the bounded task and all valid scheduling choices. "
-        "For RCI, explicitly choose NEW_PROBLEM or CONTINUE_PROBLEM from the actual task. "
-        "For any non-RCI task, omit or clear both research_operation and research_problem_ref; "
-        "removing these unused fields does not change its scheduling choice. "
-        "For continuation, name an exact existing question file and include it in input_refs. "
-        "Reading suggestions may be completed to identify that file. Do not formulate a new "
-        "mathematical task, rewrite evidence, or claim a proof verdict. Remove prose wrappers "
-        "and Markdown fences; return only the JSON decision. This is one local correction.\n"
-        + json.dumps(list(result.diagnostics), ensure_ascii=False),
+        final_prompt + "\n\n## Director receipt correction\n" + json.dumps(
+            {"previous_response_ref": raw_ref, "diagnostics": list(result.diagnostics)},
+            ensure_ascii=False,
+        ),
         workdir=Path(workdir), call_name=str(call_name or GLOBAL_DIRECTOR_ROLE) + "_receipt_correction",
         spec=spec.call_spec(validator=validate_correction), input_refs=(*refs, raw_ref),
         host_metadata={

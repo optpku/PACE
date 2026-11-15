@@ -994,8 +994,10 @@ class DirectorLedEngine:
                 decision = _coerce_decision(
                     raw_decision,
                 )
-            from pace.contracts.director_protocol import validate_director_reference_bindings
-            validate_director_reference_bindings(decision, self.workdir)
+            from pace.contracts.director_protocol import director_reference_diagnostics
+            reference_issues = director_reference_diagnostics(decision, self.workdir)
+            if reference_issues:
+                raise DirectorProtocolError(json.dumps(reference_issues, ensure_ascii=False))
         except Exception as exc:
             return self._fail_round(state, round_index, "DIRECTOR", exc)
 
@@ -1281,8 +1283,10 @@ class DirectorLedEngine:
                 directive,
                 expected_round_index=state.round_index,
             )
-            from pace.contracts.director_protocol import validate_director_reference_bindings
-            validate_director_reference_bindings(decision, self.workdir)
+            from pace.contracts.director_protocol import director_reference_diagnostics
+            reference_issues = director_reference_diagnostics(decision, self.workdir)
+            if reference_issues:
+                raise DirectorProtocolError(json.dumps(reference_issues, ensure_ascii=False))
             if decision.action is not DirectorAction.DISPATCH:
                 raise DirectorLedEngineError("pending directive is not DISPATCH")
             spec = specialist_spec(decision.agent_id)
@@ -2230,7 +2234,11 @@ def _coerce_decision(value: Any) -> DirectorDecision:
         value = value["decision"]
     if not isinstance(value, Mapping):
         raise DirectorProtocolError("Director handler must return a decision object")
-    return parse_director_decision(value)
+    decision = parse_director_decision(value)
+    from pace.contracts.director_protocol import validate_director_decision
+
+    validate_director_decision(decision)
+    return decision
 
 
 def _coerce_persisted_decision(
@@ -2281,7 +2289,7 @@ def _coerce_persisted_decision(
             "persisted director decision belongs to a different round"
         )
     payload = {field: value[field] for field in DIRECTOR_FIELDS if field in value}
-    return parse_director_decision(payload)
+    return _coerce_decision(payload)
 
 
 def _validate_assignment(

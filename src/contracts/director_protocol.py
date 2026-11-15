@@ -193,7 +193,7 @@ def specialist_spec(agent_id: str) -> SpecialistSpec:
 
 
 def parse_director_decision(payload: Mapping[str, Any]) -> DirectorDecision:
-    """Parse one scheduling response; agents choose mathematical guidance."""
+    """Read a typed decision before checking scheduling and reference invariants."""
 
     if not isinstance(payload, Mapping):
         raise DirectorProtocolError("director decision must be a JSON object")
@@ -261,7 +261,6 @@ def parse_director_decision(payload: Mapping[str, Any]) -> DirectorDecision:
         route_reason=_text(payload.get("route_reason", ""), "route_reason"),
         route_evidence_refs=_string_tuple(payload.get("route_evidence_refs", []), "route_evidence_refs"),
     )
-    validate_director_decision(decision)
     return decision
 
 
@@ -317,47 +316,48 @@ def validate_director_decision(decision: DirectorDecision) -> None:
         )
 
 
-def validate_director_reference_bindings(decision: DirectorDecision, workdir: Path) -> None:
-    """Require continuation pointers to be declared, existing workspace files.
-
-    Reading suggestions are advisory; the continuation pointer is executable
-    input and must be checked before committing a dispatch.
-    """
+def director_reference_diagnostics(decision: DirectorDecision, workdir: Path) -> list[dict[str, str]]:
+    """Report every invalid executable reference before the single correction."""
     from pace.runtime.output.workspace import is_call_path, path_has_symlink_component
 
     root = Path(workdir).resolve()
+    diagnostics = []
+
+    def report(field, message):
+        diagnostics.append({"stage": "director_protocol", "json_pointer": "/" + field,
+                            "reason_code": "director_reference_invalid", "message": message})
+
     for index, task in enumerate((decision, *decision.parallel_tasks)):
+        prefix = "" if index == 0 else f"parallel_tasks/{index - 1}/"
         for field in ("archive_refs", "route_evidence_refs"):
-            for extra in getattr(task, field):
+            for ref_index, extra in enumerate(getattr(task, field)):
                 file = Path(extra)
                 if (file.is_absolute() or ".." in file.parts or "\\" in extra or PureWindowsPath(extra).drive
                         or is_call_path(file) or file.name.startswith("private_")
                         or path_has_symlink_component(root, root / file)
                         or not ((root / file).is_file() or field == "archive_refs" and (root / file).is_dir())):
-                    pointer = field if index == 0 else f"parallel_tasks/{index - 1}/{field}"
-                    raise DirectorProtocolError("archive refs must name existing run-local files or directories; milestone evidence must name files", field=pointer)
+                    kind = "file or directory" if field == "archive_refs" else "file"
+                    report(f"{prefix}{field}/{ref_index}",
+                           f"{extra!r} must name an existing run-local {kind} using its plain path; "
+                           "put section/page locators in prompt_brief or route_reason.")
         ref = task.research_problem_ref
         if not ref:
             continue
         path = Path(ref)
-        field = "research_problem_ref" if index == 0 else f"parallel_tasks/{index - 1}/research_problem_ref"
+        field = prefix + "research_problem_ref"
         if (ref not in task.input_refs or ref != ref.strip() or path.is_absolute()
                 or PureWindowsPath(ref).drive or "\\" in ref
                 or any(part in {".", ".."} for part in ref.split("/"))
                 or is_call_path(path) or path.name.startswith("private_")):
-            raise DirectorProtocolError(
-                "research_problem_ref must be an exact run-relative question file "
-                "listed in input_refs; put question descriptions in prompt_brief",
-                field=field,
-            )
+            report(field, f"{ref!r} must be an exact run-relative question file listed in input_refs; "
+                   "put question descriptions in prompt_brief.")
+            continue
         candidate = root / path
         if (path_has_symlink_component(root, candidate)
                 or not candidate.resolve().is_relative_to(root)
                 or not candidate.is_file()):
-            raise DirectorProtocolError(
-                f"research_problem_ref does not name an existing workspace file: {ref}",
-                field=field,
-            )
+            report(field, f"research_problem_ref does not name an existing workspace file: {ref}")
+    return diagnostics
 
 
 def _text(value: Any, field: str) -> str:
@@ -394,5 +394,5 @@ __all__ = [
     "parse_director_decision",
     "specialist_spec",
     "validate_director_decision",
-    "validate_director_reference_bindings",
+    "director_reference_diagnostics",
 ]
