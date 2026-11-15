@@ -8,20 +8,41 @@ description: Read when Global Research Director selects specialists and prepares
 These instructions are for `global_research_director`. Read the calling
 skill for each selected specialist. Links are relative to this file.
 
+Use the Orientation brief, reachable from the suggested files or current problem
+dossier, as the initial task description. Check it against the original request
+and follow-ups. Decide what remains to be done rather than reclassifying the
+entire request at every dispatch. Use Framer when useful work items are still
+unclear; an adequate brief or existing framework does not need to be recreated.
+
 ## Specialist calling skills
 
 - [`framer`](../dispatch-framer/SKILL.md): Choose Framer to turn an open research request into bounded work items.
 - [`planner`](../dispatch-planner/SKILL.md): Choose Planner to create, revise, or rewrite the mathematical route.
-- [`survey`](../dispatch-survey/SKILL.md): Choose Survey for a bounded prior-result check or source need.
+- [`survey`](../dispatch-survey/SKILL.md): Analyze or compare supplied sources, check prior results, or acquire missing evidence.
 - [`smi`](../dispatch-smi/SKILL.md): Choose SMI for deep research on one bounded unresolved question.
 - [`research`](../dispatch-research/SKILL.md): Choose Research for a lightweight local question, route node, or repair.
 - [`prover`](../dispatch-prover/SKILL.md): Choose Prover to assemble a complete literal-target candidate.
 
-Schedule from the work still unresolved after the latest Survey and committed
-results. Reuse applicable established results and dispatch the remaining
-derivation, applicability check or bridge. Include the supporting source and
-result references with the next ticket. Preserve the literal target, including
-any explicit requirement for an independent proof or reproduction.
+Schedule from the user's requested outcome and the work still unresolved after
+the latest committed results. Reuse applicable sources and established work.
+The next need may be source acquisition, comparison, an applicability check,
+new mathematics or complete candidate assembly. Include the relevant source
+and result references. Preserve the literal target, including any explicit
+requirement for an independent proof or reproduction.
+
+For source-only reviews and reports, organize the evidence the user requested
+and retain actual source limitations. An open problem mentioned in a paper is
+not automatically a new assignment. For requests requiring a new mathematical
+result, existing literature is context and evidence rather than permission to
+drop the remaining mathematical obligations. Mathematical routes are needed
+when they help that work; their absence is not a reason to create one for a
+source-only task.
+
+Survey also analyzes and compares material already in the workspace; external
+retrieval is not a prerequisite. Organizing or comparing supplied statements
+belongs to Survey even when they contain formulas. Use Research or SMI when
+the requested work needs mathematical derivation or discovery beyond that
+source analysis.
 
 In research mode, when relevant prior results have not been checked and the
 committed context lacks adequate sources, prioritize one bounded Survey of the
@@ -35,7 +56,8 @@ Choose specialists by the work required and its research depth:
 - `framer`: turn an open research request into bounded work items. It does not
   choose a proof route or solve an item.
 - `planner`: create, revise, or rewrite the mathematical route.
-- `survey`: check relevant existing results and acquire source evidence with
+- `survey`: analyze and compare supplied material, check relevant existing
+  results, and acquire missing source evidence with
   exact statements, locators and applicability gaps. Its report guides later
   mathematical work; it does not accept a proof or own the route.
 - `smi`: investigate a bounded research problem deeply through conjecture and
@@ -45,8 +67,8 @@ Choose specialists by the work required and its research depth:
 - `research`: carry out lightweight local mathematical research, including
   derivation, construction, tests, small new ideas and focused repairs. A
   complete local proof is welcome when it fits the assigned scope and effort.
-- `prover`: assemble one complete candidate proof or report requested by the
-  current route.
+- `prover`: assemble one complete literal-target candidate requiring independent
+  verification. The Host's writers handle report and manuscript presentation.
 
 An existing route node or precise formula does not establish that its mechanism
 is understood. Choose SMI when finding or comparing substantive mechanisms,
@@ -97,8 +119,8 @@ may still assemble or repair a complete candidate from existing evidence;
 otherwise STOP with the unresolved gap. Every task remains subject to the
 research-round limit and the shared call and time budgets.
 
-Start with the literal request, the current canonical route, and the latest
-committed mathematical handoff. Use the verified findings index to locate
+Start with the literal request, Orientation brief, current canonical route when
+one exists, and the latest committed handoff. Use the verified findings index to locate
 relevant established results, then read their original arguments when needed.
 An older global catalogue may not yet include the newest entry; consult the
 incremental entries rather than requesting a global rewrite. Neither a progress
@@ -112,6 +134,12 @@ Put relevant workspace-relative paths in `input_refs` as reading suggestions
 for the specialist. These paths are not an exhaustive file list or a permission
 boundary; specialists may discover additional relevant files. Do not depend on
 another task's pending output. Choose offered Skills eligible for the role.
+
+When supplying `input_refs`, copy actual existing workspace-relative file paths
+from the offered references or files you have located. Preserve every directory
+component; do not shorten or reconstruct a path, invent a Skill filename, or
+append a colon, section fragment or Markdown link. Put source locators and
+section descriptions in ordinary task prose while keeping the file path literal.
 
 For a follow-up exploration, consult earlier work and findings on demand and
 continue from relevant mathematical handoffs instead of repeating completed

@@ -20,6 +20,14 @@ Neither mode permits changing the target or accepting a theorem on behalf of
 the proof verifier. Respect the Host's retrieval setting; when disabled, inspect
 supplied local material and report its limitations without external retrieval.
 
+For a source-only review or report, provide the requested evidence and comparison
+within the assigned scope. Explain which requested parts the acquired material
+covers and which remain limited by missing or uncertain sources. Do not turn an
+unavailable reference or an open problem mentioned in the literature into an
+unsolicited new proof project. Preserve any new mathematical work the original
+request actually requires. Final manuscript presentation belongs to the Host's
+writing workflow; your deliverable is the assigned source report and evidence.
+
 For the assigned need, explain what the checked sources already cover and what
 remains unresolved, including applicability conditions. This helps downstream
 roles begin with the remaining work while preserving their judgment and scope.
@@ -73,8 +81,10 @@ roles must read the actual acquired text and confirm its applicability.
 If acquisition fails, report what was actually attempted and observed, separate
 unattempted leads from retrieval failures, and summarize the precise mathematical
 obligations still open. In proof mode, hand them to Prover. In research mode,
-hand them to Planner/Research/Prover for independent derivation, alternative
-routes, or scoped results. Missing literature
+when the original request requires mathematical resolution, hand them to
+Planner/Research/Prover for independent derivation, alternative routes, or scoped
+results. For source-only work, retain them as source limitations rather than
+adding new proof obligations. Missing literature
 does not invalidate the problem or establish a counterexample. Do not repeatedly
 request the same unchanged acquisition or require source text for arguments that
 can be derived independently from the original assumptions.

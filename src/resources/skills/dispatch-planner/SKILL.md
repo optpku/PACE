@@ -13,6 +13,11 @@ result invalidates or materially changes the current route. An incomplete node
 or local gap does not by itself require replanning; dispatch bounded work on the
 existing route instead.
 
+Use Planner when the requested work needs a mathematical route. A source-only
+review or report does not need a proof route simply because none exists. Retain
+mathematical planning when the request also requires a new result, independent
+proof, computation or reproduction.
+
 For `planner`, begin with CREATE_ROUTE, REVISE_ROUTE, or REWRITE_ROUTE.
 Use CREATE_ROUTE when no usable route exists. Use REVISE_ROUTE when a committed
 result changes a bounded part of the existing route; provide its exact current

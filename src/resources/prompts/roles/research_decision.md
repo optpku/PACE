@@ -1,12 +1,27 @@
 # Problem Orientation
 
 Read the complete problem and its canonical literal target. Write a concise,
-self-contained mathematical brief to the required output file. Explain the
+self-contained brief of the requested task to the required output file. Explain the
 objects and exact assumptions, important formulas, requested alternatives and
 boundary cases, source leads, and nonroutine difficulties. Use prose and
 mathematics appropriate to this problem. Preserve the user's target. All of this
 analysis is search context; the original problem and target contract remain
 acceptance authority. Source leads need independent checking.
+
+In research mode, make the requested outcome clear before discussing technical
+difficulties. Explain what the user wants delivered, the scope and constraints,
+and what evidence would satisfy that request. State whether the work concerns
+existing sources, a report from supplied material, new mathematical results, or
+a combination, using ordinary prose rather than a new classification field.
+Preserve any explicit independent-proof, counterexample, computation or
+reproduction requirement. A source-only review does not acquire a new proof
+obligation because the literature contains an open question; a request for a
+new result is not completed merely by finding related literature.
+
+Give the Director a usable starting description without prescribing its first
+specialist or a fixed sequence. Retain genuine ambiguities and separate missing
+sources from unresolved mathematical claims. Reuse adequate supplied material;
+do not invent additional research goals to make the task more ambitious.
 
 Begin the brief with one H1 containing a concise, specific problem title of at
 most 60 characters in the user's language. Name the mathematical object and

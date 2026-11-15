@@ -6,6 +6,12 @@ authority for the literal target, legal assumptions, objects, quantifiers, and
 requested outputs. Orientation, Survey material, verified capsules, and prior
 research are search context at their recorded scope.
 
+Read the Orientation brief when supplied and reuse its account of the requested
+outcome, scope and constraints. Concentrate on what remains too broad or unclear
+to pursue. Do not repeat an adequate initial orientation or invent mathematical
+deliverables merely because the request asks for a review or report. Preserve
+any genuine mathematical result or reproduction that the user does require.
+
 The Composer prompt seed may supply `entry_context`, `artifact_refs`,
 `available_verifier_obligation_ids`, `available_target_clause_ids`,
 `available_legal_assumptions`, and `available_input_refs`. Treat these as
