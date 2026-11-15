@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
-from pace.contracts.proof_binding import (
+from pace.contracts.proof.binding import (
     ProofBindingError,
     load_active_target,
     resolve_verification_binding,
@@ -23,7 +23,7 @@ from pace.reporting.terminal_report import (
     FinalReportEnvelopeError,
 )
 
-from pace.runtime.output.workspace import RunWorkspace, is_private_transport_path, work_ref, path_has_symlink_component
+from pace.runtime.output.workspace import RunWorkspace, is_call_path, work_ref, path_has_symlink_component
 from pace.runtime.output.setup import load_setup
 from pace.runtime.output.delivery_pause import delivery_pause
 from pace.orchestrator.finding_publication import pending_finding_checks
@@ -98,6 +98,11 @@ def resume_existing_run(
     except (OSError, ValueError, TypeError) as exc:
         raise RecoveryError("invalid_setup_checkpoint", str(exc)) from exc
     setup_failure = terminal.is_file() and _read_json_object(terminal).get("terminal_kind") == "SETUP_FAILURE"
+    if setup is not None and (setup["phase"] != "READY" or setup_failure):
+        if continue_pipeline is None:
+            raise RecoveryError("continuation_hook_unavailable", "initialization recovery requires a pipeline continuation")
+        return continue_pipeline(RecoveryRequest(workspace=workspace, checkpoint=setup, continuation_action="SETUP"))
+
     writing = active_writing_request(workspace.root)
     if writing:
         if continue_pipeline is not None:
@@ -109,11 +114,6 @@ def resume_existing_run(
         if key in artifacts:
             return workspace.root / artifacts[key]
         raise RecoveryError("continuation_hook_unavailable", "the requested writing task needs a pipeline continuation")
-
-    if setup is not None and (setup["phase"] != "READY" or setup_failure):
-        if continue_pipeline is None:
-            raise RecoveryError("continuation_hook_unavailable", "initialization recovery requires a pipeline continuation")
-        return continue_pipeline(RecoveryRequest(workspace=workspace, checkpoint=setup, continuation_action="SETUP"))
 
     proof_state = workspace.path(work_ref(workspace.root, "state/proof_state.json"))
     if proof_state.is_file():
@@ -239,6 +239,8 @@ def _restore_operational_checkpoint(
     return checkpoint
 
 
+
+
 def _project_terminal_result(
     workspace: RunWorkspace,
     report: dict[str, Any],
@@ -328,7 +330,7 @@ def _bound_artifact(
         or path.is_absolute()
         or PureWindowsPath(ref).is_absolute()
         or any(part in {".", ".."} for part in raw_parts)
-        or is_private_transport_path(path)
+        or _is_private_transport_path(path)
     ):
         raise RecoveryError(
             "invalid_final_report",
@@ -349,7 +351,7 @@ def _bound_artifact(
             "invalid_final_report",
             f"terminal {name} escapes the run workspace: {ref}",
         ) from exc
-    if is_private_transport_path(relative):
+    if _is_private_transport_path(relative):
         raise RecoveryError(
             "invalid_final_report",
             f"terminal {name} points to a private or transport artifact: {ref}",
@@ -378,3 +380,11 @@ def _read_json_object(path: Path) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise RecoveryError("invalid_final_report", f"JSON object required: {path}")
     return value
+
+
+
+
+def _is_private_transport_path(path: Path) -> bool:
+    """Return whether a path names hidden model transport data."""
+
+    return is_call_path(path) or path.name.startswith("private_")

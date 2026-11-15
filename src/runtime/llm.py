@@ -13,7 +13,7 @@ import tempfile
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Protocol, Union
+from typing import Any, Protocol, TextIO, Union
 
 from pace.runtime.output.calls import (
     attempt_directory,
@@ -49,9 +49,6 @@ RETRY_TRANSIENT = "TRANSIENT_EXECUTION"
 RETRY_NON_TRANSIENT = "NON_RETRYABLE_TRANSPORT"
 RETRY_MODEL_REPRESENTATION = "MODEL_REPRESENTATION"
 MAX_TRANSPORT_RETRIES = 2
-# Formatting is a bounded representation task. Neither the global effort nor
-# user/provider configuration can override this role's policy.
-_FIXED_ROLE_EFFORT = {"ARTIFACT_FORMAT_REPAIR": "medium", "FINDING_MANIFEST_REPAIR": "medium"}
 RETRY_BACKOFF_BASE_SECONDS = 5.0
 RETRY_BACKOFF_MAX_SECONDS = 60.0
 logger = logging.getLogger(__name__)
@@ -62,7 +59,7 @@ class TransportSuccess:
     text: str
     invocation_id: str
     call_name: str
-    exit_code: int | None
+    exit_code: int
     terminal_event_type: str
     accepted_output_source: str
     output_schema_valid: bool | None
@@ -390,8 +387,7 @@ class CodexLLM:
                     ledger_context,
                     call_name=call_name,
                     model=self.model,
-                    reasoning_effort=_FIXED_ROLE_EFFORT.get(
-                        str(ledger_context.get("role")), self.reasoning_effort),
+                    reasoning_effort=self.reasoning_effort,
                 )
             except Exception:
                 logger.warning("Could not persist interrupted call", exc_info=True)
@@ -416,8 +412,6 @@ class CodexLLM:
         resolved = workdir.resolve()
         call_id = str(ledger_context["call_id"])
         role = str(ledger_context.get("role") or "model_call")
-        reasoning_effort = _FIXED_ROLE_EFFORT.get(role, self.reasoning_effort)
-        search_enabled = self.web_search and role == "SURVEY"
         stage = str(ledger_context.get("stage") or call_name)
         record_ref = str(ledger_context["call_ref"])
         invocation_dir = call_directory(resolved, record_ref)
@@ -428,10 +422,10 @@ class CodexLLM:
             schema_file = invocation_dir / "output_schema.json"
             _write_json_atomic(schema_file, output_schema)
         if ledger_context.get("inline_task") is True:
-            instruction = _search_instruction(search_enabled) + prompt
+            instruction = _search_instruction(self.web_search) + prompt
         else:
             instruction = _build_file_driven_cli_instruction(
-                web_search=search_enabled,
+                web_search=self.web_search,
                 call_name=call_name,
                 workdir=resolved,
                 prompt_file=prompt_file,
@@ -462,7 +456,7 @@ class CodexLLM:
         )
         _write_text_atomic(invocation_dir / "instruction.md", instruction)
         invocation_id = uuid.uuid4().hex
-        environment = os.environ.copy()
+        environment = {**os.environ, "NL_PROOF_CODEX_SESSION_ID": invocation_id}
         # The launching shell's last-command marker is not child configuration.
         # Exclude it from Codex's nested shell snapshot, including Unicode paths.
         environment.pop("_", None)
@@ -494,16 +488,16 @@ class CodexLLM:
             cmd.extend(
                 [
                     "-c",
-                    'web_search="live"' if search_enabled else 'web_search="disabled"',
+                    'web_search="live"' if self.web_search else 'web_search="disabled"',
                 ]
             )
-            if reasoning_effort == "none":
+            if self.reasoning_effort == "none":
                 cmd.extend(["-c", "model_supports_reasoning_summaries=false"])
             else:
                 cmd.extend(
                     [
                         "-c",
-                        f"model_reasoning_effort={json.dumps(reasoning_effort)}",
+                        f"model_reasoning_effort={json.dumps(self.reasoning_effort)}",
                     ]
                 )
             cmd.extend(
@@ -555,9 +549,8 @@ class CodexLLM:
                             with isolated_codex_environment(
                                 environment, Path(config_home)
                             ) as isolated_env:
-                                process = run_owned_process(
+                                process = _run_cli_process(
                                     cmd,
-                                    workdir=resolved,
                                     cwd=resolved,
                                     env=isolated_env,
                                     input=instruction,
@@ -707,7 +700,7 @@ class CodexLLM:
                 attempt_dir,
                 result,
                 model=self.model,
-                reasoning_effort=reasoning_effort,
+                reasoning_effort=self.reasoning_effort,
             )
             policy_path = attempt_dir / "transport_result.json"
             policy_result = json.loads(policy_path.read_text(encoding="utf-8"))
@@ -715,7 +708,7 @@ class CodexLLM:
                 "request_max_retries": 8,
                 "stream_max_retries": 20,
                 "outer_max_retries": effective_max_retries,
-                "web_search": search_enabled,
+                "web_search": self.web_search,
             }
             _write_json_atomic(policy_path, policy_result)
             record_transport_attempt_finished(
@@ -848,6 +841,30 @@ def _record_call_interruption(
     write_call_summary(root)
 
 
+def _run_cli_process(
+    cmd: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    input: str,
+    stdout: TextIO,
+    stderr: TextIO,
+    timeout: int | None,
+) -> subprocess.CompletedProcess:
+    # The CLI launcher spawns the model process and its tools. Killing only
+    # the launcher leaves them running after a timeout or Host interruption.
+    return run_owned_process(
+        cmd,
+        workdir=cwd,
+        cwd=cwd,
+        env=env,
+        input=input,
+        stdout=stdout,
+        stderr=stderr,
+        timeout=timeout,
+    )
+
+
 def build_llm(
     *,
     provider: str,
@@ -857,10 +874,10 @@ def build_llm(
     timeout_seconds: int | None = None,
 ) -> LLM:
     if provider in {"newapi", "llmmelon"} and not (
-        os.getenv("PACE_CODEX_AUTH_MODE") == "api_key"
-        and os.getenv("PACE_CODEX_BASE_URL")
-        and os.getenv("PACE_CODEX_API_KEY")
-        and os.getenv("PACE_CODEX_CLI_PATH")
+        os.getenv("NL_PROOF_CODEX_AUTH_MODE") == "api_key"
+        and os.getenv("NL_PROOF_CODEX_BASE_URL")
+        and os.getenv("NL_PROOF_CODEX_API_KEY")
+        and os.getenv("CODEX_CLI_PATH")
     ):
         raise ValueError(
             "Custom API provider requires the configured Codex wrapper and API credentials; "
@@ -870,7 +887,7 @@ def build_llm(
         return CodexLLM(
             model=model,
             reasoning_effort=reasoning_effort,
-            cli_path=os.getenv("PACE_CODEX_CLI_PATH", "codex"),
+            cli_path=os.getenv("CODEX_CLI_PATH", "codex"),
             web_search=web_search,
             timeout_seconds=timeout_seconds,
         )
@@ -1430,7 +1447,11 @@ def _classify_transport_failure(
 
 def _retry_count_from_env(default: int) -> int:
     default_count = min(MAX_TRANSPORT_RETRIES, max(0, int(default)))
-    raw = os.getenv("PACE_CLI_MAX_RETRIES")
+    raw = (
+        os.getenv("NL_PROOF_CLI_MAX_RETRIES")
+        or os.getenv("LLMMELON_MAX_RETRIES")
+        or os.getenv("NEWAPI_MAX_RETRIES")
+    )
     if not raw:
         return default_count
     try:
@@ -1453,7 +1474,11 @@ def _retry_delay_seconds(attempt: int) -> float:
 
 
 def _timeout_from_env(default: int | None) -> int | None:
-    raw = os.getenv("PACE_CLI_TIMEOUT_SECONDS")
+    raw = (
+        os.getenv("NL_PROOF_CLI_TIMEOUT_SECONDS")
+        or os.getenv("NEWAPI_TIMEOUT_SECONDS")
+        or os.getenv("LLMMELON_TIMEOUT_SECONDS")
+    )
     if raw is None:
         return default
     try:
@@ -1468,10 +1493,7 @@ def _search_instruction(enabled: bool) -> str:
         return (
             "External source retrieval is disabled for this call. Use the supplied workspace "
             "materials; do not acquire external sources using web tools, shell commands, or "
-            "retrieval clients. This restriction is role-local: Survey has a separate Host-controlled "
-            "retrieval setting. Do not infer that Survey is unavailable from your own restriction. "
-            "In research mode, request missing sources through the Director; in proof mode, use "
-            "the initial Survey and identify any remaining source gap.\n\n"
+            "retrieval clients.\n\n"
         )
     return (
         "External Search is available for this call. Use it when needed to check sources "
@@ -1499,9 +1521,9 @@ def _build_file_driven_cli_instruction(
     # workspace navigation below would invite reading reports and prior proofs,
     # even though the phase prompt explicitly excludes that evidence.
     if role.upper() in {
-        "RCI_BLIND_PROVER_PROBE",
-        "RCI_REFUTE_PROVER_PROBE",
-        "RCI_FRONTIER_REFUTE_PROBE",
+        "SMI_BLIND_PROVER_PROBE",
+        "SMI_REFUTE_PROVER_PROBE",
+        "SMI_FRONTIER_REFUTE_PROBE",
     }:
         base += (
             f"Read `{prompt_file}` for your statement-only probe task. "
@@ -1521,7 +1543,7 @@ def _build_file_driven_cli_instruction(
         base += (
             f"Read `{prompt_file}` for your task. The current exploration is `{turn_dir}/`. "
             f"The user request is `{turn_dir}/input/request.md`; the current problem is "
-            f"`{turn_dir}/input/problem.md`; committed task results are under `{turn_dir}/roundNNNN/`.\n\n"
+            f"`{turn_dir}/input/problem.md`; committed task results are under `{turn_dir}/round*/`.\n\n"
             "You may list and search this problem directory and read relevant existing files on demand, "
             "including earlier work/turn*/ explorations and results/findings/ for this same problem. "
             "Do not read global Codex memories, unrelated problem workspaces, developer test records, "
@@ -1531,12 +1553,7 @@ def _build_file_driven_cli_instruction(
             "Treat historical plans, reports, budgets and verdicts as scoped context; the current "
             "literal target, current Host budget and independent verification remain authoritative. "
             "Write task artifacts to the assigned output location in the current turn and preserve "
-            "earlier turns. Keep each research argument in one canonical mathematical manuscript: "
-            "when a standalone finding contains the complete proof, the main handoff and memory "
-            "should briefly state its scope and link to it instead of copying the proof. A task "
-            "without a complete finding keeps partial reasoning in its assigned main deliverable. "
-            "Self-contained verifier candidates, blind probes and terminal reports/papers retain "
-            "their own completeness requirements.\n\n"
+            "earlier turns. Keep full mathematical content in the assigned deliverable.\n\n"
         )
     if suggested:
         base += (

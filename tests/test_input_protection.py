@@ -13,8 +13,8 @@ def workspace(tmp_path):
 
 
 def publish(run, number):
-    source = run.work_ref(f"round{number:04d}/findings/bound.md")
-    verification = run.work_ref(f"round{number:04d}/findings/bound.verification.json")
+    source = run.work_ref(f"round{number}/findings/bound.md")
+    verification = run.work_ref(f"round{number}/findings/bound.verification.json")
     run.write_text(source, f"# Bound\n\nThe independently checked version is {number}.\n")
     run.write_json(verification, {"stage_status": "PASS", "checked_manuscript": source})
     reference = publish_finding(

@@ -7,8 +7,6 @@ and incomplete output files are never promoted to candidate proofs.
 
 from __future__ import annotations
 
-from pace.runtime.output.workspace import stage_ref
-
 import json
 import logging
 from collections.abc import Mapping
@@ -16,8 +14,8 @@ from dataclasses import replace
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
-from pace.contracts.problem import Problem, canonical_problem_text
-from pace.contracts.proof_binding import (
+from pace.contracts.problem.loader import Problem
+from pace.contracts.proof.binding import (
     ProofBindingError,
     load_active_target,
     resolve_verification,
@@ -36,10 +34,12 @@ from pace.reporting.terminal_report import (
 from pace.runtime.output.events import write_call_summary
 from pace.runtime.output.profiling import ProfileRecorder
 from pace.runtime.output.results import finding_entries, publish_finding
-from pace.runtime.output.workspace import RunWorkspace, is_call_path, is_private_transport_path, work_ref, path_has_symlink_component
+from pace.runtime.output.workspace import RunWorkspace, is_call_path, work_ref, path_has_symlink_component
 from pace.runtime.output.delivery_pause import delivery_pause
 
 logger = logging.getLogger(__name__)
+
+
 
 
 class DirectorLedFinalizationError(ValueError):
@@ -347,7 +347,7 @@ def _ensure_problem_file(ws: RunWorkspace, problem: Problem) -> str:
     # The pipeline commits the literal problem as UTF-8 with LF line endings
     # and exactly one terminal newline.  Normalize the supplied value the same
     # way before comparing it with an existing checkpoint.
-    expected = canonical_problem_text(problem.text)
+    expected = _canonical_problem_text(problem.text)
     if not path.is_file():
         _safe_write_text(ws, work_ref(ws.root, 'input/problem.md'), expected, "canonical problem.md")
         return ""
@@ -523,7 +523,7 @@ def _resolve_chain(
     if not _is_safe_ref(verification_observation_ref):
         raise DirectorLedFinalizationError("Director-led verification reference is invalid")
     expected_verification_ref = (
-        f"{stage_ref(int(state.round_index), workdir=ws.root)}/verification/verification.json"
+        f"{work_ref(ws.root)}/round{int(state.round_index)}/verification/verification.json"
     )
     if verification_observation_ref != expected_verification_ref:
         raise DirectorLedFinalizationError(
@@ -584,7 +584,7 @@ def _last_candidate_state(ws: RunWorkspace, state: DirectorLedState | None) -> D
             continue
         result = _read_object(ws.root / ref)
         round_dir = Path(ref).parent
-        assignment_ref = (round_dir / "task.json").as_posix()
+        assignment_ref = (round_dir / "assignment/task.json").as_posix()
         assignment = _read_object(ws.root / assignment_ref)
         if assignment.get("agent_id") == "prover" and result.get("status") == "SUCCEEDED":
             candidates.append((int(assignment["round_index"]), ref, result, assignment_ref))
@@ -604,8 +604,11 @@ def _publish_report(ws: RunWorkspace, report: dict[str, Any]) -> dict[str, Any]:
     if report["result"] == "PASS":
         try:
             kernel = json.loads(ws.path(refs["kernel"]).read_text(encoding="utf-8"))
-            publish_finding(ws.root, source_ref=refs["proof"], verification_ref=refs["verification"],
-                            round_index=report["director_state"]["round_index"], publication=kernel["publication"])
+            publish_finding(
+                ws.root, source_ref=refs["proof"], verification_ref=refs["verification"],
+                round_index=report["director_state"]["round_index"],
+                publication=kernel["publication"],
+            )
         except Exception as exc:
             report["finding_publication_diagnostics"] = [str(exc)]
             logger.warning("Verified final finding publication failed", exc_info=True)
@@ -671,7 +674,8 @@ def _safe_round_existing_path(
     try:
         expected_root = (
             Path(root).resolve()
-            / stage_ref(int(round_index), workdir=root)
+            / work_ref(root)
+            / f"round{int(round_index)}"
         ).resolve()
         resolved.relative_to(expected_root)
     except (OSError, RuntimeError, ValueError):
@@ -699,7 +703,7 @@ def _safe_workspace_path(
         relative = resolved.relative_to(root_path)
     except (OSError, RuntimeError, ValueError):
         return None
-    if is_private_transport_path(relative):
+    if _is_private_transport_path(relative):
         return None
     if require_file and not resolved.is_file():
         return None
@@ -749,7 +753,7 @@ def _safe_write_path(root: Path, ref: str, label: str) -> Path:
         raise DirectorLedFinalizationError(
             f"{label} escapes the run workspace: {normalized}"
         ) from exc
-    if is_private_transport_path(relative):
+    if _is_private_transport_path(relative):
         raise DirectorLedFinalizationError(
             f"{label} points to a private or transport artifact"
         )
@@ -773,6 +777,22 @@ def _is_safe_ref(ref: str) -> bool:
     if path.name.startswith("private_"):
         return False
     return True
+
+
+
+
+def _is_private_transport_path(path: Path) -> bool:
+    return is_call_path(path) or path.name.startswith("private_")
+
+
+def _canonical_problem_text(value: Any) -> str:
+    return (
+        str(value or "")
+        .replace("\r\n", "\n")
+        .replace("\r", "\n")
+        .rstrip("\n")
+        + "\n"
+    )
 
 
 def _read_object(path: Path) -> dict[str, Any]:

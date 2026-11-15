@@ -11,43 +11,22 @@
 | `--reasoning-effort` | `xhigh` | Provider-supported effort; `none` omits explicit effort and disables reasoning summaries. |
 | `--resource-variant` | model/effort lookup | `standard` or `weak`; explicit selection overrides the lookup on a new turn. |
 | `--mode` | omitted | The first target-location call selects `proof` for direct proving, or `research` for mechanism exploration or uncertainty. Explicit `proof` / `research` overrides selection. A new `continue` turn also selects when omitted; `resume` keeps the saved mode. There is no `auto` value. |
-| `--max-calls` / `--max-seconds` | unset | Soft total-call / cumulative active-time research budget, checked at dispatch boundaries; explicit writing is separate. |
+| `--max-calls` / `--max-seconds` | unset | Soft total-call / cumulative active-time research budget, checked at dispatch boundaries; terminal delivery is separate. |
 | `--max-proof-states` | 5 in proof; analysis-derived in research | Maximum successive proof loops for one target in proof; an upper bound on Orientation's allocation in research. A proof loop writes or revises one complete proof and independently checks it. |
-| `--web-search-mode` | `on` | `on`: enable Survey retrieval only; `off`: disable it. All other roles always have retrieval disabled; there is no per-role enable option. |
+| `--web-search-mode` | `on` | `on`: each role may search within its assigned task; `off`: disable external retrieval. Blind probes retain their statement-only local context. |
 | `--web-search-model` | primary model | Model for source-search calls. |
 | `--web-search-reasoning-effort` | primary effort | Effort for source-search calls. |
 | `--timeout-seconds` | `7200` | Shared timeout in seconds for core, Director, Survey, verifier, and writing calls. |
-| `--max-rounds` | none | Research dispatch rounds per turn; saved for resume. |
 | `--output` | `outputs` | Root for new problem workspaces. |
 | `--json` / `--profile` | off | Machine event output / timing records. |
 
-Model-based formatting and local-link repairs always use `medium` effort. This is a
-fixed Host policy, with no override option; `--reasoning-effort` still controls
-mathematical work and explicit writing. A specialist's completed
-author call and pending batch repair are saved separately, so resuming a repair
-does not rerun the author or consume another proof state.
-
-Before requesting a model, the Host repairs narrowly recognized missing TeX
-escapes, known escaped-control-character damage inside math, and exact
-run-relative link mistakes locally. It preserves the original and records the
-source version and edits. Ambiguous identifiers, literal examples and unknown
-commands are not automatically rewritten. Remaining preflight defects are sent
-as complete affected formulas or paragraphs, with the full source available on
-demand. The Host accepts only diagnosed token replacements and existing local
-link destinations; other text cannot change through this format-only interface.
-A repaired link still needs the normal evidence/applicability review.
-
-Markdown format repairs return local text patches; the Host produces the complete
-corrected copy and preserves the original. RCI handoffs link to the original
-exploration notes and canonical proofs instead of copying their bodies.
-
-Each Research or RCI dispatch consumes one proof state, including partial or failed work. Prover assembly and repair consume no proof states; all dispatches remain subject to the saved round, call and time limits. Other roles, fixed Auditor/Kernel checks, and reporting consume calls and time but do not consume this proof-state budget. The cap does not limit total calls, tokens, time, or cost. Only research mode uses the validated difficulty and dependency levels to allocate the budget; an explicit cap can reduce it. Proof mode writes a short brief and uses its saved loop limit, with no research-budget assessment. Survey uses the same configured timeout as other roles. Director calls use low reasoning effort except when the configured effort is `none`. Only Survey may retrieve external sources when enabled. Roles preserve the exact source URLs and locators; retrieved material does not change the literal target or verification authority. Each Codex invocation pins search to live or disabled, rather than inheriting Codex defaults. Switching search off does not make model inference offline. A timed-out model call is stopped without automatic transport replay. After resolving the cause, `resume` retries the saved task with its existing budget and preserved partial artifacts. Operational failures pause before further model-based reporting; optional assessment content errors may use the default budget, while assessment transport failures remain resumable initialization steps.
+In research mode, each Research or SMI dispatch consumes one proof state when reserved, including partial or mathematically failed attempts. SMI subphases and recovery share that single reservation. Prover assembly and repair, other roles, fixed Auditor/Kernel checks and reporting consume no proof-state credits. At zero credits, Prover can still use existing evidence; new Research or SMI work cannot start. All roles remain subject to the research-round, call and time limits. The cap does not limit total calls, tokens, time, or cost. Only research mode uses the validated difficulty and dependency levels to allocate the budget; an explicit cap can reduce it. Proof mode writes a short brief and uses its saved loop limit, with no research-budget assessment. Survey uses the same configured timeout as other roles. Director calls use low reasoning effort except when the configured effort is `none`. Every role may search when needed and enabled. Roles preserve the exact source URLs and locators; retrieved material does not change the literal target or verification authority. Each Codex invocation pins search to live or disabled, rather than inheriting Codex defaults. Switching search off does not make model inference offline. A timed-out model call is stopped without automatic transport replay. After resolving the cause, `resume` retries the saved task with its existing budget and preserved partial artifacts. Operational failures pause before further model-based reporting; optional assessment content errors may use the default budget, while assessment transport failures remain resumable initialization steps.
 
 Mode selection is committed with target extraction before budget allocation. Invalid routing receipts or service failures pause initialization without starting Survey, research or terminal writing. An uncertain but valid recommendation selects research. Batch `pipeline.mode` may be omitted or null; only explicit values emit `--mode`. Omitting batch `pipeline.web_search_mode` defaults to `on`, matching the CLI; set `off` to disable external retrieval.
 
 `resume` accepts execution settings but restores the saved workflow/resource snapshot and budget. See `pace resume --help` for its exact options.
 
-Continued RCI work requires an exact existing question file from the dispatch's
+Continued SMI work requires an exact existing question file from the dispatch's
 input list. The Director may correct this reference once before dispatch; the
 correction cannot change the action, inputs or mathematical task. Invalid
 references remain diagnostics rather than reaching a specialist as file paths.
@@ -66,22 +45,7 @@ These are project guidance choices, not an availability or performance claim:
 
 `weak` supplies more detailed role prompts. It is a resource bundle name, not an automatic measurement of a model's ability. Both variants use one [shared method library](../src/resources/skills/README.md), including the same mathematical checks and examples. Each run snapshots its selected prompts and the shared Skills under the turn's `resources/` directory. Both prompt variants and the full library ship in the wheel; resume keeps the saved snapshot.
 
-In the source tree, common prompts live in `src/resources/prompts/`, and variant
-role prompts live directly in `src/resources/variants/standard/` or `weak/`.
-Survey shares one common prompt. The resource loader preserves the established
-snapshot paths, including `prompts/roles/` and the RCI review references; the
-shallower source layout does not relocate existing run files.
-
-An archived run may bind an immutable executable snapshot with
-`work/state/runtime_binding.json` (`pace_runtime_binding/v1`). The binding names
-its run-relative `pace` package and the exact encoded contents of every packaged file. CLI
-commands targeting that run check this inventory before handing execution to
-the recorded runtime. Missing or changed code stops recovery without modifying
-the checkpoint. This preserves historical workflow formats without rewriting
-accepted evidence or replaying completed stages. The Python API should likewise
-be imported from the archived package when operating on that run.
-
-Director and general research roles receive a compact Skill index and read the relevant entry and supporting material for their task. RCI loads methods for its specific phase; statement-only probes do not receive the general index or investigation history. Manuscript roles load the writing guides, while Auditor/Kernel retain independent verification prompts. Skills guide the mathematical work and do not grant a PASS.
+Director and general research roles receive a compact Skill index and read the relevant entry and supporting material for their task. SMI loads methods for its specific phase; statement-only probes do not receive the general index or investigation history. Manuscript roles load the writing guides, while Auditor/Kernel retain independent verification prompts. Skills guide the mathematical work and do not grant a PASS.
 
 ## Authentication and custom providers
 
@@ -97,7 +61,7 @@ For a custom Responses-compatible service, copy `examples/quickstart/config.exam
 - Set `codex.provider_name` and `codex.requires_openai_auth` according to that service's Codex configuration.
 - Set `pipeline.provider` as appropriate; the runner passes the connection settings through `scripts/codex_wrapper.sh`.
 
-The wrapper uses `PACE_CODEX_API_KEY` in the child environment, not a literal key in the command arguments. Custom provider mode does not fall back to an unrelated existing login. No credentials belong in `config.example.json` or published snapshots.
+The wrapper uses `NL_PROOF_CODEX_API_KEY` in the child environment, not a literal key in the command arguments. Custom provider mode does not fall back to an unrelated existing login. No credentials belong in `config.example.json` or published snapshots.
 
 Structured receipts still require the assigned JSON schema and routing action.
 If an otherwise complete JSON response uses an unsupported escape inside a
@@ -109,25 +73,25 @@ correction. This is an encoding correction, independent of network retries.
 
 If Codex reports a code-mode tool-host negotiation timeout and produces no
 usable receipt, PACE retries it within the existing transport retry limit.
-A valid receipt remains usable and retains the tool-host warning. RCI checks
+A valid receipt remains usable and retains the tool-host warning. SMI checks
 each phase's routing fields and required artifacts before committing its
 checkpoint. A single receipt correction may fix missing control fields while
 preserving valid decisions and original mathematical files.
 
-PACE transport settings use the following project-specific environment variables:
+The transport supports these environment variables:
 
 | Variable | Purpose |
 |---|---|
-| `PACE_CODEX_CLI_PATH` | Executable used by PACE. The batch runner supplies its wrapper path. |
-| `PACE_REAL_CODEX` | Real CLI executable used by the wrapper. |
-| `PACE_CODEX_AUTH_MODE` | `existing_codex_login` or `api_key`. |
-| `PACE_CODEX_BASE_URL`, `PACE_CODEX_API_KEY` | Custom provider endpoint and credential. |
-| `PACE_CODEX_PROVIDER_NAME`, `PACE_CODEX_WIRE_API`, `PACE_CODEX_REQUIRES_OPENAI_AUTH` | Wrapper provider settings. |
-| `PACE_CLI_TIMEOUT_SECONDS`, `PACE_CLI_MAX_RETRIES` | Transport timeout/retry overrides; retry count excludes the initial attempt. |
+| `CODEX_CLI_PATH` | Executable used by PACE. The batch runner supplies its wrapper path. |
+| `NL_PROOF_REAL_CODEX` | Real CLI executable used by the wrapper. |
+| `NL_PROOF_CODEX_AUTH_MODE` | `existing_codex_login` or `api_key`. |
+| `NL_PROOF_CODEX_BASE_URL`, `NL_PROOF_CODEX_API_KEY` | Custom provider endpoint and credential. |
+| `NL_PROOF_CODEX_PROVIDER_NAME`, `NL_PROOF_CODEX_WIRE_API`, `NL_PROOF_CODEX_REQUIRES_OPENAI_AUTH` | Wrapper provider settings. |
+| `NL_PROOF_CLI_TIMEOUT_SECONDS`, `NL_PROOF_CLI_MAX_RETRIES` | Transport timeout/retry overrides; retry count excludes the initial attempt. |
 
-The batch runner sets the executable, authentication and retry settings from its JSON config. The timeout comes from `pipeline.timeout_seconds` unless `PACE_CLI_TIMEOUT_SECONDS` overrides it. For ordinary CLI use, shell variables must be exported explicitly; `.env` is not loaded automatically. Only the names listed here are read for these settings; there are no provider-specific timeout or retry aliases. Codex's own `CODEX_HOME` still selects the authentication directory. Custom endpoints receive standard provider authentication without a PACE-specific session header.
+The batch runner sets these from its JSON config. For ordinary CLI use, shell variables must be exported explicitly; `.env` is not loaded automatically.
 
-Native request and stream recovery allow 8 and 20 retries respectively. Outer transient retries are capped at two; `PACE_CLI_MAX_RETRIES` can lower that cap and excludes the initial attempt. Retry warnings do not cancel a running call. If retries are exhausted, PACE preserves the checkpoint and partial outputs. Correct authentication or configuration errors before using [resume](user-guide.md#resume-an-interrupted-turn) in the same problem directory.
+Native request and stream recovery allow 8 and 20 retries respectively. Outer transient retries are capped at two; `NL_PROOF_CLI_MAX_RETRIES` can lower that cap and excludes the initial attempt. Retry warnings do not cancel a running call. If retries are exhausted, PACE preserves the checkpoint and partial outputs. Correct authentication or configuration errors before using [resume](user-guide.md#resume-an-interrupted-turn) in the same problem directory.
 
 Ctrl-C stops the owned model/tool processes, preserves partial output and marks the call as interrupted; the CLI exits with code `130`. Parallel workers in that run are cancelled together; completed workers and reserved proof states are retained for `resume`. Other runs continue independently. Operational failures exit with code `2`. A normally completed research run exits with code `0`, even when the mathematical target remains unresolved. `--profile` records timing in the current turn's event log; a timing-write failure does not replace the task's result or interruption. Use `resume` in the same problem directory to continue saved work.
 
@@ -149,8 +113,8 @@ export PACE_REASATLAS_SKILL_DIR="/absolute/path/to/reasatlas-query"
 
 The directory must contain `SKILL.md` and `scripts/query.py`; its supporting
 Markdown, JSON, Python and YAML files must be regular files. PACE copies those
-files into the new turn's resource snapshot. Survey may retrieve sources when `--web-search-mode on` enables it. Without a
-configured Skill, Survey uses other scholarly and web sources. `off` disables
+files into the new turn's resource snapshot. Roles may retrieve sources when `--web-search-mode on` enables it. Without a
+configured Skill, they use other scholarly and web sources. `off` disables
 external retrieval even when the Skill is present.
 
 Ordinary `resume` uses the saved snapshot; changing the environment does not
@@ -176,88 +140,10 @@ PACE isolates per-call Codex configuration while reusing authentication. Persona
 
 Research, proof and writing have their own saved tasks. Runtime events contain factual identities, status and output references. The Web application reads these records to create user updates and reports; a presentation failure does not change the mathematical verdict or repeat completed work.
 
-RCI checks the existing call/time budget before every new subphase and reserves at most 64 distinct new phase slots per dispatch. Recovery reuses committed phases. The Host records CREATE or REVISE and assigned output paths for seed work. Continuing an existing question enters Explorer directly; a changed mathematical statement requires an explicit new question.
+SMI checks the existing call/time budget before every new subphase and reserves at most 64 distinct new phase slots per dispatch. Recovery reuses committed phases. The Host records CREATE or REVISE and assigned output paths for seed work. Continuing an existing question enters Explorer directly; a changed mathematical statement requires an explicit new question.
 
-RCI receipts carry only routing fields and artifact references. Review/change Markdown holds mathematical content. One receipt correction can fix missing controls without creating missing mathematics. An Explorer HANDOFF preserves useful work and its first unresolved gap for Director scheduling; it does not refute the candidate.
+SMI receipts carry only routing fields and artifact references. Review/change Markdown holds mathematical content. One receipt correction can fix missing controls without creating missing mathematics. An Explorer HANDOFF preserves useful work and its first unresolved gap for Director scheduling; it does not refute the candidate.
 
 Scope-review reuse compares the actual question, target, review rules, recorded dependencies and objections. New or changed relevant evidence triggers a fresh review. Reuse is search context and does not authorize a final proof verdict.
 
 Host-assigned mechanism identities and deduplication task identities are bound at receipt acceptance. Coverage selects promoted mechanisms, and deduplication returns the assigned tasks with valid predecessor references. A completed task saves its artifact and checkpoint before success is published. Ordinary recovery preserves that commit when later bookkeeping or external presentation is interrupted.
-
-Finding inventories are checked before delivery acceptance. A missing inventory
-for one unambiguous new manuscript is filled locally. Otherwise a bounded control
-correction selects existing draft versions, without editing mathematical files
-or repeating the author task. Ambiguous replacements pause for clarification;
-all selected findings still require independent verification.
-
-Format preflight checks visible mathematical regions for escape corruption,
-including unescaped braces after sized-delimiter commands. Format and inventory
-corrections use fixed `medium` effort and are attributed to their owning saved
-task. Completed repair outputs are reused on resume; original manuscripts and
-independent verification records remain separate from presentation corrections.
-
-
-### Research context and route updates
-
-Planner maintains a compact current route, one self-contained `next_task.md`,
-and `route_relations.json` with declared relationships and open obligations.
-Relation labels are descriptive `lower_snake_case` strings of 1-64 characters,
-for example `supports`, `depends_on`, `reopens`, `refutes` or `supports_search`.
-The Host validates the structure, explanation and existing run-relative file
-references; it does not infer mathematical acceptance from a label. If delivery
-validation pauses, resume reuses the saved author output and retries delivery
-without rerunning completed mathematical or review stages.
-Closed-route derivations and history remain in their original manuscripts.
-`memory/research_index.json` joins finding references, versions, current tasks,
-open uses and historical Kernel evidence. It is navigation, not proof authority:
-a checked conditional result still needs an assumption-checked application.
-
-Survey archives are available through a source index. Only task-selected sources
-are default inputs; PDFs, source archives and alternate formats remain available
-on demand. RCI retains the current statement version across mechanism changes,
-independently reviews statement repairs before further exploration, and retains
-old support under its original scope. Changing a statement never transfers old
-approval automatically. Completed checkpoints retain their saved inputs and
-outputs when resumed; these context changes apply to new assignments.
-
-### Interrupted executions and current research context
-
-PACE checks the execution lock and owned worker identities when opening or listing
-runs. A free lock with no live worker changes a stale `running` turn to
-`interrupted`; its checkpoint, manuscripts and verification receipts remain intact.
-An unobserved process exit has no fabricated exit time or duration. `pace resume`
-revalidates a saved native-completed response and finishes its Host commit before
-requesting another model call. An incomplete response is never treated as accepted.
-
-The research index distinguishes Planner suggestions, dispatched/delivered tasks,
-and independently verified findings. Delivery alone does not close an obligation.
-Director and specialists use the current relation map and direct task dependencies
-by default; full route manuscripts remain available on demand. Planner maintains a
-compact current view and a separate next task, preserving previous versions and
-unique mathematical arguments rather than appending the entire research history.
-
-### Finding versions, scoped inputs and route milestones
-
-New research dispatches freeze `context.json` beside `task.json` and `route_context.json`: `required_refs` are
-inputs for the work item, while `archive_refs` are available on demand. Historical
-route manuscripts stay in the archive for non-Planner roles. A role must still
-read and cite any original proof actually used. Blind RCI probes remain isolated.
-Archive entries can be files or directories. Duplicate advisory entries are
-resolved locally in favor of required inputs, except historical route manuscripts.
-
-Authors record current findings and explicit replacements in
-`finding_manifest.json` beside their deliverable (in their own phase directory
-for RCI). Supersession only applies to pending drafts in the same stage. Earlier
-published findings remain intact. The Host freezes the selected versions in a
-publication checkpoint; each current manuscript still needs independent
-verification. Missing or inconsistent inventories preserve completed work and
-pause delivery instead of silently accepting or recalling the author.
-
-Director assesses KEEP or REFRESH in its existing scheduling call. A substantive
-change to the remaining obligations or their dependencies dispatches Planner;
-a new supporting lemma alone does not. This assessment compares all findings
-since the last route update, rather than just the latest result. Planner writes a compact current map and
-one next task, preserving historical manuscripts. Memory records which verified
-findings postdate the current map, and synchronizes the active assignment after
-Host state commits without a model call. Existing frozen dispatches retain their
-original input and delivery contracts during resume.

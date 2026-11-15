@@ -72,8 +72,8 @@ def paper_build_status(root: Path) -> str:
 class TheoryPaperWriter:
     """The Host persists instructions and files; the author chooses the content."""
 
-    def __init__(self, *, llm: Any, workdir: Path) -> None:
-        self.llm, self.workdir = llm, Path(workdir)
+    def __init__(self, *, llm: Any, composer_llm: Any, workdir: Path) -> None:
+        self.llm, self.composer_llm, self.workdir = (llm, composer_llm, Path(workdir))
 
     def _attempt(self, kind: str) -> str:
         base = f"{stage_ref(workdir=self.workdir, final=True)}/papers/{kind}"
@@ -221,6 +221,7 @@ class TheoryPaperWriter:
         handle = None
         try:
             composed = compose_prompt(
+                llm=self.composer_llm,
                 workdir=self.workdir,
                 assembly=PromptAssembly(
                     stage=stage,
@@ -233,6 +234,7 @@ class TheoryPaperWriter:
                     output_artifact_ref=output_ref,
                 ),
                 input_refs=refs,
+                call_name=f"prompt_composer_{name}",
             )
             _write_text_atomic(self.workdir / attempt / "final_prompt.md", composed.final_prompt)
             handle = begin_artifact_call(

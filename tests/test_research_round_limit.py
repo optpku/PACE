@@ -37,16 +37,13 @@ class RoundLimitTransport(ProofPublicationTransport):
         else:
             return super().complete_structured_result(prompt, workdir=workdir,
                        call_name=call_name, ledger_context=ledger_context, **kwargs)
-        if payload.get("action") in {"DISPATCH", "STOP"}:
-            payload["route_assessment"] = "KEEP"
-            payload["route_reason"] = "The current obligations and dependencies remain unchanged."
         return self._reply(json.dumps(payload), workdir=root, call_name=call_name,
                            ledger_context=ledger_context, structured=True)
 
 
 def test_cli_stops_uncharged_research_and_saves_limits_per_turn(tmp_path, monkeypatch, capsys):
     transport = RoundLimitTransport()
-    monkeypatch.setattr("pace.pipeline.build_llm", lambda **settings: transport)
+    monkeypatch.setattr("pace.orchestrator.pipeline.build_llm", lambda **settings: transport)
     problem = tmp_path / "problem.md"
     problem.write_text("Prove 2+2=4.\n")
     assert cli.main(["run", "--problem", str(problem), "--problem-id", "bounded",
@@ -59,7 +56,7 @@ def test_cli_stops_uncharged_research_and_saves_limits_per_turn(tmp_path, monkey
     state = json.loads((root / "work/turn001/state/director_state.json").read_text())
     assert state["round_index"] == 2
     assert state["proof_states_used"] == 0
-    assert not (root / "work/turn001/round0003").exists()
+    assert not (root / "work/turn001/round3").exists()
     assert len(transport.round_prompts) == 2
     assert "Remaining research rounds (including the next dispatch): 2" in transport.round_prompts[0]
     final = (root / "work/turn001/final_report.json").read_bytes()
@@ -80,7 +77,7 @@ def test_cli_stops_uncharged_research_and_saves_limits_per_turn(tmp_path, monkey
 
 def test_last_round_candidate_is_verified_before_round_limit(tmp_path, monkeypatch, capsys):
     transport = RoundLimitTransport("prover")
-    monkeypatch.setattr("pace.pipeline.build_llm", lambda **settings: transport)
+    monkeypatch.setattr("pace.orchestrator.pipeline.build_llm", lambda **settings: transport)
     problem = tmp_path / "problem.md"
     problem.write_text("Prove 2+2=4.\n")
     assert cli.main(["run", "--problem", str(problem), "--problem-id", "verified",
@@ -128,7 +125,7 @@ def test_parallel_dispatch_reserves_only_remaining_rounds(research_workspace, li
     assert result.state.round_index == limit
     assert set(calls) == ({"survey"} if limit == 1 else {"survey", "planner"})
     assert result.state.proof_states_used == 0
-    assert not ws.path(ws.work_ref(f"round{limit + 1:04d}")).exists()
+    assert not ws.path(ws.work_ref(f"round{limit + 1}")).exists()
 
 
 def test_resume_finishes_the_reserved_last_round_without_redispatch(research_workspace):
@@ -155,19 +152,19 @@ def test_resume_finishes_the_reserved_last_round_without_redispatch(research_wor
     assert result.phase == "FINALIZE"
     assert result.state.stop_reason == "RESEARCH_ROUND_LIMIT_REACHED"
     assert attempts == [1, 1]
-    assert not ws.path(ws.work_ref("round0002")).exists()
+    assert not ws.path(ws.work_ref("round2")).exists()
 
 
 def credit_task(ws, agent):
     task = {"action": "DISPATCH", "agent_id": agent,
             "prompt_brief": "Investigate the fixed target using the existing mathematical evidence.",
             "input_refs": [ws.work_ref("input/problem.md")]}
-    if agent == "rci":
+    if agent == "smi":
         task["research_operation"] = "NEW_PROBLEM"
     return task
 
 
-@pytest.mark.parametrize("agent", ["research", "rci"])
+@pytest.mark.parametrize("agent", ["research", "smi"])
 def test_paid_dispatch_stops_at_credit_limit_without_operational_failure(research_workspace, agent):
     ws = research_workspace
     calls = []
@@ -189,7 +186,7 @@ def test_paid_dispatch_stops_at_credit_limit_without_operational_failure(researc
 
 
 @pytest.mark.parametrize("credits", [1, 2])
-def test_parallel_research_and_rci_reserve_only_available_credits(research_workspace, credits):
+def test_parallel_research_and_smi_reserve_only_available_credits(research_workspace, credits):
     ws = research_workspace
     calls = []
 
@@ -201,13 +198,13 @@ def test_parallel_research_and_rci_reserve_only_available_credits(research_works
 
     task = credit_task(ws, "research")
     engine = DirectorLedEngine(workdir=ws.root,
-        director=lambda **_: {**task, "parallel_tasks": [credit_task(ws, "rci")]},
+        director=lambda **_: {**task, "parallel_tasks": [credit_task(ws, "smi")]},
         composer=lambda **_: PromptComposerResult(final_prompt="Investigate the exact target.", call_id="composer"),
-        specialists={agent: specialist for agent in ("research", "rci")}, target_contract_id="TARGET",
+        specialists={agent: specialist for agent in ("research", "smi")}, target_contract_id="TARGET",
         max_proof_states=credits, max_rounds=2)
     result = engine.run()
     assert result.state.proof_states_used == credits
-    assert sorted(calls) == (["research"] if credits == 1 else ["rci", "research"])
+    assert sorted(calls) == (["research"] if credits == 1 else ["research", "smi"])
     assert result.phase == "FINALIZE"
 
 
@@ -224,11 +221,11 @@ def test_parallel_free_task_can_use_the_last_round_at_zero_credits(research_work
     def director(**kwargs):
         if kwargs["round_index"] == 1:
             return credit_task(ws, "research")
-        return {**credit_task(ws, "rci"), "parallel_tasks": [credit_task(ws, "survey")]}
+        return {**credit_task(ws, "smi"), "parallel_tasks": [credit_task(ws, "survey")]}
 
     engine = DirectorLedEngine(workdir=ws.root, director=director,
         composer=lambda **_: PromptComposerResult(final_prompt="Use the existing evidence.", call_id="composer"),
-        specialists={agent: specialist for agent in ("research", "rci", "survey")},
+        specialists={agent: specialist for agent in ("research", "smi", "survey")},
         target_contract_id="TARGET", max_proof_states=1, max_rounds=2)
     result = engine.run()
     assert calls == ["research", "survey"]
@@ -237,7 +234,7 @@ def test_parallel_free_task_can_use_the_last_round_at_zero_credits(research_work
     assert result.phase == "FINALIZE"
 
 
-@pytest.mark.parametrize("agent", ["research", "rci"])
+@pytest.mark.parametrize("agent", ["research", "smi"])
 def test_paid_dispatch_resume_reuses_its_reserved_credit(research_workspace, agent):
     ws = research_workspace
     attempts = []
@@ -292,7 +289,7 @@ class CreditTransport(RoundLimitTransport):
 
 def test_cli_prover_can_assemble_and_repair_after_research_uses_last_credit(tmp_path, monkeypatch, capsys):
     transport = CreditTransport()
-    monkeypatch.setattr("pace.pipeline.build_llm", lambda **settings: transport)
+    monkeypatch.setattr("pace.orchestrator.pipeline.build_llm", lambda **settings: transport)
     problem = tmp_path / "problem.md"
     problem.write_text("Prove 2+2=4.\n")
     assert cli.main(["run", "--problem", str(problem), "--problem-id", "credits",

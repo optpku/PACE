@@ -1,7 +1,5 @@
 """Apply exact, local text revisions while preserving complete new versions."""
 
-from __future__ import annotations
-
 import json
 from pathlib import Path
 from pace.runtime.output.workspace import _write_text_atomic
@@ -12,14 +10,8 @@ def render_revision(root: Path, patch_ref: str, *, base_ref: str) -> str:
     if not isinstance(patch, dict):
         raise ValueError("revision must be a JSON object")
     base = root / base_ref
-    original = base.read_bytes().decode("utf-8")
-    text = _render_edits(original, patch.get("edits"))
-    if base.read_bytes().decode("utf-8") != original:
-        raise ValueError("revision base changed during application")
-    return text
-
-
-def _render_edits(original: str, edits: list) -> str:
+    original = base.read_text(encoding="utf-8")
+    edits = patch.get("edits")
     if not isinstance(edits, list):
         raise ValueError("revision edits must be a list")
     text = original
@@ -35,22 +27,17 @@ def _render_edits(original: str, edits: list) -> str:
         ):
             raise ValueError("revision anchor is missing or ambiguous")
         text = text.replace(old, new, 1)
+    if base.read_text(encoding="utf-8") != original:
+        raise ValueError("revision base changed during application")
     if not text.strip():
         raise ValueError("revision cannot remove the complete document")
     return text
 
 
-
-
-def apply_revision(root: Path, patch_ref: str, *, base_ref: str, output_ref: str,
-                   format_plan: dict | None = None) -> None:
+def apply_revision(root: Path, patch_ref: str, *, base_ref: str, output_ref: str) -> None:
     if (root / base_ref).resolve() == (root / output_ref).resolve():
         raise ValueError("revision output must be a new copy")
-    updated = render_revision(root, patch_ref, base_ref=base_ref)
-    if format_plan is not None:
-        from pace.runtime.math_format import validate_format_revision
-        validate_format_revision((root / base_ref).read_bytes().decode("utf-8"), updated, format_plan, root=root)
-    _write_text_atomic(root / output_ref, updated)
+    _write_text_atomic(root / output_ref, render_revision(root, patch_ref, base_ref=base_ref))
 
 
 def revision_instruction(base_ref: str, patch_ref: str) -> str:

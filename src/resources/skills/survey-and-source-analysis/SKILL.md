@@ -26,10 +26,11 @@ quantifiers, desired conclusion, and already acquired sources.
    Preserve the actual bibliographic identity and version; keep unknown details
    explicit. Explain what the sources cover and the next unresolved question.
 
-Only Survey may acquire external sources, and only when the Host enables
-retrieval. Other mathematical and editorial roles use already acquired local
-material and record missing sources for Survey; this method grants no extra
-retrieval authority. If access fails, preserve the source lead and missing
+Use this analysis method within the assigned task. External retrieval requires
+both the Host's permission and the role's authority: Survey acquires missing
+external sources during mathematical research; other mathematical roles request
+that source work through Survey. Manuscript roles follow their writing task's
+limits on citation checks. If access fails, preserve the source lead and missing
 passage; do not infer novelty or falsity from failed retrieval.
 
 ## Output and handoff

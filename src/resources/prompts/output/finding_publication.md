@@ -7,11 +7,9 @@ at their exact work paths. Mathematical PASS does not require a new identifier.
 Neither a publication decision nor an editorial overview grants proof reuse or
 final acceptance of the original target.
 
-After the mathematical check, use `results/findings/catalog.md` and the relevant
-part of `results/findings/README.md` when present. Follow related original
-manuscripts; `results/findings/archive.md` is an on-demand version lookup, not a
-required full-history read. Receipts identify scope and provenance but cannot
-replace your independent mathematical check. Explain the actual
+After the mathematical check, read `results/findings/README.md`,
+`results/findings/catalog.md` and `results/findings/archive.md` when present.
+Follow the related original manuscripts and receipts. Explain the actual
 mathematical increment and its relation to the existing result, using judgment
 rather than counts, scores or a requirement of literature novelty.
 

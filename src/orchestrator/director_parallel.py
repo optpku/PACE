@@ -9,7 +9,7 @@ import shutil
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 
-from pace.contracts.director_protocol import DIRECTOR_PROTOCOL_SCHEMA_VERSION
+from pace.contracts.research.director_protocol import DIRECTOR_PROTOCOL_SCHEMA_VERSION
 from pace.runtime.context_state import commit_verified_progress
 from pace.runtime.output.memory import commit_memory_notes
 from pace.runtime.processes import cancellable_model_calls
@@ -28,7 +28,7 @@ def reserve_batch(engine, state, decision):
     for task in proposed:
         if len(tasks) == slots:
             break
-        cost = engine._proof_state_cost(task)
+        cost = engine._proof_state_cost(task, state)
         if cost <= credits:
             tasks.append(task)
             credits -= cost
@@ -45,10 +45,6 @@ def reserve_batch(engine, state, decision):
         "tasks": [task.to_json() for task in tasks],
         "input_snapshot": state.to_json(),
     })
-    engine._freeze_route_context(state, first)
-    context = _read_json(engine.workdir / engine._round_ref(first, "route_context.json"))
-    for offset in range(1, len(tasks)):
-        _write_json(engine.workdir / engine._round_ref(first + offset, "route_context.json"), context)
     engine._persist_state(reserved)
     return reserved
 
@@ -90,12 +86,11 @@ def _execute(parent, snapshot, task, index, first_round, control_context):
         state = worker._load_state()
     else:
         directive = worker._round_ref(index, "director_decision.json")
-        assignment = worker._round_ref(index, "task.json")
+        assignment = worker._round_ref(index, "assignment/task.json")
         _write_json(worker.workdir / directive, {
             "schema_version": DIRECTOR_PROTOCOL_SCHEMA_VERSION, "round_index": index, **task,
         })
         decision = _coerce_decision(task)
-        worker._write_assignment_context(decision, index)
         _write_json(worker.workdir / assignment, {
             "schema_version": DIRECTOR_LED_ASSIGNMENT_SCHEMA_VERSION,
             "round_index": index, **{k: task[k] for k in (

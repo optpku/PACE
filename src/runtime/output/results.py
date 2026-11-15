@@ -6,8 +6,6 @@ and provenance; it never decides whether a mathematical statement is true.
 
 from __future__ import annotations
 
-from pace.runtime.output.workspace import stage_ref
-
 import json
 import os
 import re
@@ -20,6 +18,7 @@ from .workspace import (
     _write_json_atomic,
     _write_text_atomic,
     current_turn,
+    stage_ref,
     work_ref,
 )
 
@@ -41,32 +40,6 @@ def finding_entries(workdir: Path) -> list[dict]:
     return [row for row in state["entries"] if (root / row["ref"]).is_file()]
 
 
-def _findings_state(root: Path) -> dict:
-    return _read_state(root / FINDINGS_STATE_REF, {
-        "schema_version": "findings/v2", "entries": [], "publications": [],
-    })
-
-
-def finding_publications(root: Path) -> list[dict]:
-    return _findings_state(Path(root))["publications"]
-
-
-def validate_publication(root: Path, decision: object) -> list[dict]:
-    error = ""
-    if (not isinstance(decision, dict) or not isinstance(decision.get("action"), str)
-            or decision["action"] not in {"CREATE", "UPDATE", "NONE"}):
-        error = "Choose CREATE, UPDATE or NONE in publication.action."
-    elif decision["action"] == "UPDATE":
-        current = {row["ref"]: row for row in finding_entries(root)}
-        ref = decision.get("finding_ref")
-        if not isinstance(ref, str) or ref not in current:
-            error = "UPDATE must name an existing current finding_ref from the supplied catalog."
-        elif decision.get("expected_source_ref", current[ref]["source_ref"]) != current[ref]["source_ref"]:
-            error = "UPDATE refers to a replaced finding version; compare the current version before publishing."
-    return ([{"stage": "finding_publication", "json_pointer": "/publication", "message": error}]
-            if error else [])
-
-
 def stage_finding_review_refs(
     workdir: Path, round_index: int, completed_result_refs: Iterable[str] = (),
 ) -> tuple[str, ...]:
@@ -76,7 +49,7 @@ def stage_finding_review_refs(
     results = [Path(ref) for ref in completed_result_refs
                if Path(ref).name == "agent_result.json"
                and Path(ref).parts[:len(prefix)] == prefix]
-    directories = {root / f"{stage_ref(round_index, workdir=root)}/findings"}
+    directories = {root / stage_ref(round_index, workdir=root) / "findings"}
     if results:
         latest = results[-1].parts[:len(prefix) + 1]
         # Both committed workers of one batch share the outer round directory.
@@ -89,7 +62,8 @@ def stage_finding_review_refs(
 
 
 def _finding_link(root: Path, row: dict, document: Path) -> str:
-    title = row.get("title", "")
+    with (root / row["ref"]).open(encoding="utf-8") as manuscript:
+        title = next((line[2:].strip() for line in manuscript if line.startswith("# ")), "")
     label = row["finding_id"] + (f" · {title}" if title else "")
     link = Path(os.path.relpath(root / row["ref"], document.parent)).as_posix()
     return f"- [{label}]({link})"
@@ -98,7 +72,7 @@ def _finding_link(root: Path, row: dict, document: Path) -> str:
 def refresh_findings_indexes(workdir: Path) -> None:
     """Refresh current entries and immutable sources without replacing editorial navigation."""
     root = Path(workdir)
-    state = _findings_state(root)
+    state = _read_state(root / FINDINGS_STATE_REF, {"entries": [], "publications": []})
     document = root / FINDINGS_ARCHIVE_REF
     lines = [
         "# 核验原稿档案", "",
@@ -113,7 +87,8 @@ def refresh_findings_indexes(workdir: Path) -> None:
         lines.extend([f"## {turn_id}", ""])
         for row in rows:
             source = root / row["source_ref"]
-            title = row["title"]
+            title = next((line[2:].strip() for line in source.read_text(encoding="utf-8").splitlines()
+                          if line.startswith("# ")), source.name)
             label = f"{row['finding_id']} · " if row["finding_id"] else "支撑材料或报告 · "
             original = Path(os.path.relpath(source, document.parent)).as_posix()
             verification = Path(os.path.relpath(root / row["verification_ref"], document.parent)).as_posix()
@@ -121,7 +96,7 @@ def refresh_findings_indexes(workdir: Path) -> None:
         lines.append("")
     _write_text_atomic(document, "\n".join(lines).rstrip() + "\n")
     catalog = root / FINDINGS_CATALOG_REF
-    rows = [_finding_link(root, row, catalog) for row in state["entries"] if (root / row["ref"]).is_file()]
+    rows = [_finding_link(root, row, catalog) for row in finding_entries(root)]
     _write_text_atomic(catalog, "# 当前成果条目\n\n" + "\n".join(rows or ["尚无独立成果。"]) + "\n")
     index = root / FINDINGS_INDEX_REF
     if not index.is_file():
@@ -190,16 +165,15 @@ def publish_finding(
     """Apply the verifier's CREATE/UPDATE/NONE decision and retain exact source versions."""
 
     root = Path(workdir)
-    state = _findings_state(root)
+    state = _read_state(root / FINDINGS_STATE_REF, {"entries": [], "publications": []})
     entries = state["entries"]
     history = state["publications"]
     row = next((item for item in history if item["source_ref"] == source_ref
                 and item["verification_ref"] == verification_ref), None)
     if row is None:
-        diagnostics = validate_publication(root, publication)
-        if diagnostics:
-            raise ValueError(diagnostics[0]["message"])
         action = publication["action"]
+        if action not in {"CREATE", "UPDATE", "NONE"}:
+            raise ValueError("finding publication action must be CREATE, UPDATE or NONE")
         previous = None
         finding_id, reference = "", ""
         if action == "UPDATE":
@@ -225,8 +199,6 @@ def publish_finding(
             "round_index": int(round_index),
             "turn_id": current_turn(root),
             "action": action,
-            "title": next((line[2:].strip() for line in (root / source_ref).read_text(encoding="utf-8").splitlines()
-                           if line.startswith("# ")), Path(source_ref).name),
         }
         history.append(row)
         if previous is not None:
@@ -252,8 +224,6 @@ def publish_finding(
         lines.append(f"- [核验原稿]({source_link})")
         _write_text_atomic(document, "\n".join(lines) + "\n")
     refresh_findings_indexes(root)
-    from .navigation import refresh_navigation
-    refresh_navigation(root)
     return row["ref"]
 
 

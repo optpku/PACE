@@ -72,16 +72,23 @@ $$
 省略 `--mode` 时，首次目标定位会判断模式：只有适合直接证明的问题选择 `proof`；需要机制探索或判断不确定时选择 `research`，也可显式指定其中一种模式。research 采用下述研究流程；proof 在一次初始 Survey 后，围绕同一证明进行最多 5 轮写作、修订与核验，通过即结束。
 
 1. **规划与调研。** Director 选择目标，决定开展局部探索还是深入研究；Planner 制定数学路线。Survey 调研文献，也可通过单独提供的客户端与 Skill 选配 [ReasAtlas](https://atlas.reaslab.io)，检索数学来源，详见[检索配置](docs/configuration.md#reasatlas-source-retrieval)。
-2. **细化猜想与支撑论证。** 猜想精化研究（Refined Conjecture Investigation，RCI）同时发展候选命题和支撑机制，即足以推出候选结论的中间命题。它检查这些命题是否有依据、是否存在循环论证，以及是否覆盖完整结论；通过证明尝试和反例搜索，区分论证尚不成立与命题本身为假，据此在原始请求范围内修补、修订或拆分问题。
+2. **细化猜想与支撑论证。** 猜想细化过程 SMI 同时发展候选命题和支撑机制，即足以推出候选结论的中间命题。它检查这些命题是否有依据、是否存在循环论证，以及是否覆盖完整结论；通过证明尝试和反例搜索，区分论证尚不成立与命题本身为假，据此在原始请求范围内修补、修订或拆分问题。
 3. **构造与核验证明。** Prover 组织适用论证，Auditor 与 Kernel 针对原始目标分别审查候选证明，采用基于模型的自然语言核验。
 4. **保留证据，组织后续任务。** 带版本的记忆分别记录结果本身及其用途，保留假设、适用范围、来源、依赖和审查记录。候选或条件变化后，重新审查受影响的证据，已确立结果仍按原条件保留。复用前须检查这些条件，并建立旧结论通向新用途的论证。缺失步骤和失败路线指导下一步选题；任务上下文区分已核验前提、探索材料与未解决的证明义务。
-5. **查看、写作与继续研究。** Host 在研究中更新事实性目录和已核验成果。研究结束后保存数学结果与证据，不自动启动长报告写作；用户可另行调用 `outline`、`report`、`paper-outline`、`paper`。提纲、报告和论文各使用一次作者任务，PDF 构建失败后可从保存的源稿恢复。[resume](docs/user-guide.md#resume-an-interrupted-turn) 复用已完成阶段；[continue](docs/user-guide.md#continue-with-a-new-question) 沿用成果开启新 turn。
+5. **汇报与继续研究。** 新增已核验成果及时更新进展；每个研究轮次结束后，启动一套中文报告与英文论文的写作和独立审阅流程，并交付论文 PDF。[resume](docs/user-guide.md#resume-an-interrupted-turn) 复用已完成工作、继续未完成环节；[continue](docs/user-guide.md#continue-with-a-new-question) 沿用已有发现开启新一轮研究。
 
 ## 快速开始
 
+finding 编号表示一项持续完善的数学结果。核验完整稿件后，核验器明确决定新增、
+更新指定编号或不发布；辅助计算、基准复证和已有成果汇编可以保存而不增加编号。
+更新替换当前阅读文件，每次送审原稿及核验记录仍保留在固定的 work 路径中，
+历史证明绑定对应的原始版本。`results/findings/README.md` 按主题组织成果，
+`catalog.md` 列出当前条目，`archive.md` 保留各次核验原稿的入口。
+发布不会覆盖主题总览，也不会改变原题验收结论。
+
 ### 1. 安装 PACE
 
-需要 **Python 3.11+**，以及能访问所选模型的 **Codex CLI**。Python 运行时没有第三方依赖。proof 和 research 研究流程不需要 TeX；显式论文写作另需 `xelatex`、BibTeX 和 `pdffonts`，详见 [PDF 工具安装](docs/installation.md#paper-pdf-tools)。
+需要 **Python 3.11+**，以及能访问所选模型的 **Codex CLI**。Python 运行时没有第三方依赖，Codex 需要单独安装。下方 proof 模式示例无需 TeX 或 Poppler；research 模式的论文交付还需要 `pdflatex`、BibTeX 和 `pdffonts`，详见 [PDF 工具安装](docs/installation.md#paper-pdf-tools)。
 
 以下命令使用 Bash。当前在 macOS/Linux 上运行，Windows 用户请使用 WSL，详见[环境要求](docs/installation.md#requirements)。
 
@@ -116,13 +123,13 @@ codex login status
 
 需要登录时执行 `codex login`。自定义服务与可执行文件设置见[配置说明](docs/configuration.md)。
 
-PACE 复用登录凭据，并将角色调用与个人 Codex 记忆、插件、hooks 和目录指令隔离。默认允许 Survey 按需检索（`--web-search-mode on`），其余角色显式关闭检索工具；可用 `off` 关闭 Survey 检索。其他角色没有开启检索的参数。请使用支持 `codex exec --ignore-user-config` 的较新版本；`pace doctor` 会在调用模型前检查兼容性。
+PACE 复用登录凭据，并将角色调用与个人 Codex 记忆、插件、hooks 和目录指令隔离。默认允许 Survey 按需检索（`--web-search-mode on`），其余角色显式关闭检索工具；可用 `off` 同时关闭 Survey 检索。请使用支持 `codex exec --ignore-user-config` 的较新版本；`pace doctor` 会在调用模型前检查兼容性。
 
 PACE 使用 `--dangerously-bypass-approvals-and-sandbox` 调用 Codex 执行无人值守任务。请在你愿意授予 agent 文件和命令访问权限的环境中运行，具体说明见[运行要求](docs/installation.md#requirements)。
 
-### 3. 准备 PDF 工具
+### 3. 为 research 模式的交付准备 PDF 工具
 
-用户请求论文交付时，需安装提供 `xelatex`、`bibtex` 和 `pdffonts` 的 TeX 发行版与 Poppler，详见 [PDF 工具安装说明](docs/installation.md#paper-pdf-tools)。构建失败时保留已交付源稿与诊断信息，修复环境后用 `resume` 继续。
+research 模式交付论文时，需安装提供 `pdflatex`、`bibtex` 和 `pdffonts` 的 TeX 发行版与 Poppler，详见 [PDF 工具安装说明](docs/installation.md#paper-pdf-tools)。下方 proof 模式示例可跳过这一步；若之后为 proof 模式显式请求完整文稿，也需要这些工具。
 
 ### 4. 检查运行环境
 
@@ -147,7 +154,7 @@ pace run \
   --web-search-mode on
 ```
 
-这条命令会调用模型，请使用账号支持的模型与推理强度。proof 模式起证前做一次 Survey，再直接证明与独立核验，不调用 Director 或 RCI；写作由用户另行请求。从 `outputs/even-square/README.md` 开始查看，`work/turn001/final_report.json` 保存数学结论和证据。`--max-proof-states` 限制证明状态数，不限制总调用次数、时长或费用，详见[预算配置](docs/configuration.md)。
+这条命令会调用模型，请使用账号支持的模型与推理强度。示例使用 proof 模式：起证前做一次 Survey（按需检索），再直接证明与独立核验，不调用 Director 或 SMI，默认不生成长报告和论文。运行结果从 `outputs/even-square/results/current_report.md` 开始阅读。`--max-proof-states` 限制证明状态数，不限制总调用次数、总时长或费用，详见[预算配置](docs/configuration.md)。
 
 ## 研究你的猜想
 
@@ -159,30 +166,26 @@ pace run --problem conjecture.md --problem-id my-conjecture --output outputs \
   --model gpt-6.1-sol --reasoning-effort high --web-search-mode on
 ```
 
-列出研究主题，并打开 `outputs/my-conjecture/README.md` 查看当前 turn、成果与已完成的报告和论文：
+列出研究主题，并打开 `outputs/my-conjecture/results/current_report.md` 阅读结果：
 
 ```bash
 pace problems --output outputs
 ```
 
-[文稿修订](docs/user-guide.md#write-a-report-or-paper)、[批量执行](docs/user-guide.md#run-a-batch)及[结果汇总](docs/user-guide.md#summarize-recorded-results)见用户手册；模型、检索、预算、自定义服务和论文样式见[配置说明](docs/configuration.md)。
+[文稿修订](docs/user-guide.md#revise-the-report-or-paper)、[批量执行](docs/user-guide.md#run-a-batch)及[阅读版导出与结果汇总](docs/user-guide.md#export-for-readers)见用户手册；模型、检索、预算、自定义服务和论文样式见[配置说明](docs/configuration.md)。
 
 ## 阅读研究输出
 
-PACE 保存数学原稿、断点、运行记录及作者交付的文稿。CLI 用户可以直接打开或复制下列文件；Reaslab 网页应用单独提供，不包含在此仓库内。
-
-实验、turn 和 `round0001` 的目录页链接任务、成果、核验与调用日志。`results/` 提供当前阅读入口，`work/turnNNN/` 保留历史原稿；同一成果更新后沿用稳定编号。新实验保存固定运行代码供恢复，旧实验保留原布局。详见[实验文件结构](docs/user-guide.md#experiment-files)，可用 `pace index` 在不调用模型的情况下重建目录页。
+首先打开 `outputs/my-conjecture/results/current_report.md`。research 模式生成下列输出；proof 模式默认交付简报与核验记录，完整文稿需要[显式请求](docs/user-guide.md#revise-the-report-or-paper)。
 
 | 输出 | 内容 |
 |---|---|
-| `README.md`、`work/turnNNN/README.md`、`roundNNNN/README.md` | Host 生成的实验、turn 和调度轮次入口，不调用模型。 |
-| `work/turnNNN/final_report.json` | 数学结论、模式选择及研究执行状态。 |
-| `results/findings/` | 使用稳定编号的当前成果，以及不可变原稿和核验记录的链接。 |
-| `results/outline.md`、`results/research_report.md` | 中文报告提纲与作者交付的完整报告。 |
-| `results/paper_outline.md`、`results/paper/main.tex`、`main.pdf` | 英文论文提纲、作者交付的源稿及构建成功后的 PDF。 |
-| `work/turnNNN/finalization/reports/`、`finalization/papers/` | 每次写作请求、冻结的提纲、作者原稿和保存状态。 |
+| `results/current_report.md` | 累计研究简报、最强结论和未解决问题。 |
+| `results/research_report.md` | 经过编辑审阅的完整中文研究报告。 |
+| `results/paper/paper.pdf` | 经过审阅的英文数学论文，同目录保留 TeX 源文件。 |
+| `results/findings/` | 已核验成果及证据链接；研究过程见 `work/README.md`。 |
 
-报告和论文保留原假设、证明范围及未解决问题。数学结论与写作、PDF 状态分别保存。使用手册介绍[写作与修订](docs/user-guide.md#write-a-report-or-paper)和[结果汇总](docs/user-guide.md#summarize-recorded-results)。
+报告区分证明、反驳与条件性结论，并说明适用假设及剩余开放问题。详细操作见使用手册中的[结果阅读](docs/user-guide.md#read-results)、[阅读版导出](docs/user-guide.md#export-for-readers)和[文稿修订](docs/user-guide.md#revise-the-report-or-paper)。
 
 ## 许可与引用
 

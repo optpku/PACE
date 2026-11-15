@@ -7,9 +7,9 @@ Director may recommend a method in `prompt_brief` or name its file in
 
 | Skill | Use when | Typical role |
 | --- | --- | --- |
-| [Survey and source analysis](survey-and-source-analysis/SKILL.md) | Locate a theorem and determine what its proof actually supplies. | Survey |
+| [Survey and source analysis](survey-and-source-analysis/SKILL.md) | Check relevant existing results and acquire the source passages needed to assess their coverage. | Survey |
 | [Evidence reuse](evidence-reuse/SKILL.md) | Carry an earlier result into a changed candidate or condition profile. | Planner, Research, Prover |
-| [RCI investigation](rci-investigation/SKILL.md) | Develop conjectures and mechanisms through support, coverage, and challenge. | Director, RCI |
+| [SMI investigation](smi-investigation/SKILL.md) | Develop conjectures and mechanisms through support, coverage, and challenge. | Director, SMI |
 | [Failure diagnosis](failure-diagnosis/SKILL.md) | Turn a failed attempt or review into a precise next obligation. | Planner, Research, Prover |
 | [Route planning](decompose-and-plan-route/SKILL.md) | Connect premises to the target through explicit dependencies. | Planner |
 | [Direct proving](direct-proving-and-gap-closure/SKILL.md) | Derive a scoped claim or repair the load-bearing gap. | Research, Prover |
@@ -23,14 +23,16 @@ Director may recommend a method in `prompt_brief` or name its file in
 | [Claim preservation](mathematical-claim-preservation/SKILL.md) | Check a draft against the exact source claims and conditions. | Writer, Editor |
 | [Paper composition](theory-paper-composition/SKILL.md) | Organize supplied mathematics into the assigned paper. | Writer, Editor |
 
-Role labels are reading suggestions, not new agents. Only Survey may retrieve
-external sources when Web Search is enabled. All other roles use acquired local
-material; no setting enables their external retrieval. Preserve exact URLs and
-locators. ReasAtlas, when separately configured for Survey, is a source retrieval
-option; it is not bundled here.
+Role labels are reading suggestions, not new agents. External retrieval follows
+the Host's setting and the assigned role's instructions. Survey acquires missing
+external sources during mathematical research; other mathematical roles use
+acquired material and request Survey for additional source work. Manuscript
+roles follow their writing task's limits on citation checks. Preserve exact URLs,
+versions and locators. ReasAtlas, when separately configured, is a source
+retrieval option; it is not bundled here.
 
 Both prompt variants use this library. Skills and their illustrative examples
 remain search context. They cannot change the target, certify novelty, or
-grant a mathematical PASS. RCI phases receive their own method files; blind
+grant a mathematical PASS. SMI phases receive their own method files; blind
 probes retain their statement-only task boundary. Auditor/Kernel use independent
 verification prompts, and manuscript roles keep their assigned writing guides.

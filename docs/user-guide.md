@@ -25,7 +25,7 @@ pace run \
   --web-search-mode on
 ```
 
-Replace the model and effort with values supported by your provider. This creates `outputs/even-square/` and starts `turn001`. `proof` handles a fixed statement with one initial Survey followed by direct proving. It runs at most five successive proof loops by default: the first writes a complete proof and later loops revise it using independent review feedback. Verification success ends the turn early; there is no candidate pool. Repairs and resume reuse the Survey. `research` uses dynamic Director scheduling with Planner, Research and RCI as needed. Omit `--mode` to let the first target-location call select: only tasks suited to direct proving choose proof; mechanism exploration or uncertainty chooses research. Explicit mode choices override selection. Both modes use independent Auditor/Kernel checks; see [mode and budget settings](configuration.md#command-line-settings).
+Replace the model and effort with values supported by your provider. This creates `outputs/even-square/` and starts `turn001`. `proof` handles a fixed statement with one initial Survey followed by direct proving. It runs at most five successive proof loops by default: the first writes a complete proof and later loops revise it using independent review feedback. Verification success ends the turn early; there is no candidate pool. Repairs and resume reuse the Survey. `research` uses dynamic Director scheduling with Planner, Research and SMI as needed. Omit `--mode` to let the first target-location call select: only tasks suited to direct proving choose proof; mechanism exploration or uncertainty chooses research. Explicit mode choices override selection. Both modes use independent Auditor/Kernel checks; see [mode and budget settings](configuration.md#command-line-settings).
 
 For your own open conjecture, save the problem as `conjecture.md` and start a research-mode run:
 
@@ -41,9 +41,9 @@ pace run \
 
 This creates `outputs/my-conjecture/`. In the continuation and recovery commands below, replace `outputs/even-square` with `outputs/my-conjecture` when working on this study.
 
-Only Survey has external retrieval enabled by default. Use `--web-search-mode off` to disable Survey retrieval; no option enables retrieval for other roles. Statement-only probes retain their restricted local inputs.
+Web Search is enabled by default for every role when its assigned task needs external sources. Use `--web-search-mode off` to disable external retrieval. Statement-only probes retain their restricted local inputs.
 
-The terminal prints factual task milestones, errors and artifact paths. The external Web application generates user updates, reader briefs and activity cards from those records. `--json` emits machine-readable started/completed JSONL records; `navigation` links the run entry page. `--profile` includes timing events. The model may produce partial findings even if the full target remains unresolved.
+The terminal prints factual task milestones, errors and artifact paths. The external Web application generates user updates, reader briefs and activity cards from those records. `--json` emits machine-readable started/completed JSONL records. `--profile` includes timing events. The model may produce partial findings even if the full target remains unresolved.
 
 ## Read results
 
@@ -52,87 +52,25 @@ pace problems --output outputs
 pace problems --output outputs --json
 ```
 
-Open the run `README.md`, then the current turn and round pages. `work/turnNNN/final_report.json` records the mathematical result and evidence references. Read `result` with `answer_mode` and the original verifier records; execution status is separate from mathematical acceptance.
+Read `work/turnNNN/final_report.json` for the recorded mathematical result and evidence references. Read `result` with `answer_mode` and the original verifier records. `run_status` describes execution separately from mathematical acceptance. Auditor and Kernel provide model-based natural-language review.
 
-`results/findings/README.md` is the thematic entry point; `catalog.md` lists current numbered results and `archive.md` links exact checked versions. Original findings and their exact verification scope accumulate across turns. Rejected drafts remain outside that archive and their review records remain available to the Director for repair.
+`results/findings/README.md` and `archive.md` index the independently checked manuscripts. Original findings and their exact verification scope accumulate across turns. Rejected drafts remain outside that archive and their review records remain available to the Director for repair.
 
 PACE records mathematical originals and runtime events. The Web application generates the user-facing brief, thematic results overview, activity cards, reader copies and downloads. These presentation documents are not required inputs for core execution or recovery. Explicit report and paper tasks are described below.
 
-### Experiment files
-
-New runs record `pace_run_layout/v2` in `work/state/layout.json`. Existing
-experiments are not moved: their bound runtime and original evidence paths remain
-in use. Keep the whole run directory, including `work/`, for recovery.
-
-```text
-<run>/
-├── README.md
-├── results/
-│   ├── findings/
-│   ├── outline.md
-│   ├── research_report.md
-│   ├── paper_outline.md
-│   └── paper/{main.tex, main.pdf, ...}
-├── memory/
-└── work/
-    ├── state/
-    ├── runtime/
-    └── turn001/
-        ├── README.md
-        ├── input/, state/, resources/
-        ├── events.jsonl
-        ├── final_report.json
-        ├── orientation/
-        ├── round0001/
-        ├── round0002/
-        │   ├── README.md
-        │   ├── task.json, context.json, route_context.json
-        │   ├── agent_result.json, research.md
-        │   ├── findings/, verification/, calls/
-        │   └── rci/attempt_001/
-        │       ├── outcome.json
-        │       ├── semantic_dedup/
-        │       └── candidate_01/
-        │           ├── seed_scout/
-        │           ├── frontier_explorer/
-        │           └── frontier_explorer_02/
-        └── finalization/
-            ├── README.md
-            ├── reports/outline/attempt-0001/
-            ├── reports/report/attempt-0001/
-            ├── papers/outline/attempt-0001/
-            └── papers/paper/attempt-0001/
-```
-
-Auxiliary files are omitted. Each `roundNNNN` is a dispatch round, distinct from a
-user turn and from the proof-state budget. Proof mode uses one directory per
-successive proof loop; verification stays beside that loop's proof. RCI attempt,
-candidate and phase directories denote different attempts, statements and phases;
-`frontier_explorer_02` is a later mathematical iteration. Transport retries stay
-in `calls/`. Parallel workers use distinct, pre-reserved round directories.
-
-Research assignments freeze `route_context.json` (route version, work item and
-sources) and `context.json` (required inputs and on-demand archives) before the
-worker starts. Resume uses those saved references, including for parallel tasks.
-Blind probes continue to receive only their independent input view; adjacent
-navigation and candidate files do not become permitted context.
-
-The Host updates the run, turn and affected round pages from saved records.
-Pages contain facts and links, not copied proofs or model-written summaries.
-They are not acceptance or recovery checkpoints. Rebuild missing pages locally:
-
-```bash
-pace index --run-dir outputs/even-square
-```
-
-A stable result such as `R0001` may acquire a new independently checked version.
-The verifier selects `CREATE` for a distinct result, `UPDATE` for an existing
-result, or `NONE` for checked supporting material that needs no new number.
-Original manuscripts and reviews remain immutable in `work/`; the archive keeps
-all versions, including supporting material. Saved dependencies retain their
-exact versions, and route memory detects a changed version of an existing ID.
-These publication choices do not change mathematical acceptance. An invalid
-publication field is corrected separately without rerunning a completed check.
+The core stores `orientation/`, `round1/`, `round2/` and `finalization/` directly
+under each `work/turnNNN/`. SMI candidates are direct children of `smi/attempt_NNN/`;
+each phase writes its files directly in a named directory, such as
+`candidate_01/seed_scout/seed.md`. Distinct phase iterations use sibling names
+such as `frontier_explorer/` and `frontier_explorer_02/`. Internal attempts remain
+immutable for resume. Core reader-path rules remove the attempt directory and
+the redundant `reports/round-NNNN/` container, so a report snapshot appears as
+`work/turn001/round3/current_report.md`. Reader publication selects the last
+successful committed attempt; a later failure does not replace it. Seed manuscripts
+are published directly as `round4/seed.md`; other candidates and seed revisions use
+names such as `seed-candidate_02.md` and `seed-revision_02.md` to preserve distinct
+manuscripts without extra directories. The original files remain available for resume. Web uses
+these core rules when rendering and placing the reading files.
 
 ## Continue with a new question
 
@@ -159,19 +97,13 @@ pace resume --run-dir outputs/even-square \
   --model gpt-6.1-sol --reasoning-effort high --web-search-mode on
 ```
 
-`resume` continues the selected saved task. It preserves target, mode, resources, proof budget and committed outputs. Mode and budget are not resume options. An unfinished explicit writing task completes first, then recovery continues the same turn’s paused proof/research checkpoint. Completed writing and review stages are reused; completed mathematics does not trigger writing.
+`resume` continues the selected saved task. It preserves the target, mode, resource snapshot, proof-loop limit and committed outputs. `--resource-variant`, `--max-proof-states` and `--mode` are not resume options. Completed mathematical work is reused without another model call. If a writing task is selected, recovery continues that writing task without restarting research.
 
-Every new run saves its executable package under `work/runtime/initial/pace` and
-records its exact file contents in `work/state/runtime_binding.json`. For a bound run, CLI resume, continue
-and writing commands first compare the package bytes with that inventory and use that runtime.
-Keep its `work/runtime/` directory when moving the run. Historical identifiers,
-prompts, manuscripts and reviews remain unchanged; new runs use RCI throughout.
-
-A service failure retains its concrete diagnostic and stops subsequent model dispatches in that Host session. A turn resumed after explicit writing is marked complete only after the Host session exits successfully; a terminal service failure leaves it interrupted. Correct the service or environment before resuming. A new literal question uses `continue` or a new problem ID, preserving the committed original.
+A service failure retains its concrete diagnostic and stops subsequent model dispatches in that Host session. Correct the service or environment before resuming. A new literal question uses `continue` or a new problem ID, preserving the committed original.
 
 At a saved research Director boundary, `pace resume --run-dir PATH --finalize` explicitly closes research with the current findings. It does not grant whole-target mathematical acceptance. Pending mathematical work or verification must first reach a resumable boundary.
 
-A completed artifact and its owning task checkpoint are saved before call success is published. Later log or Web presentation failures do not repeat that completed task. If the final delivery notice is missing, `resume` publishes it from the saved artifacts without repeating writing, review or PDF compilation, including for older completed checkpoints. Incomplete attempts and their diagnostics remain in the turn directory.
+A completed artifact and its owning task checkpoint are saved before call success is published. Later log or Web presentation failures do not repeat that completed task. Incomplete attempts and their diagnostics remain in the turn directory.
 
 ## Write a report or paper
 
@@ -227,4 +159,4 @@ python scripts/summarize_results.py --runs-dir outputs --output exports/summary
 
 The destination must be a new directory outside the source directories. This command reads the current turn of each immediate child problem directory and writes factual `summary.json` and `README.md` without model calls or source changes. Preserve the original workspace for recovery. Reader-view exports, file-link conversion and download packaging belong to the external Web application.
 
-An RCI assignment states the fixed question, the one gap to address and its return condition. Continuing an unchanged question enters exploration directly. A bounded attempt can return `HANDOFF` with its original work and unresolved gap; this is distinct from a mathematical rejection.
+An SMI assignment states the fixed question, the one gap to address and its return condition. Continuing an unchanged question enters exploration directly. A bounded attempt can return `HANDOFF` with its original work and unresolved gap; this is distinct from a mathematical rejection.

@@ -21,7 +21,7 @@ def test_updates_keep_identity_and_exact_dependency_versions(tmp_path):
     ws = RunWorkspace.create(tmp_path, "findings")
     originals = []
     for index, text in enumerate(("# Bound\n\nThe bound is 4.\n", "# Bound\n\nThe improved bound is 3.\n"), 1):
-        source = ws.work_ref(f"round{index:04d}/findings/bound.md")
+        source = ws.work_ref(f"round{index}/findings/bound.md")
         receipt = source.replace(".md", ".verification.json")
         ws.write_text(source, text)
         ws.write_json(receipt, {"verdict": {"stage_status": "PASS", "reuse_authorized": True}})
@@ -29,7 +29,7 @@ def test_updates_keep_identity_and_exact_dependency_versions(tmp_path):
     first, second = originals
     reference = publish_finding(ws.root, source_ref=first[0], verification_ref=first[1],
                                 round_index=1, publication={"action": "CREATE"})
-    manifest, _ = write_dependency_manifest(workdir=ws.root, output_ref=ws.work_ref("round0001/proof.md"),
+    manifest, _ = write_dependency_manifest(workdir=ws.root, output_ref=ws.work_ref("round1/proof.md"),
                                            target_contract_id="TARGET")
     old_manifest = (ws.root / manifest).read_bytes()
     navigation = "# Results by mathematical topic\n\nA precise result and its remaining gap.\n"
@@ -41,10 +41,7 @@ def test_updates_keep_identity_and_exact_dependency_versions(tmp_path):
     assert len(finding_entries(ws.root)) == 1
     assert finding_entries(ws.root)[0]["source_ref"] == second[0]
     assert (ws.root / manifest).read_bytes() == old_manifest
-    entry = json.loads(old_manifest)["entries"][0]
-    assert entry["source_ref"] == first[0]
-    assert entry["verification_receipt_ref"] == first[1]
-    assert ws.path(entry["source_ref"]).read_text() == first[2]
+    assert json.loads(old_manifest)["entries"][0]["source_text"] == first[2]
     for source, receipt, text in originals:
         assert ws.path(source).read_text() == text
         assert source in ws.path("results/findings/archive.md").read_text()
@@ -73,32 +70,33 @@ def test_stage_verifier_controls_create_update_and_supporting_records(tmp_path, 
     monkeypatch.setattr("pace.orchestrator.finding_publication.verify_finding", verify)
     completed = []
     for index in range(1, 4):
-        directory = ws.work_ref(f"round{index:04d}")
+        directory = ws.work_ref(f"round{index}")
         source = f"{directory}/findings/bound.md"
         ws.write_text(source, f"# Bound\n\nChecked statement {index}.\n")
         ws.write_json(f"{directory}/agent_result.json",
                       {"status": "SUCCEEDED", "deliverable_ref": source})
-        ws.write_json(f"{directory}/task.json", {"round_index": index})
+        ws.write_json(f"{directory}/assignment/task.json", {"round_index": index})
         completed.append(f"{directory}/agent_result.json")
         assert publish_stage_findings(llm=object(), workdir=ws.root, completed_result_refs=completed)
     assert len(checked) == 3
     assert len(finding_entries(ws.root)) == 1
     assert "Checked statement 2." in ws.path("results/findings/R0001.md").read_text()
-    assert "round0003/findings/bound.md" in ws.path("results/findings/archive.md").read_text()
+    assert "round3/findings/bound.md" in ws.path("results/findings/archive.md").read_text()
     assert "results/findings/catalog.md" in checked[-1]["input_refs"]
+    assert "results/findings/archive.md" in checked[-1]["input_refs"]
 
 
 @pytest.mark.parametrize("action", ["CREATE", "UPDATE", "NONE"])
 def test_research_finalization_obeys_the_kernel_publication_action(tmp_path, action):
     ws = RunWorkspace.create(tmp_path, "research")
-    original = ws.work_ref("round0001/finding.md")
-    original_check = ws.work_ref("round0001/finding.verification.json")
+    original = ws.work_ref("round1/finding.md")
+    original_check = ws.work_ref("round1/finding.verification.json")
     ws.write_text(original, "# Bound\n\nThe bound is at most four.")
     ws.write_json(original_check, {"stage_status": "PASS"})
     if action == "UPDATE":
         publish_finding(ws.root, source_ref=original, verification_ref=original_check,
                         round_index=1, publication={"action": "CREATE"})
-    proof, receipt, kernel = (ws.work_ref(f"round0002/{name}") for name in
+    proof, receipt, kernel = (ws.work_ref(f"round2/{name}") for name in
                               ("candidate.md", "verification.json", "kernel.json"))
     ws.write_text(proof, "# Bound\n\nThe bound is at most three, hence also at most four.")
     ws.write_json(receipt, {"proof_ref": proof, "kernel_ref": kernel})
@@ -173,7 +171,7 @@ class ProofPublicationTransport:
 @pytest.mark.parametrize("action", ["CREATE", "NONE"])
 def test_public_cli_keeps_publication_separate_from_pass_and_updates_on_continue(tmp_path, monkeypatch, capsys, action):
     transport = ProofPublicationTransport(action)
-    monkeypatch.setattr("pace.pipeline.build_llm", lambda **settings: transport)
+    monkeypatch.setattr("pace.orchestrator.pipeline.build_llm", lambda **settings: transport)
     problem = tmp_path / "problem.md"
     problem.write_text("Prove 2+2=4.\n")
     assert cli.main(["run", "--problem", str(problem), "--problem-id", "proof",
@@ -183,9 +181,9 @@ def test_public_cli_keeps_publication_separate_from_pass_and_updates_on_continue
     assert report["result"] == "PASS"
     assert len(report["artifact_refs"]["findings"]) == (1 if action == "CREATE" else 0)
     if action == "NONE":
-        assert "round0001/proof.md" in (root / "results/findings/archive.md").read_text()
+        assert "round1/proof.md" in (root / "results/findings/archive.md").read_text()
         return
-    first = (root / "work/turn001/round0001/proof.md").read_bytes()
+    first = (root / "work/turn001/round1/proof.md").read_bytes()
     transport.publication = {"action": "UPDATE", "finding_ref": "results/findings/R0001.md"}
     request = tmp_path / "follow-up.md"
     request.write_text("Complete the proof of the same result, including the reverse equality.")
@@ -193,4 +191,4 @@ def test_public_cli_keeps_publication_separate_from_pass_and_updates_on_continue
     state = json.loads((root / "work/state/findings.json").read_text())
     assert len(state["entries"]) == 1 and len(state["publications"]) == 2
     assert state["entries"][0]["source_ref"].startswith("work/turn002/")
-    assert (root / "work/turn001/round0001/proof.md").read_bytes() == first
+    assert (root / "work/turn001/round1/proof.md").read_bytes() == first

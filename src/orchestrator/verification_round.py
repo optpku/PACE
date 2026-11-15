@@ -2,20 +2,22 @@ from __future__ import annotations
 
 import copy
 import json
+import os
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from pace.agents.contract_auditor import (
+from pace.agents.verification.contract_auditor import (
     attach_proof_contract_audit_metadata,
 )
-from pace.agents.kernel import (
+from pace.agents.verification.kernel import (
     attach_math_verifier_metadata,
     run_math_verifier_kernel,
 )
-from pace.contracts.target import target_contract_text
-from pace.contracts import verification as verification_decision
+from pace.contracts.problem.target import target_contract_text
+from pace.contracts.verification import decision as verification_decision
 from pace.runtime.json_values import (
     as_dict as _as_dict,
 )
@@ -25,7 +27,6 @@ from pace.runtime.json_values import (
 from pace.runtime.output.calls import update_agent_call_deliverable
 from pace.runtime.output.events import publish_progress
 from pace.runtime.output.workspace import (
-    _write_json_atomic,
     path_has_symlink_component,
     is_call_path,
     work_ref,
@@ -129,6 +130,7 @@ def run_verification_round(ctx: VerificationContext) -> dict[str, Any]:
                 return report
         return None
 
+    audit_runner = ctx.contract_audit_runner or _audit_runner()
     progress_context = {
         "round_index": ctx.round_index,
         "parent_task_id": f"round-{ctx.round_index:04d}",
@@ -136,14 +138,9 @@ def run_verification_round(ctx: VerificationContext) -> dict[str, Any]:
     audit_task = f"round-{ctx.round_index:04d}-auditor"
     kernel_task = f"round-{ctx.round_index:04d}-kernel"
     publish_progress(ctx.workdir, **progress_context, task_id=audit_task, stage='auditor', status='started')
-    audit_report = saved_report(ctx.auditor_artifact_ref, "contract_status", {"PASS", "FAIL"})
-    if audit_report is None:
-        audit_report = ctx.contract_audit_runner() if ctx.contract_audit_runner else {
-            "contract_status": "VERIFIER_ERROR",
-            "interface_failure": {"reason": "proof_contract_auditor_runner_required"},
-        }
     auditor = attach_proof_contract_audit_metadata(
-        audit_report,
+        saved_report(ctx.auditor_artifact_ref, "contract_status", {"PASS", "FAIL"})
+        or audit_runner(),
         proof_id=proof_id,
         proof_ref=proof_ref,
         literal_target=target_contract_text(canonical_target),
@@ -163,15 +160,14 @@ def run_verification_round(ctx: VerificationContext) -> dict[str, Any]:
             artifact_ref=ctx.auditor_artifact_ref,
         )
         publish_progress(ctx.workdir, **progress_context, task_id=audit_task, stage='auditor', status='completed' if audit_status == 'PASS' else 'needs_work')
+    kernel_runner = ctx.math_kernel_runner or _kernel_runner(
+        ctx,
+        target_contract_id=target_contract_id,
+    )
     publish_progress(ctx.workdir, **progress_context, task_id=kernel_task, stage='kernel', status='started')
-    kernel_report = saved_report(ctx.kernel_artifact_ref, "stage_status", {"PASS", "MATH_FAIL"})
-    if kernel_report is None:
-        kernel_report = (
-            ctx.math_kernel_runner() if ctx.math_kernel_runner
-            else _run_kernel(ctx, target_contract_id=target_contract_id)
-        )
     kernel = attach_math_verifier_metadata(
-        kernel_report,
+        saved_report(ctx.kernel_artifact_ref, "stage_status", {"PASS", "MATH_FAIL"})
+        or kernel_runner(),
         proof_id=proof_id,
         proof_ref=proof_ref,
         target_contract_id=target_contract_id,
@@ -241,13 +237,20 @@ def _update_agent_call_output(
     )
 
 
-def _run_kernel(
+def _audit_runner() -> Callable[[], dict[str, Any]]:
+    return lambda: {
+        "contract_status": "VERIFIER_ERROR",
+        "interface_failure": {"reason": "proof_contract_auditor_runner_required"},
+    }
+
+
+def _kernel_runner(
     ctx: VerificationContext,
     *,
     target_contract_id: str,
-) -> dict[str, Any]:
+) -> Callable[[], dict[str, Any]]:
     brief_ref = work_ref(ctx.workdir, "input/problem_brief.md")
-    return run_math_verifier_kernel(
+    return lambda: run_math_verifier_kernel(
         proof_id=ctx.proof_id,
         proof_ref=ctx.proof_artifact_ref,
         target_contract_id=target_contract_id,
@@ -454,4 +457,18 @@ def _write_workspace_json(
     target.parent.mkdir(parents=True, exist_ok=True)
     if path_has_symlink_component(root_path, target):
         raise ValueError(f"{field} must not contain a symlink: {normalized}")
-    _write_json_atomic(target, payload)
+    descriptor, temporary = tempfile.mkstemp(
+        dir=target.parent,
+        prefix=target.name + ".",
+        suffix=".tmp",
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+        os.replace(temporary, target)
+    except BaseException:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise

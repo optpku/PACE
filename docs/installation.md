@@ -46,11 +46,6 @@ Python package `pace`. For source development with pip, use
 Run the CLI and helper scripts with that same
 environment; adding `src/` to `PYTHONPATH` is not an installation step.
 
-The source keeps role implementations in `src/agents/` (with `rci/` and
-`verification/` subpackages), contract modules directly in `src/contracts/`,
-and scheduling, runtime and reporting in their respective top-level packages.
-The public Python entry remains `pace.pipeline.ProofPipeline`.
-
 ## 2. Prepare Codex CLI
 
 If Codex is not installed, follow the [official Codex CLI installation guide](https://developers.openai.com/codex/cli). One supported method, when npm is already installed, is:
@@ -66,7 +61,7 @@ codex --version
 codex login status
 ```
 
-If sign-in is needed, run `codex login` and complete the CLI's interactive instructions. PACE reuses the login while isolating its role calls from personal memories, plugins and directory instructions. For a custom executable, export `PACE_CODEX_CLI_PATH` with its absolute path. For a custom Responses-compatible provider, follow [Configuration](configuration.md).
+If sign-in is needed, run `codex login` and complete the CLI's interactive instructions. PACE reuses the login while isolating its role calls from personal memories, plugins and directory instructions. For a custom executable, export `CODEX_CLI_PATH` with its absolute path. For a custom Responses-compatible provider, follow [Configuration](configuration.md).
 
 PACE does not load `.env` automatically. Export optional shell variables as described in [Configuration](configuration.md#authentication-and-custom-providers). No key is needed for the local installation checks below.
 
@@ -74,7 +69,7 @@ PACE does not load `.env` automatically. Export optional shell variables as desc
 
 ## 3. Prepare paper PDF tools when needed
 
-Explicit `paper` tasks require `xelatex`, `bibtex`, and `pdffonts` on PATH. Install a [TeX distribution](https://tug.org/texlive/) and [Poppler](https://poppler.freedesktop.org/). The bundled NeurIPS preprint style needs its LaTeX dependencies, including T1 fonts and courier; Chinese prose uses ctex and Fandol fonts.
+The research/proof quickstart needs no TeX or Poppler. Explicit `paper` tasks require `xelatex`, `bibtex`, and `pdffonts` on PATH. Install a [TeX distribution](https://tug.org/texlive/) and [Poppler](https://poppler.freedesktop.org/). The bundled NeurIPS preprint style needs its LaTeX dependencies, including T1 fonts and courier; Chinese prose uses ctex and Fandol fonts.
 
 ```bash
 xelatex --version
@@ -84,7 +79,7 @@ pdffonts -v
 
 The writer keeps `main.tex`, any bibliography and local assets together. PACE builds in a separate directory, checks unresolved references and Type 3 fonts, and records source delivery separately from PDF build status. These checks do not certify the mathematics.
 
-If tools are unavailable, the source remains saved. Repair the toolchain and use `pace resume --run-dir PATH` to rebuild without repeating completed authorship or review. Recognized source errors, such as an undefined LaTeX command, enter a bounded local revision and independent review. Other build failures retain their diagnostics for inspection.
+If tools are unavailable or a build fails, the source remains saved. Repair the toolchain and use `pace resume --run-dir PATH` to retry the selected paper task without rewriting an already committed manuscript.
 
 ## 4. Verify the installation without inference
 
@@ -100,7 +95,7 @@ pace problems --output outputs --json
 
 These commands do not call a model. `pace doctor` checks Python, POSIX utilities and Codex compatibility. An executable that exists but cannot run, or exits without a recognizable version, fails the check. These checks do not verify model access or service availability.
 
-Before requesting a paper, also check the PDF toolchain:
+Before an explicit paper task, also check the PDF toolchain:
 
 ```bash
 pace doctor --pdf
@@ -113,7 +108,7 @@ An empty problem list is expected before your first run. Proceed to the example 
 
 ## 5. Run the included example
 
-From the repository root, follow the [quickstart example](../examples/quickstart/README.md). It makes model calls, so choose a model and reasoning effort available to your account. Read the run `README.md` and `work/turn001/final_report.json`, then use the [user guide](user-guide.md) to investigate your own conjecture, continue a topic, or resume an interrupted turn.
+From the repository root, follow the [quickstart example](../examples/quickstart/README.md). It makes model calls, so choose a model and reasoning effort available to your account. Read `work/turn001/final_report.json`, then use the [user guide](user-guide.md) to investigate your own conjecture, continue a topic, or resume an interrupted turn.
 
 ## Troubleshooting
 
@@ -125,7 +120,7 @@ From the repository root, follow the [quickstart example](../examples/quickstart
 | `ModuleNotFoundError: pace` | Use the Python interpreter in the environment where PACE was installed. |
 | `ModuleNotFoundError: sympy` in an agent tool call | Use the absolute Python path in the call's execution capabilities; a nested shell's `python3` may belong to another environment. Install `.[math]` into the PACE environment if it is actually missing. |
 | `No module named fcntl` | Run PACE under macOS/Linux/WSL. |
-| `cli_not_found` | Make `codex` available on PATH, or set `PACE_CODEX_CLI_PATH`. |
+| `cli_not_found` | Make `codex` available on PATH, or set `CODEX_CLI_PATH`. |
 | `codex_isolation` check fails or `--ignore-user-config` is unrecognized | Update Codex CLI, then rerun `pace doctor`; do not remove the isolation flags. |
 | Login/provider/model error during a run | Check Codex configuration and model access in the same shell. Configuration checks do not verify service availability. |
 | Retry or stream-recovery warning | Allow the bounded recovery attempt to finish; the warning alone does not cancel the call. See [retry settings](configuration.md#authentication-and-custom-providers). |
@@ -153,4 +148,5 @@ uv sync --locked --no-editable --extra math
 
 An environment created by uv may not include pip. PACE supplies the current
 Python executable and optional tool availability to roles; missing optional
-packages do not imply that a theorem is false. Both modes finish without starting writing. Explicit paper tasks preserve reviewed source when missing TeX pauses PDF delivery.
+packages do not imply that a theorem is false. A proof-mode run does not require
+TeX unless a paper task is explicitly requested.

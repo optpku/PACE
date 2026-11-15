@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 
 from pace import cli
-from pace.pipeline import ProofPipeline
+from pace.orchestrator.pipeline import ProofPipeline
 from pace.runtime.llm import TransportSuccess
 from pace.runtime.output.calls import attempt_directory
 from pace.runtime.output.events import read_events
@@ -26,9 +26,6 @@ class ResearchTransport:
             payload = {'action': 'STOP'}
         else:
             raise AssertionError(call_name)
-        if payload.get("action") in {"DISPATCH", "STOP"}:
-            payload["route_assessment"] = "KEEP"
-            payload["route_reason"] = "The current obligations and dependencies remain unchanged."
         folder = attempt_directory(root, ledger_context['call_ref'], 1)
         response = json.dumps(payload)
         (folder / 'response.txt').write_text(response)
@@ -39,7 +36,7 @@ class ResearchTransport:
 
 def test_research_terminal_and_resume_use_only_the_final_report(tmp_path, monkeypatch, capsys):
     transport = ResearchTransport()
-    monkeypatch.setattr('pace.pipeline.build_llm', lambda **settings: transport)
+    monkeypatch.setattr('pace.orchestrator.pipeline.build_llm', lambda **settings: transport)
     source = tmp_path / 'problem.md'
     source.write_text('Classify all structures satisfying the stated axioms.\n')
     assert cli.main(['run', '--problem', str(source), '--problem-id', 'research', '--output', str(tmp_path), '--json']) == 0

@@ -64,8 +64,9 @@ def report_artifacts(workdir: Path, *, snapshots: bool = False) -> dict[str, str
 class ResearchReportOutliner:
     """Keep only request, file delivery and Composer provenance in the Host."""
 
-    def __init__(self, *, llm: Any, workdir: Path) -> None:
+    def __init__(self, *, llm: Any, composer_llm: Any, workdir: Path) -> None:
         self.llm = llm
+        self.composer_llm = composer_llm
         self.workdir = Path(workdir)
 
     def _attempt(self) -> str:
@@ -139,6 +140,7 @@ class ResearchReportOutliner:
         )
         try:
             composed = compose_prompt(
+                llm=self.composer_llm,
                 workdir=self.workdir,
                 assembly=PromptAssembly(
                     stage="HOST_RESEARCH_REPORT_OUTLINE",
@@ -151,6 +153,8 @@ class ResearchReportOutliner:
                     output_artifact_ref=output_ref,
                 ),
                 input_refs=refs,
+                call_name="prompt_composer_research_report_outline",
+                round_index=round_index,
             )
             _write_text_atomic(self.workdir / attempt / "final_prompt.md", composed.final_prompt)
             handle = begin_artifact_call(
@@ -224,8 +228,9 @@ class ResearchReportOutliner:
 class ResearchReportWriter:
     """Write one complete report using a frozen outline and the full user request."""
 
-    def __init__(self, *, llm: Any, workdir: Path) -> None:
+    def __init__(self, *, llm: Any, composer_llm: Any, workdir: Path) -> None:
         self.llm = llm
+        self.composer_llm = composer_llm
         self.workdir = Path(workdir)
 
     def _attempt(self) -> str:
@@ -324,6 +329,7 @@ class ResearchReportWriter:
         handle = None
         try:
             composed = compose_prompt(
+                llm=self.composer_llm,
                 workdir=self.workdir,
                 assembly=PromptAssembly(
                     stage="HOST_RESEARCH_REPORT_WRITING",
@@ -336,6 +342,8 @@ class ResearchReportWriter:
                     output_artifact_ref=output_ref,
                 ),
                 input_refs=refs,
+                call_name="prompt_composer_research_report_writer",
+                round_index=round_index,
             )
             _write_text_atomic(self.workdir / attempt / "final_prompt.md", composed.final_prompt)
             handle = begin_artifact_call(

@@ -70,16 +70,26 @@ where neither the specified certificate nor any nonconstant finite cycle exists.
 When `--mode` is omitted, the first target-location call selects `proof` only for tasks suited to direct proving; tasks requiring mechanism exploration, or uncertainty about suitability, select `research`. You can set either mode explicitly. Research follows the loop below; proof runs one initial Survey and up to five successive proof-and-review loops, stopping once verified.
 
 1. **Plan and gather sources.** The Director selects objectives and chooses between local exploration and deeper investigation; the Planner develops the mathematical route. Survey gathers literature and can optionally use [ReasAtlas](https://atlas.reaslab.io) for mathematical source retrieval through a separately supplied client and Skill; see [retrieval configuration](docs/configuration.md#reasatlas-source-retrieval).
-2. **Refine conjectures and their supporting arguments.** Refined Conjecture Investigation (RCI) develops candidate statements and mechanisms: intermediate claims intended to establish them. It checks whether the claims are justified without circular reasoning and whether they cover the full candidate. Proof attempts and counterexample searches distinguish an unsupported argument from a false statement, guiding repair, revision, or decomposition within the original request.
+2. **Refine conjectures and their supporting arguments.** The conjecture-refinement process, SMI, develops candidate statements and mechanisms: intermediate claims intended to establish them. It checks whether the claims are justified without circular reasoning and whether they cover the full candidate. Proof attempts and counterexample searches distinguish an unsupported argument from a false statement, guiding repair, revision, or decomposition within the original request.
 3. **Construct and review proofs.** The Prover assembles the relevant arguments. Auditor and Kernel independently review the candidate proof against the original target using model-based natural-language verification.
 4. **Retain evidence for the next task.** Versioned memory records results separately from their uses, preserving assumptions, scope, sources, dependencies, and review findings. Changes to a candidate or condition trigger renewed review of affected evidence; established results retain their original conditions. Reuse requires checking those conditions and the argument connecting the old conclusion to its new use. Missing steps and failed routes guide the next objective, with checked premises, exploratory material, and unresolved obligations kept distinct in task-specific context.
-5. **Inspect, write and continue.** The Host updates factual navigation and checked findings during research. Research ends with its mathematical result and saved evidence; it does not start long-form writing. Request `outline`, `report`, `paper-outline` or `paper` separately. Each requested outline, report or paper uses one author task; PDF recovery reuses the saved source. [Resume](docs/user-guide.md#resume-an-interrupted-turn) reuses completed work; [continue](docs/user-guide.md#continue-with-a-new-question) starts another turn with prior findings.
+5. **Report and continue.** Checked findings update progress as the research proceeds. Explicit writing tasks produce a research-report outline and report, or an independent paper outline and LaTeX/PDF paper from saved evidence. The Web application owns user updates, reader briefs and downloads. [Resume](docs/user-guide.md#resume-an-interrupted-turn) continues unfinished stages while reusing completed work; [continue](docs/user-guide.md#continue-with-a-new-question) starts a new turn with prior findings.
+
+A finding identifier names a mathematical result that can be improved over time.
+After checking the complete manuscript, the verifier explicitly chooses CREATE,
+UPDATE of an existing R entry, or NONE for supporting work and report assembly.
+An update replaces the current reading file while preserving every fixed work
+manuscript and its receipt. Proof dependencies bind those exact source versions.
+`results/findings/README.md` is thematic navigation, `catalog.md` lists current
+entries, and `archive.md` links checked originals, including updates and reports
+that did not add an identifier. Publication refreshes the catalog and archive
+without overwriting the thematic overview or changing target acceptance.
 
 ## Quick start
 
 ### 1. Install PACE
 
-Requirements: **Python 3.11+** and **Codex CLI** with access to your chosen model. The Python runtime has no third-party dependencies. Proof and research runs do not require TeX. Explicit paper tasks also need `xelatex`, BibTeX and `pdffonts`; see [PDF tools](docs/installation.md#paper-pdf-tools).
+Requirements: **Python 3.11+** and **Codex CLI** with access to your chosen model. The Python runtime has no third-party dependencies; Codex is installed separately. The proof-mode example below needs no TeX or Poppler. Explicit paper writing also needs `xelatex`, BibTeX, and `pdffonts`; see [PDF tools](docs/installation.md#paper-pdf-tools).
 
 The commands below use Bash. Run PACE on macOS/Linux or, on Windows, inside WSL; see the [environment requirements](docs/installation.md#requirements).
 
@@ -114,13 +124,13 @@ codex login status
 
 If sign-in is needed, run `codex login`. Custom provider and executable settings are covered in [Configuration](docs/configuration.md).
 
-PACE reuses the login and isolates role calls from personal Codex memories, plugins, hooks and directory instructions. Only Survey can retrieve external sources. `--web-search-mode on` (default) enables Survey retrieval; `off` disables it. All other roles always have retrieval disabled, with no option to enable it; blind probes also retain their restricted local context. Use a recent CLI supporting `codex exec --ignore-user-config`; `pace doctor` checks compatibility before inference.
+PACE reuses the login and isolates role calls from personal Codex memories, plugins, hooks and directory instructions. Search is available to each role within its assigned task by default (`--web-search-mode on`). Use `off` to disable external retrieval; blind probes retain their restricted local context. Use a recent CLI supporting `codex exec --ignore-user-config`; `pace doctor` checks compatibility before inference.
 
 PACE runs Codex with `--dangerously-bypass-approvals-and-sandbox` for unattended tasks. Use an environment whose filesystem and command access you intend to grant to the agent; see [execution permissions](docs/installation.md#requirements).
 
-### 3. Prepare PDF tools
+### 3. Prepare PDF tools for paper writing
 
-For requested paper delivery, install a TeX distribution and Poppler providing `xelatex`, `bibtex` and `pdffonts`; see [PDF tool setup](docs/installation.md#paper-pdf-tools). Build failures preserve the delivered source and diagnostics; resume retries compilation without another author call.
+For explicit paper tasks, install a TeX distribution and Poppler providing `xelatex`, `bibtex` and `pdffonts`; follow [PDF tool setup](docs/installation.md#paper-pdf-tools). The proof/research example below needs no TeX or Poppler.
 
 ### 4. Check the environment
 
@@ -130,7 +140,7 @@ In the same terminal, with the PACE environment active, run:
 pace doctor
 ```
 
-This checks Python, POSIX utilities and Codex compatibility without calling a model. For paper delivery, also run `pace doctor --pdf` to check the PDF toolchain and compile a small local document. That check may take a few minutes. Neither check verifies model access; the example below exercises a live model call.
+This checks Python, POSIX utilities and Codex compatibility without calling a model. Before requesting paper delivery, also run `pace doctor --pdf` to check the PDF toolchain and compile a small local document. That check may take a few minutes. Neither check verifies model access; the example below exercises a live model call.
 
 ### 5. Run the included example
 
@@ -145,7 +155,7 @@ pace run \
   --web-search-mode on
 ```
 
-This command makes model calls. Choose a model/effort pair available to your account. Proof mode performs one initial Survey, direct proving and independent verification. Writing is requested separately. Start reading at `outputs/even-square/README.md`; `work/turn001/final_report.json` records the mathematical outcome and evidence. `--max-proof-states` limits proof states, not total calls, time or cost; see [budgets](docs/configuration.md).
+This command makes model calls. Choose a model/effort pair available to your account. The example uses proof mode: one initial Survey (with search available when needed), direct proving and independent verification. Writing is a separate explicit task. Read `outputs/even-square/work/turn001/final_report.json` for the factual outcome and verification references. `--max-proof-states` caps proof states, not total calls, time, or cost; see [budgets](docs/configuration.md).
 
 ## Investigate your conjecture
 
@@ -157,28 +167,41 @@ pace run --problem conjecture.md --problem-id my-conjecture --output outputs \
   --model gpt-6.1-sol --reasoning-effort high --web-search-mode on
 ```
 
-List your research topics, then open `outputs/my-conjecture/README.md` for the current turn, findings and completed writing:
+List your research topics, then read the current turn's `final_report.json` under `outputs/my-conjecture/work/`:
 
 ```bash
 pace problems --output outputs
 ```
 
+Research runs accept `--max-rounds N` to cap outer dispatch rounds per user turn,
+including planning, source research and SMI exploration. Every parallel task takes
+one slot; batches are limited to the remaining slots. The last dispatched task and
+pending verification finish before research closes. Reaching the limit produces a
+completed run with an OPEN mathematical status unless a full candidate has passed
+verification. Explicit writing tasks can then report the existing results and gaps.
+Resume retains the saved limit and used rounds; continue starts a new turn with its
+own setting. This does not cap the model calls inside one round.
+
+In Research mode, Research and SMI each consume one proof-state credit per
+dispatch, including partial or failed attempts. SMI subphases and recovery share
+that reservation. Prover assembly, repair and verification consume no proof-state
+credits and can use existing evidence after the balance reaches zero. All roles
+remain subject to the research-round, call and time budgets.
+
 The user guide covers [report and paper writing](docs/user-guide.md#write-a-report-or-paper), [batch execution](docs/user-guide.md#run-a-batch), and [recorded result summaries](docs/user-guide.md#summarize-recorded-results). See [Configuration](docs/configuration.md) for models, retrieval, budgets, custom providers, and paper styles.
 
 ## Read the research output
 
-PACE saves mathematical originals, checkpoints, factual runtime records and author-delivered manuscripts. These files are usable directly from the CLI; the separate Web application is optional.
+PACE saves mathematical originals, checkpoints and factual runtime records. The external Web application renders user updates, thematic reader briefs, activity cards and download packages from these records.
 
-Run, turn and `round0001` pages link tasks, findings, checks and call logs. Current reading copies live in `results/`; historical originals live in `work/turnNNN/`. Finding IDs remain stable across checked updates. New runs freeze their runtime for recovery; existing experiments keep their original layout. See [experiment files](docs/user-guide.md#experiment-files), including `pace index` for rebuilding navigation without model calls.
+The core's reader layout keeps each public `work/turnNNN/roundN/` directory limited to its `README.md` index and numbered agent pages. Supporting manuscripts, SMI phase files, execution receipts and memory drafts stay in the hidden run directory; links in the reader pages open those originals. Execution and recovery continue to use the original files.
 
 | Output | What it provides |
 |---|---|
-| `README.md`, `work/turnNNN/README.md`, `roundNNNN/README.md` | Host-generated run, turn and dispatch navigation; no model calls. |
 | `work/turnNNN/final_report.json` | Bound mathematical result, mode selection and execution status. |
-| `results/findings/` | Current findings under stable IDs, with links to immutable originals and verification records. |
-| `results/outline.md`, `results/research_report.md` | Chinese report outline and complete author-delivered report. |
-| `results/paper_outline.md`, `results/paper/main.tex`, `main.pdf` | English paper outline, author-delivered manuscript and a PDF after successful compilation. |
-| `work/turnNNN/finalization/reports/`, `finalization/papers/` | Writing requests, frozen outlines, original author outputs and saved task state. |
+| `results/findings/` | Independently checked manuscripts with their verification references. |
+| `results/outline.md`, `results/research_report.md` | Explicit research-outline and report task outputs. |
+| `results/paper_outline.md`, `results/paper/main.tex`, `main.pdf` | Independent paper-writing outputs; PDF exists only after a successful build. |
 
 Reports and papers preserve the original hypotheses, proof scope and open gaps. Read [writing instructions](docs/user-guide.md#write-a-report-or-paper) for the two writing paths and [recorded result summaries](docs/user-guide.md#summarize-recorded-results) for batch inspection. Mathematical acceptance is separate from writing completion and Web delivery.
 

@@ -14,16 +14,13 @@ verification binding.
 
 from __future__ import annotations
 
-from pace.runtime.output.workspace import stage_ref
-
 import json
 import copy
-import uuid
 from collections.abc import Callable, Mapping
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
-from pace.contracts.proof_binding import (
+from pace.contracts.proof.binding import (
     load_active_target,
     resolve_proof_binding,
     resolve_verification_binding,
@@ -36,11 +33,11 @@ from pace.orchestrator.verification_round import (
     run_verification_round,
 )
 from pace.runtime.context_state import stage_verified_progress
+from pace.runtime.identifiers import new_id
 from pace.runtime.json_values import as_dict as _as_dict
 from pace.runtime.output.workspace import (
     RunWorkspace,
     is_call_path,
-    is_private_transport_path,
     path_has_symlink_component,
     work_ref,
 )
@@ -74,7 +71,7 @@ def _verify_candidate(
 ) -> dict[str, str]:
     """Persist independent reports once and return references to their outcome."""
 
-    state_dir = f"{stage_ref(round_index, workdir=root)}/verification"
+    state_dir = f"{work_ref(root)}/round{round_index}/verification"
     verification_ref = f"{state_dir}/verification_report.json"
     workspace = RunWorkspace(root=root, problem_id=root.name)
     proof_id = ""
@@ -214,7 +211,7 @@ def _verify_candidate(
         verification_call_ids: dict[str, str] = {}
 
         def audit_runner() -> dict[str, Any]:
-            from pace.agents.contract_auditor import (
+            from pace.agents.verification.contract_auditor import (
                 run_proof_contract_auditor,
             )
 
@@ -384,7 +381,7 @@ def _ensure_proof_binding(
         resolve_proof_binding(root, proof_manifest_ref=manifest_ref, proof_id=proof_id, proof_ref=proof_ref)
         return proof_id, manifest_ref
     # The Host, rather than the Prover response, owns the proof identity.
-    proof_id = f"PROOF-{uuid.uuid4().hex}"
+    proof_id = new_id("PROOF")
     manifest_ref = write_proof_manifest(
         root,
         target_contract_id=target_contract_id,
@@ -479,8 +476,10 @@ def _existing_ref(
 
 
 def _state_dir(root: Path, context: Mapping[str, Any], result_ref: str, round_index: int) -> str:
-    expected = f"{stage_ref(int(round_index), workdir=root)}/verification"
-    explicit = _string(context.get("verification_dir")).replace("\\", "/")
+    expected = f"{work_ref(root)}/round{int(round_index)}/verification"
+    explicit = _string(
+        context.get("verification_dir") or context.get("state_dir") or ""
+    ).replace("\\", "/")
     if explicit:
         _ensure_relative_ref(explicit, "verification_dir")
         normalized = explicit.strip("/")
@@ -517,6 +516,10 @@ def _ensure_relative_ref(value: str, field: str) -> None:
         raise DirectorVerifierError(f"{field} must be a public relative workspace reference")
 
 
+def _is_private_transport_path(path: Path) -> bool:
+    return is_call_path(path) or path.name.startswith("private_")
+
+
 def _resolve_file(root: Path, ref: str, field: str) -> Path:
     normalized = str(ref or "").strip().replace("\\", "/")
     _ensure_relative_ref(normalized, field)
@@ -526,7 +529,7 @@ def _resolve_file(root: Path, ref: str, field: str) -> Path:
         relative = path.relative_to(root_path)
     except ValueError as exc:
         raise DirectorVerifierError(f"{field} escapes the run workspace") from exc
-    if is_private_transport_path(relative):
+    if _is_private_transport_path(relative):
         raise DirectorVerifierError(
             f"{field} points to a private or transport artifact"
         )
@@ -546,7 +549,7 @@ def _resolve_optional_file(root: Path, ref: str, field: str) -> Path | None:
         relative = path.relative_to(root_path)
     except ValueError as exc:
         raise DirectorVerifierError(f"{field} escapes the run workspace") from exc
-    if is_private_transport_path(relative):
+    if _is_private_transport_path(relative):
         raise DirectorVerifierError(
             f"{field} points to a private or transport artifact"
         )
@@ -571,7 +574,7 @@ def _safe_output_path(root: Path, ref: str, field: str) -> Path:
         raise DirectorVerifierError(
             f"{field} escapes the run workspace: {normalized}"
         ) from exc
-    if is_private_transport_path(relative):
+    if _is_private_transport_path(relative):
         raise DirectorVerifierError(
             f"{field} points to a private or transport artifact"
         )

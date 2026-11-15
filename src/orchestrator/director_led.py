@@ -1,7 +1,7 @@
 """Host-owned production loop for Director-led mathematical research.
 
 A Director schedules bounded specialist work. Prompt Composer prepares ordinary
-mathematical tasks, while RCI owns its internal phase prompts. The Host executes
+mathematical tasks, while SMI owns its internal phase prompts. The Host executes
 those assignments and persists their artifacts and exact continuation state.
 Mathematical agents own reasoning; Auditor and Kernel own independent verdicts.
 History and method guides remain search context for subsequent rounds.
@@ -14,14 +14,12 @@ from __future__ import annotations
 import inspect
 import json
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field as dataclass_field, replace
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
-from pace.runtime.json_values import unique_strings
-
-from pace.contracts.director_protocol import (
+from pace.contracts.research.director_protocol import (
     DIRECTOR_FIELDS,
     DIRECTOR_PROTOCOL_SCHEMA_VERSION,
     DISPATCHABLE_AGENT_IDS,
@@ -31,7 +29,7 @@ from pace.contracts.director_protocol import (
     parse_director_decision,
     specialist_spec,
 )
-from pace.contracts.proof_binding import resolve_verification
+from pace.contracts.proof.binding import resolve_verification
 from pace.orchestrator.director_led_adapters import (
     build_specialist_prompt_assembly,
 )
@@ -49,7 +47,7 @@ from pace.runtime.output.workspace import (
 from pace.runtime.output.workspace import (
     _write_text_atomic as _write_text,
 )
-from pace.runtime.output.workspace import is_call_path, is_private_transport_path, path_has_symlink_component, stage_ref, work_ref
+from pace.runtime.output.workspace import is_call_path, stage_ref, work_ref
 from pace.runtime.prompt_composer import PromptComposerResult
 from pace.runtime.prompt_policy import PromptAssembly, load_prompt_assembly
 
@@ -412,6 +410,9 @@ class DirectorLedRunResult:
     def phase(self) -> str:
         return self.state.phase
 
+    @property
+    def stopped(self) -> bool:
+        return self.state.phase == "STOPPED"
 
     @property
     def result(self) -> str:
@@ -433,7 +434,7 @@ class DirectorLedEngine:
     ``composer`` receives validated decisions for roles that use the
     top-level Prompt Composer and must return a
     :class:`PromptComposerResult`; Survey/Research use their static role
-    prompts directly and RCI owns its internal phase prompt graph.
+    prompts directly and SMI owns its internal phase prompt graph.
     ``specialists`` maps protocol agent IDs to handlers.  A handler receives
     ``prompt``, ``decision``, ``context`` and the dispatch fields as keyword
     arguments.
@@ -455,6 +456,7 @@ class DirectorLedEngine:
         max_proof_states: int = 18,
         max_rounds: int | None = None,
         state_ref: str | None = None,
+        round_root: str | None = None,
         verifier: VerifierHandler | None = None,
         on_round_committed: Callable[..., Any] | None = None,
     ) -> None:
@@ -492,7 +494,16 @@ class DirectorLedEngine:
             raise ValueError(
                 f"Director-led state_ref must be {work_ref(workdir, 'state/director_state.json')}"
             )
+        normalized_round_root = _safe_relative_ref(
+            round_root,
+            default=work_ref(workdir),
+        )
+        if normalized_round_root != work_ref(workdir):
+            raise ValueError(
+                f"Director-led round_root must be {work_ref(workdir)}"
+            )
         self.state_ref = work_ref(workdir, 'state/director_state.json')
+        self.round_root = work_ref(workdir)
         self.commit_progress = True
         self.verifier = verifier
         self.parent_task_id = ""
@@ -513,7 +524,7 @@ class DirectorLedEngine:
         control_context: str = "",
         resume: bool = False,
     ) -> DirectorLedRunResult:
-        """Run until STOP, the proof-state budget, or a Host interface failure.
+        """Run until a verdict, STOP, an applicable budget, or a Host interface failure.
 
         ``resume=True`` opens the explicit state file.  No directory scan is
         used to infer progress.  A pending dispatch is resumed from its
@@ -586,18 +597,15 @@ class DirectorLedEngine:
             from pace.runtime.sessions import budget_exhausted
 
             reason = budget_exhausted(self.workdir)
+            if self.max_rounds is not None and state.round_index >= self.max_rounds:
+                reason = "RESEARCH_ROUND_LIMIT_REACHED"
             if reason:
-                state = replace(
+                state = self._replace_state(
                     state,
                     phase="FINALIZE",
                     stop_reason=reason,
                     terminal_result="FAILED",
                 )
-                self._persist_state(state)
-                break
-            if self.max_rounds is not None and state.round_index >= self.max_rounds:
-                state = replace(state, phase="FINALIZE", stop_reason="RESEARCH_ROUND_LIMIT_REACHED",
-                                terminal_result="FAILED")
                 self._persist_state(state)
                 break
             state = self._run_round(
@@ -618,7 +626,7 @@ class DirectorLedEngine:
             self.on_round_committed(
                 trigger_id=trigger_id,
                 round_index=state.round_index,
-                input_refs=unique_strings((
+                input_refs=_unique_strings((
                     *self._director_input_refs(state), *state.completed_result_refs,
                 )),
                 completed_result_refs=state.completed_result_refs,
@@ -873,7 +881,7 @@ class DirectorLedEngine:
         recovering: bool = False,
     ) -> DirectorLedState:
         round_index = state.round_index + 1
-        round_dir = self.workdir / stage_ref(round_index, workdir=self.workdir)
+        round_dir = self.workdir / self.round_root / f"round{round_index}"
         try:
             batch_path = round_dir / "batch.json"
             if recovering and batch_path.is_file():
@@ -881,7 +889,7 @@ class DirectorLedEngine:
                 reserved = DirectorLedState.from_json(_read_json(batch_path)["reserved_state"])
                 self._persist_state(reserved)
                 return run_batch(self, reserved, control_context=control_context)
-            if path_has_symlink_component(self.workdir, round_dir):
+            if _path_has_symlink_component(self.workdir, round_dir):
                 raise NotADirectoryError(
                     f"Director round path contains a symlink: {round_dir}"
                 )
@@ -903,10 +911,8 @@ class DirectorLedEngine:
                 )
                 allowed_entries = {
                     "director_context.json",
-                    "route_context.json",
                     "director_decision.json",
-                    "task.json",
-                    "context.json",
+                    "assignment/task.json",
                     "progress_snapshot.json",
                     "diagnostics.json",
                 }
@@ -921,7 +927,7 @@ class DirectorLedEngine:
                     )
                 context_path = round_dir / "director_context.json"
                 decision_path = round_dir / "director_decision.json"
-                assignment_path = round_dir / "task.json"
+                assignment_path = round_dir / "assignment/task.json"
                 if decision_path.is_file() and not context_path.is_file():
                     raise DirectorLedEngineError("dispatch decision has no input snapshot")
                 if assignment_path.is_file() and not decision_path.is_file():
@@ -952,7 +958,6 @@ class DirectorLedEngine:
             # checkpoint. Surface it through the same committed diagnostic
             # boundary as other Host failures instead of leaking an I/O error.
             return self._fail_round(state, round_index, "DIRECTOR", exc)
-        self._freeze_route_context(state, round_index)
         context = {
             "schema_version": DIRECTOR_LED_ROUND_SCHEMA_VERSION,
             "round_index": round_index,
@@ -982,11 +987,12 @@ class DirectorLedEngine:
                         "workdir": self.workdir,
                         "round_index": round_index,
                         "target_contract_id": context["target_contract_id"],
-                        "input_refs": unique_strings((*self._director_input_refs(state), *self._route_context_refs(round_index))),
+                        "input_refs": self._director_input_refs(state),
                         "completed_result_refs": state.completed_result_refs,
                         "proof_states_remaining": state.max_proof_states - state.proof_states_used,
-                        "research_rounds_remaining": (self.max_rounds - state.round_index
-                                                       if self.max_rounds is not None else None),
+                        "research_rounds_remaining": (
+                            self.max_rounds - state.round_index if self.max_rounds is not None else None
+                        ),
                         "control_context": str(control_context or ""),
                         "context": context,
                     },
@@ -994,10 +1000,8 @@ class DirectorLedEngine:
                 decision = _coerce_decision(
                     raw_decision,
                 )
-            from pace.contracts.director_protocol import director_reference_diagnostics
-            reference_issues = director_reference_diagnostics(decision, self.workdir)
-            if reference_issues:
-                raise DirectorProtocolError(json.dumps(reference_issues, ensure_ascii=False))
+            from pace.contracts.research.director_protocol import validate_director_reference_bindings
+            validate_director_reference_bindings(decision, self.workdir)
         except Exception as exc:
             return self._fail_round(state, round_index, "DIRECTOR", exc)
 
@@ -1023,9 +1027,8 @@ class DirectorLedEngine:
                 },
             )
             if decision.action is DirectorAction.DISPATCH:
-                assignment_ref = self._round_ref(round_index, "task.json")
+                assignment_ref = self._round_ref(round_index, "assignment/task.json")
                 output_ref = self._default_output_ref(decision.agent_id, round_index)
-                self._write_assignment_context(decision, round_index)
                 if recovering and (self.workdir / assignment_ref).is_file():
                     _validate_assignment(
                         _read_json(self.workdir / assignment_ref),
@@ -1050,10 +1053,10 @@ class DirectorLedEngine:
                 )
             else:
                 assignment_ref = ""
-            state = replace(
+            state = self._replace_state(
                 state,
                 round_index=round_index,
-                proof_states_used=state.proof_states_used + self._proof_state_cost(decision),
+                proof_states_used=state.proof_states_used + self._proof_state_cost(decision, state),
                 phase="PENDING_SPECIALIST" if decision.action is DirectorAction.DISPATCH else "STOPPED",
                 pending_dispatch_ref=directive_ref if decision.action is DirectorAction.DISPATCH else "",
                 pending_prompt_ref="",
@@ -1071,8 +1074,10 @@ class DirectorLedEngine:
             )
             self._persist_state(state)
         except DirectorBudgetExhausted:
-            state = replace(state, round_index=round_index, phase="FINALIZE",
-                            stop_reason="PROOF_STATE_BUDGET_EXHAUSTED", terminal_result="FAILED")
+            state = self._replace_state(
+                state, round_index=round_index, phase="FINALIZE",
+                stop_reason="PROOF_STATE_BUDGET_EXHAUSTED", terminal_result="FAILED",
+            )
             self._persist_state(state)
             publish_progress(self.workdir, task_id=f'round-{round_index:04d}-director',
                              stage='director', status='completed', round_index=round_index,
@@ -1105,7 +1110,6 @@ class DirectorLedEngine:
             *((FINDINGS_INDEX_REF,) if (self.workdir / FINDINGS_INDEX_REF).is_file() else ()),
             "memory/README.md",
             "memory/active_problem_dossier.json",
-            *(("memory/research_index.json",) if (self.workdir / "memory/research_index.json").is_file() else ()),
             state.last_specialist_result_ref,
             state.last_verification_ref,
             state.diagnostics_ref,
@@ -1116,55 +1120,7 @@ class DirectorLedEngine:
             repair_ref = str(verification.get("repair_context_ref") or "")
             if repair_ref:
                 refs.append(repair_ref)
-        return unique_strings(ref for ref in refs if isinstance(ref, str) and ref)
-
-    def _freeze_route_context(self, state: DirectorLedState, round_index: int) -> None:
-        path = self.workdir / self._round_ref(round_index, "route_context.json")
-        if path.is_file():
-            return
-        from pace.runtime.output.memory import refresh_memory_index
-        from pace.runtime.output.sources import survey_source_index
-
-        refresh_memory_index(self.workdir)
-        current = self.workdir / work_ref(self.workdir, "state/current_route.json")
-        route_state = _read_json(current) if current.is_file() else {}
-        route = route_state.get("ref", "")
-        sources = []
-        for ref in reversed(state.completed_result_refs):
-            if not ref.endswith("agent_result.json"):
-                continue
-            record = _read_json(self.workdir / ref)
-            if record.get("agent_id") == "survey" and record.get("status") == "SUCCEEDED":
-                sources = [survey_source_index(self.workdir, record)]
-                break
-        memory = _read_json(self.workdir / "memory/research_index.json")
-        next_task = memory.get("next_task_ref", "")
-        route_index = route_state.get("relations_ref", "")
-        archives = [route] if route else []
-        for result_ref in state.completed_result_refs:
-            if result_ref.endswith("agent_result.json"):
-                record = _read_json(self.workdir / result_ref)
-                if record.get("agent_id") == "planner" and record.get("deliverable_ref"):
-                    archives.append(record["deliverable_ref"])
-        refs = unique_strings(ref for ref in (route, next_task, route_index, *sources) if ref)
-        for ref in refs:
-            self._require_run_local_file_ref(ref, field="route/source context")
-        _write_json(path, {"route_ref": route, "route_index_ref": route_index,
-                           "next_task_ref": next_task, "input_refs": list(refs),
-                           "context_policy": "scoped/v1", "archive_refs": list(unique_strings(archives)),
-                           "finding_versions": {row["id"]: row["version"] for row in memory.get("records", [])},
-                           "unincorporated_finding_refs": memory.get("unincorporated_finding_refs", [])})
-
-    def _route_context_refs(self, round_index: int, *, include_route: bool = False) -> tuple[str, ...]:
-        ref = self._round_ref(round_index, "route_context.json")
-        path = self.workdir / ref
-        if not path.is_file():
-            return ()
-        data = _read_json(path)
-        refs = data["input_refs"]
-        if not include_route and (data.get("next_task_ref") or data.get("route_index_ref")):
-            refs = [item for item in refs if item != data["route_ref"]]
-        return (ref, *refs)
+        return _unique_strings(ref for ref in refs if isinstance(ref, str) and ref)
 
     def _progress_snapshot_ref(self, round_index: int) -> str:
         return self._round_ref(round_index, "progress_snapshot.json")
@@ -1175,7 +1131,7 @@ class DirectorLedEngine:
         """Bind execution inputs without changing the Director's ticket."""
 
         progress_ref = self._progress_snapshot_ref(round_index)
-        refs = unique_strings((
+        return _unique_strings((
             work_ref(self.workdir, "input/request.md"),
             work_ref(self.workdir, "input/problem.md"),
             work_ref(self.workdir, "input/target_contract.json"),
@@ -1183,47 +1139,16 @@ class DirectorLedEngine:
               if (self.workdir / work_ref(self.workdir, "input/handoff.md")).is_file() else ()),
             work_ref(self.workdir, "state/proof_loop_budget.json"),
             *((progress_ref,) if (self.workdir / progress_ref).is_file() else ()),
-            *self._route_context_refs(round_index, include_route=decision.agent_id == "planner"),
             *(ref for ref in decision.input_refs if ref != "memory/verified_progress.json"),
         ))
-        path = self.workdir / self._round_ref(round_index, "route_context.json")
-        context = _read_json(path) if path.is_file() else {}
-        if context.get("context_policy") != "scoped/v1":
-            return refs
-        # Resolve a duplicate advisory listing locally: explicit task inputs
-        # take precedence, except whole historical routes stay on demand.
-        optional = set(decision.archive_refs) - set(decision.input_refs)
-        if decision.agent_id != "planner":
-            optional.update(context.get("archive_refs", ()))
-        return unique_strings((*[ref for ref in refs if ref not in optional],
-                               self._round_ref(round_index, "context.json")))
 
-    def _write_assignment_context(self, decision: DirectorDecision, round_index: int) -> None:
-        """Freeze required and on-demand references before any specialist runs."""
-        path = self.workdir / self._round_ref(round_index, "route_context.json")
-        context = _read_json(path) if path.is_file() else {}
-        if context.get("context_policy") != "scoped/v1":
-            return
-        ref = self._round_ref(round_index, "context.json")
-        required = self._assignment_input_refs(decision, round_index)
-        archives = unique_strings((*context.get("archive_refs", ()), *decision.archive_refs))
-        value = {"required_refs": [item for item in required if item != ref],
-                 "archive_refs": [item for item in archives if item not in required],
-                 "usage": "Read required refs for this work item. Archive refs are available only on demand for a specific missing definition, dependency or objection; do not scan them all. Read original proofs and record dependencies actually used."}
-        path = self.workdir / ref
-        if path.is_file():
-            if _read_json(path) != value:
-                raise DirectorLedEngineError("frozen assignment context changed")
-        else:
-            _write_json(path, value)
-
-    def _proof_state_cost(self, decision: DirectorDecision) -> int:
+    def _proof_state_cost(self, decision: DirectorDecision, state: DirectorLedState) -> int:
         if decision.action is not DirectorAction.DISPATCH:
             return 0
-        return 1 if decision.agent_id in {"research", "rci"} else 0
+        return 1 if decision.agent_id in {"research", "smi"} else 0
 
     def _check_task_budget(self, tasks: tuple[DirectorDecision, ...], state: DirectorLedState) -> None:
-        cost = sum(self._proof_state_cost(task) for task in tasks)
+        cost = sum(self._proof_state_cost(task, state) for task in tasks)
         if state.proof_states_used + cost > state.max_proof_states:
             raise DirectorBudgetExhausted("insufficient proof states for this batch")
 
@@ -1283,10 +1208,8 @@ class DirectorLedEngine:
                 directive,
                 expected_round_index=state.round_index,
             )
-            from pace.contracts.director_protocol import director_reference_diagnostics
-            reference_issues = director_reference_diagnostics(decision, self.workdir)
-            if reference_issues:
-                raise DirectorProtocolError(json.dumps(reference_issues, ensure_ascii=False))
+            from pace.contracts.research.director_protocol import validate_director_reference_bindings
+            validate_director_reference_bindings(decision, self.workdir)
             if decision.action is not DirectorAction.DISPATCH:
                 raise DirectorLedEngineError("pending directive is not DISPATCH")
             spec = specialist_spec(decision.agent_id)
@@ -1303,7 +1226,6 @@ class DirectorLedEngine:
                 round_index=state.round_index,
             )
             assignment = _read_json(self.workdir / assignment_ref)
-            self._write_assignment_context(decision, round_index)
             output_ref = str(assignment.get("output_ref") or "").strip()
             if not output_ref:
                 raise DirectorLedEngineError("assignment has no Host output_ref")
@@ -1333,16 +1255,16 @@ class DirectorLedEngine:
                     if ref == self._progress_snapshot_ref(round_index)), ""),
             }
             publish_progress(self.workdir, task_id=f'round-{round_index:04d}', parent_task_id=self.parent_task_id, stage=decision.agent_id, status='started', round_index=round_index)
-            rci_owned_prompt_graph = decision.agent_id == "rci"
+            smi_owned_prompt_graph = decision.agent_id == "smi"
             manifest_ref = ""
             prompt_ref = ""
             final_prompt = ""
             input_refs = tuple(decision.input_refs)
             composer_checkpoint_committed = False
-            if rci_owned_prompt_graph:
+            if smi_owned_prompt_graph:
                 if state.last_composer_manifest_ref or state.pending_prompt_ref:
                     raise DirectorLedEngineError(
-                        "RCI dispatch must not carry a top-level Composer checkpoint"
+                        "SMI dispatch must not carry a top-level Composer checkpoint"
                     )
             else:
                 expected_manifest_ref = self._round_ref(
@@ -1405,21 +1327,22 @@ class DirectorLedEngine:
                 )
                 final_prompt = composer_record.final_prompt
                 # Commit prompt bytes before invoking an ordinary specialist.
-                # RCI instead owns an append-only internal phase graph and
+                # SMI instead owns an append-only internal phase graph and
                 # recovers from its committed assignment and outcome.
-                state = replace(
+                state = self._replace_state(
                     state,
                     pending_prompt_ref=prompt_ref,
                     last_composer_manifest_ref=manifest_ref,
                 )
                 self._persist_state(state)
             result_ref = self._round_ref(round_index, "agent_result.json")
-            if rci_owned_prompt_graph:
+            if smi_owned_prompt_graph:
                 recovered, specialist_value = False, None
             else:
                 recovered, specialist_value = self._recover_pending_specialist_value(
                     result_ref=result_ref,
                     output_ref=output_ref,
+                    agent_id=decision.agent_id,
                     round_index=round_index,
                     recovering=recovering and composer_checkpoint_committed,
                 )
@@ -1442,6 +1365,7 @@ class DirectorLedEngine:
                 )
             result_record, stable_ref = _coerce_specialist_result(
                 specialist_value,
+                default_ref=result_ref,
             )
             _validate_specialist_result_agent_id(
                 result_record,
@@ -1491,7 +1415,7 @@ class DirectorLedEngine:
                     workdir=self.workdir, report_ref=explicit_ref,
                     allow_network=result_record.get("external_retrieval_enabled") is True,
                 )
-                result_record["published_refs"] = list(unique_strings((
+                result_record["published_refs"] = list(_unique_strings((
                     *result_record.get("published_refs", ()), *source_refs,
                 )))
                 _write_json(self.workdir / result_ref, result_record)
@@ -1501,9 +1425,9 @@ class DirectorLedEngine:
                 for ref in result_record.get("published_refs", ()):
                     stable_refs.append(self._require_run_local_file_ref(ref, field="published_ref"))
             if decision.agent_id == "prover" and explicit_ref:
-                state = replace(state, candidate_ref=explicit_ref)
+                state = self._replace_state(state, candidate_ref=explicit_ref)
             specialist_succeeded = succeeded and bool(explicit_ref)
-            state = replace(
+            state = self._replace_state(
                 state,
                 phase=(
                     "VERIFY"
@@ -1520,7 +1444,7 @@ class DirectorLedEngine:
                 diagnostics_ref="",
             )
             if stable_refs:
-                state = replace(
+                state = self._replace_state(
                     state,
                     completed_result_refs=(*state.completed_result_refs, *(
                         ref for ref in stable_refs if ref not in state.completed_result_refs
@@ -1548,8 +1472,6 @@ class DirectorLedEngine:
                     result_ref=result_ref,
                 )
             return state
-        except DeliveryPaused:
-            raise
         except Exception as exc:
             # Host execution failed; retry the committed assignment without
             # reserving another task or spending another proof state.
@@ -1565,6 +1487,7 @@ class DirectorLedEngine:
         *,
         result_ref: str,
         output_ref: str,
+        agent_id: str,
         round_index: int,
         recovering: bool,
     ) -> tuple[bool, Mapping[str, Any] | None]:
@@ -1591,12 +1514,6 @@ class DirectorLedEngine:
 
         output_path = self.workdir / output_ref
         directory = output_path.parent
-        from pace.orchestrator.director_led_adapters import recover_completed_specialist_delivery
-
-        if recover_completed_specialist_delivery(self.workdir, output_ref):
-            # The adapter has saved a completed author call. It owns validation
-            # and recovery of the remaining batch repair; do not archive it.
-            return False, None
         uncommitted = [
             path for path in (
                 output_path,
@@ -1724,13 +1641,24 @@ class DirectorLedEngine:
                 + draft_map.read_text(),
                 call_id=composer_record.call_id,
             )
-        # Add method discovery once to new prompts. Restore committed prompts
-        # byte-for-byte; RCI owns its phase-specific resources.
-        if decision.agent_id != "rci":
+        # Add discovery after composition so it reaches the actual specialist,
+        # even when the Composer condenses its inputs. Committed prompts above
+        # are restored byte-for-byte; SMI owns its phase-specific resources.
+        if decision.agent_id != "smi":
             composer_record = PromptComposerResult(
                 final_prompt=append_skill_catalog(
                     composer_record.final_prompt,
                     workdir=self.workdir,
+                ),
+                call_id=composer_record.call_id,
+            )
+        # Add discovery after composition so it reaches the actual specialist,
+        # even when the Composer condenses its inputs. Committed prompts above
+        # are restored byte-for-byte; SMI owns its phase-specific resources.
+        if decision.agent_id != "smi":
+            composer_record = PromptComposerResult(
+                final_prompt=append_skill_catalog(
+                    composer_record.final_prompt, workdir=self.workdir,
                 ),
                 call_id=composer_record.call_id,
             )
@@ -1830,6 +1758,7 @@ class DirectorLedEngine:
                         candidate_ref=state.candidate_ref,
                     ),
                     verification_ref=committed_verification_ref,
+                    context=context,
                 )
 
             if pending_request_ref:
@@ -1883,6 +1812,7 @@ class DirectorLedEngine:
                             candidate_ref=state.candidate_ref,
                         ),
                         verification_ref=verification_ref,
+                        context=context,
                     )
             else:
                 # No Host request has been committed for this handoff.  Any
@@ -1926,7 +1856,7 @@ class DirectorLedEngine:
                 # Persist the marker only after the request bytes are durable.
                 # A crash before this state write leaves the request
                 # uncommitted and recovery will refuse both files.
-                state = replace(
+                state = self._replace_state(
                     state,
                     pending_verifier_request_ref=request_ref,
                 )
@@ -1968,6 +1898,7 @@ class DirectorLedEngine:
                 value,
                 resolved=resolved,
                 verification_ref=verification_ref,
+                context=context,
             )
         except Exception as exc:
             return self._fail_round(state, state.round_index, "VERIFY", exc)
@@ -1979,8 +1910,9 @@ class DirectorLedEngine:
         *,
         resolved: Mapping[str, Any],
         verification_ref: str,
+        context: Mapping[str, Any],
     ) -> DirectorLedState:
-        state = replace(
+        state = self._replace_state(
             state,
             phase="DIRECTOR",
             pending_verifier_request_ref="",
@@ -1988,7 +1920,7 @@ class DirectorLedEngine:
         )
         verification_status = resolved["status"]
         if verification_status == "PASS":
-            state = replace(
+            state = self._replace_state(
                 state,
                 phase="FINALIZE",
                 terminal_result="PASS",
@@ -2029,7 +1961,7 @@ class DirectorLedEngine:
             self.workdir / diagnostic_ref,
             diagnostic,
         )
-        next_state = replace(
+        next_state = self._replace_state(
             state,
             round_index=max(state.round_index, safe_round),
             phase="FAILED",
@@ -2055,11 +1987,11 @@ class DirectorLedEngine:
     def _default_output_ref(self, agent_id: str, round_index: int) -> str:
         names = {
             "framer": "research_brief.json",
-            "planner": "route.md",
-            "survey": "survey.md",
-            "rci": "research.md",
-            "research": "research.md",
-            "prover": "proof.md",
+            "planner": "planner_deliverable.md",
+            "survey": "survey_deliverable.md",
+            "smi": "smi_deliverable.md",
+            "research": "research_deliverable.md",
+            "prover": "candidate_proof.md",
         }
         return self._round_ref(round_index, names.get(agent_id, "deliverable.md"))
 
@@ -2084,7 +2016,7 @@ class DirectorLedEngine:
             return ""
         try:
             lexical = self.workdir / normalized
-            if path_has_symlink_component(self.workdir, lexical):
+            if _path_has_symlink_component(self.workdir, lexical):
                 return ""
             workspace_root = self.workdir.resolve()
             canonical = lexical.resolve()
@@ -2093,7 +2025,7 @@ class DirectorLedEngine:
             # A stable handoff must remain inside this run.  This also rejects
             # a public-looking symlink whose target is outside the workspace.
             return ""
-        if is_private_transport_path(canonical_relative):
+        if _is_private_transport_path(canonical_relative):
             return ""
         if not canonical.is_file():
             return ""
@@ -2124,7 +2056,7 @@ class DirectorLedEngine:
                 f"{field} must be a public relative workspace reference"
             )
         lexical = self.workdir / normalized
-        if path_has_symlink_component(self.workdir, lexical):
+        if _path_has_symlink_component(self.workdir, lexical):
             raise DirectorLedEngineError(f"{field} must not contain a symlink")
         try:
             workspace_root = self.workdir.resolve()
@@ -2134,7 +2066,7 @@ class DirectorLedEngine:
             raise DirectorLedEngineError(
                 f"{field} escapes the run workspace"
             ) from exc
-        if is_private_transport_path(canonical_relative):
+        if _is_private_transport_path(canonical_relative):
             raise DirectorLedEngineError(
                 f"{field} points to a private or transport artifact"
             )
@@ -2176,7 +2108,7 @@ class DirectorLedEngine:
         # not satisfy the round binding in that case.
         try:
             expected_root = (
-                self.workdir / stage_ref(int(round_index), workdir=self.workdir)
+                self.workdir / self.round_root / f"round{int(round_index)}"
             ).resolve()
             canonical = (self.workdir / normalized).resolve()
             canonical.relative_to(expected_root)
@@ -2187,7 +2119,7 @@ class DirectorLedEngine:
         return normalized
 
     def _load_state(self) -> DirectorLedState:
-        if path_has_symlink_component(self.workdir, self.state_path):
+        if _path_has_symlink_component(self.workdir, self.state_path):
             raise DirectorLedEngineError(
                 "Director-led state path must not contain a symlink"
             )
@@ -2197,17 +2129,15 @@ class DirectorLedEngine:
             raise DirectorLedEngineError("cannot load Director-led state") from exc
 
     def _persist_state(self, state: DirectorLedState) -> DirectorLedState:
-        if path_has_symlink_component(self.workdir, self.state_path):
+        if _path_has_symlink_component(self.workdir, self.state_path):
             raise DirectorLedEngineError(
                 "Director-led state path must not contain a symlink"
             )
         _write_json(self.state_path, state.to_json())
-        if self.state_path == self.workdir / work_ref(self.workdir, "state/director_state.json"):
-            from pace.runtime.output.memory import sync_execution_memory
-
-            sync_execution_memory(self.workdir, state.to_json())
         return state
 
+    def _replace_state(self, state: DirectorLedState, **changes: Any) -> DirectorLedState:
+        return replace(state, **changes)
 
     def _result(self, state: DirectorLedState) -> DirectorLedRunResult:
         return DirectorLedRunResult(
@@ -2222,7 +2152,7 @@ def _coerce_decision(value: Any) -> DirectorDecision:
         decision = value
         # Re-run Host checks against the current public snapshot even when a
         # collaborator constructed a dataclass directly.
-        from pace.contracts.director_protocol import (
+        from pace.contracts.research.director_protocol import (
             validate_director_decision,
         )
 
@@ -2234,11 +2164,7 @@ def _coerce_decision(value: Any) -> DirectorDecision:
         value = value["decision"]
     if not isinstance(value, Mapping):
         raise DirectorProtocolError("Director handler must return a decision object")
-    decision = parse_director_decision(value)
-    from pace.contracts.director_protocol import validate_director_decision
-
-    validate_director_decision(decision)
-    return decision
+    return parse_director_decision(value)
 
 
 def _coerce_persisted_decision(
@@ -2259,14 +2185,9 @@ def _coerce_persisted_decision(
     if not isinstance(value, Mapping):
         raise DirectorProtocolError("persisted director decision must be a JSON object")
     expected_fields = set(DIRECTOR_FIELDS) | {"schema_version", "round_index"}
-    # These context additions are optional in the serialized protocol. Frozen
-    # dispatches keep their original bytes and must remain readable on resume.
-    required_fields = expected_fields - {
-        "archive_refs", "route_assessment", "route_reason", "route_evidence_refs",
-    }
     actual_fields = set(value)
-    if not required_fields.issubset(actual_fields) or actual_fields - expected_fields:
-        missing = sorted(required_fields.difference(actual_fields))
+    if actual_fields != expected_fields:
+        missing = sorted(expected_fields.difference(actual_fields))
         extra = sorted(actual_fields.difference(expected_fields))
         details = []
         if missing:
@@ -2288,8 +2209,8 @@ def _coerce_persisted_decision(
         raise DirectorProtocolError(
             "persisted director decision belongs to a different round"
         )
-    payload = {field: value[field] for field in DIRECTOR_FIELDS if field in value}
-    return _coerce_decision(payload)
+    payload = {field: value[field] for field in DIRECTOR_FIELDS}
+    return parse_director_decision(payload)
 
 
 def _validate_assignment(
@@ -2428,7 +2349,7 @@ def _validate_assignment(
 
     assignment_path = Path(str(assignment_ref).replace("\\", "/"))
     directive_path = Path(str(directive_ref).replace("\\", "/"))
-    expected_assignment = directive_path.parent / "task.json"
+    expected_assignment = directive_path.parent / "assignment" / "task.json"
     if assignment_path.as_posix() != expected_assignment.as_posix():
         raise DirectorLedEngineError(
             "Director assignment ref is not bound to its directive round"
@@ -2639,7 +2560,7 @@ def _coerce_composer(value: Any) -> PromptComposerResult:
     return value
 
 
-def _coerce_specialist_result(value: Any) -> tuple[dict[str, Any], str]:
+def _coerce_specialist_result(value: Any, *, default_ref: str) -> tuple[dict[str, Any], str]:
     """Normalize an opaque specialist return and identify an explicit stable ref."""
 
     if isinstance(value, str):
@@ -2778,6 +2699,40 @@ def _strict_int(value: Any, field: str) -> int:
     return value
 
 
+def _is_private_transport_path(path: Path) -> bool:
+    """Return whether a canonical relative path names hidden transport data."""
+
+    return is_call_path(path) or path.name.startswith("private_")
+
+
+def _path_has_symlink_component(root: Path, path: Path) -> bool:
+    """Return whether a path uses a symbolic-link component below ``root``.
+
+    Resolving a reference and checking that its destination remains inside the
+    run is insufficient for machine-owned checkpoints: an in-run alias can
+    still substitute a different artifact while retaining the expected
+    lexical reference.  Check each lexical component before resolution so
+    canonical state and round identities remain stable.
+    """
+
+    root_path = Path(root)
+    candidate = Path(path)
+    try:
+        relative = candidate.relative_to(root_path)
+    except ValueError:
+        return True
+    current = root_path
+    for part in relative.parts:
+        current = current / part
+        try:
+            if current.is_symlink():
+                return True
+        except OSError:
+            # An unreadable component cannot establish a stable identity.
+            return True
+    return False
+
+
 def _validate_specialist_result_agent_id(
     result_record: Mapping[str, Any],
     *,
@@ -2798,6 +2753,15 @@ def _validate_specialist_result_agent_id(
         raise DirectorLedEngineError(
             "specialist result agent_id differs from dispatched agent"
         )
+
+
+def _unique_strings(values: Iterable[str]) -> tuple[str, ...]:
+    result: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if text and text not in result:
+            result.append(text)
+    return tuple(result)
 
 
 def _safe_relative_ref(value: str, *, default: str) -> str:

@@ -17,4 +17,4 @@ The linked case pages contain problem statements, result summaries, and referenc
 
 - [Example](../../examples/README.md): the runnable parity input and its commands.
 - [Reading results](../user-guide.md#read-results): current reports, findings, and verification evidence from your runs.
-- [Recorded result summaries](../user-guide.md#summarize-recorded-results): tables from selected run records; manuscripts and PDFs are available as local files.
+- [Exports and summaries](../user-guide.md#export-for-readers): tools for producing reader snapshots and tables from selected run records.

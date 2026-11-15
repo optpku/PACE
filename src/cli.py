@@ -8,11 +8,11 @@ import threading
 import sys
 from pathlib import Path
 
-from pace.contracts.problem import Problem, load_problem
+from pace.contracts.problem.loader import Problem, load_problem
 from pace.orchestrator.recovery import RecoveryError, resume_existing_run
 from pace.reporting.postmortem import postmortem_rescan
 from pace.reporting.research_report import RESEARCH_OUTLINE_REF
-from pace.reporting.theory_paper import PAPER_OUTLINE_REF
+from pace.reporting.theory_paper import PAPER_OUTLINE_REF, paper_artifacts, paper_build_status
 from pace.reporting.writing import active_writing_request
 from pace.runtime.output.workspace import RunWorkspace, list_problems
 
@@ -122,24 +122,11 @@ def _main(argv: list[str] | None = None) -> int:
     activity.add_argument("--active", action="store_true", help="mark missing or unfinished runs as still active")
     activity.add_argument("--inactive", action="store_true", help="mark missing or unfinished runs as settled")
 
-    index = sub.add_parser("index", help="rebuild factual navigation without model calls or evidence changes")
-    index.add_argument("--run-dir", required=True, type=Path)
-
     doctor = sub.add_parser("doctor", help="check local executables without model inference")
     doctor.add_argument("--pdf", action="store_true", help="also compile a paper and check its fonts")
     doctor.add_argument("--json", action="store_true")
 
     args = parser.parse_args(argv)
-    if getattr(args, "run_dir", None) is not None and args.command != "index":
-        from pace.runtime.pinned_runtime import reexec_pinned_runtime
-
-        reexec_pinned_runtime(args.run_dir, list(sys.argv[1:] if argv is None else argv))
-    if args.command == "index":
-        from pace.runtime.output.navigation import refresh_navigation
-        refresh_navigation(args.run_dir.resolve(), rebuild=True)
-        entry = args.run_dir.resolve() / "README.md"
-        print(entry)
-        return 0 if entry.is_file() else 2
     if args.command == "doctor":
         from pace.reporting.diagnostics import check_environment
         checks = check_environment(pdf=args.pdf)
@@ -234,17 +221,11 @@ def print_writing_result(output: Path, *, run_dir: Path, action: str, machine: b
         "outline": "research_outline", "report": "research_report",
         "paper-outline": "paper_outline", "paper": "paper_source",
     }[action]
-    details = {}
-    if action == "paper":
-        build = json.loads((output.parent / "build.json").read_text())
-        details = {"paper_build": build["status"]}
-        if output.with_name("references.bib").is_file():
-            details["paper_bibliography"] = str(output.with_name("references.bib"))
-        if build["status"] == "COMPLETE" and output.with_suffix(".pdf").is_file():
-            details["paper_pdf"] = str(output.with_suffix(".pdf"))
+    details = ({**{key: str(run_dir / ref) for key, ref in paper_artifacts(run_dir).items()},
+                "paper_build": paper_build_status(run_dir)} if action == "paper" else {})
     if machine:
         print(json.dumps({"event": f"{action.replace('-', '_')}_completed", "run_dir": str(run_dir),
-                          "navigation": str(run_dir / "README.md"), key: str(output), **details},
+                          key: str(output), **details},
                          ensure_ascii=False), flush=True)
     else:
         print(f"{key}={output}", flush=True)
@@ -278,8 +259,10 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--max-seconds", type=int, default=None, help="research wall-time soft budget"
     )
-    parser.add_argument("--max-rounds", type=int, default=None,
-                        help="maximum research dispatch rounds per user turn; resume keeps the saved limit")
+    parser.add_argument(
+        "--max-rounds", type=int, default=None,
+        help="maximum research dispatch rounds per user turn; resume keeps the saved limit",
+    )
     add_execution_args(parser)
 
 
@@ -297,7 +280,7 @@ def add_execution_args(parser: argparse.ArgumentParser) -> None:
         "--web-search-mode",
         choices=["off", "on"],
         default="on",
-        help="on enables Survey retrieval only (default); off disables it; all other roles always have retrieval disabled",
+        help="on allows every role to search as needed (default); off disables external retrieval",
     )
     parser.add_argument(
         "--web-search-model",
@@ -361,7 +344,7 @@ def _started(ws: RunWorkspace, *, machine: bool) -> None:
     )
     if machine:
         print(json.dumps({"event": "run_started", "execution_mode": mode, "problem_id": ws.problem_id,
-            "run_dir": str(ws.root), "turn_id": ws.turn_id, "navigation": str(ws.root / "README.md")}, ensure_ascii=False), flush=True)
+            "run_dir": str(ws.root), "turn_id": ws.turn_id}, ensure_ascii=False), flush=True)
     else:
         print(f"{ws.problem_id} / {ws.turn_id} / {mode or 'selecting mode'}: {ws.root}", flush=True)
 
@@ -393,7 +376,6 @@ def print_result(result, *, machine: bool = False) -> None:
             }}
         print(json.dumps({"event": "run_completed", "problem_id": result.problem_id,
             "run_dir": str(result.run_dir), "final_report": str(result.final_report_file),
-            "navigation": str(result.run_dir / "README.md"),
             "summary": str(result.report_file), **publications,
             "result": result.result, "run_status": result.run_status,
             "verification_components": components, **execution, **error}, ensure_ascii=False), flush=True)
@@ -402,7 +384,7 @@ def print_result(result, *, machine: bool = False) -> None:
     proof = str(result.proof_file) if result.proof_file else ""
     print(
         f"{result.problem_id}: result={result.result}; run_status={result.run_status}; "
-        f"entry={result.run_dir / 'README.md'}; "
+        f"work={result.run_dir / 'work/README.md'}; "
         f"proof={proof}; summary={result.report_file}; "
         + "; ".join(f"{key}={value}" for key, value in publications.items())
         + f"; final_report={result.final_report_file}{profile}"

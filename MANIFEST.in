@@ -6,7 +6,8 @@ include examples/README.md
 include examples/quickstart/*.md
 include examples/quickstart/config.example.json examples/quickstart/suite.json
 include scripts/run_batch.py scripts/codex_wrapper.sh
-include scripts/summarize_results.py
+include scripts/export_results.py scripts/summarize_results.py
+prune tests
 prune .github
 prune src/resources/skills/reasatlas-query
 global-exclude *.py[cod] .DS_Store AGENTS.md

@@ -7,9 +7,8 @@ results supported by mathematics already completed in this task. No draft is
 required when you only have a plan, a conjecture, an incomplete proof or a
 literature-search gap. Do not manufacture a result to fill the directory.
 
-Before drafting, inspect the current `results/findings/catalog.md` and relevant
-entries in `results/findings/README.md`, then the related original manuscripts.
-Use `results/findings/archive.md` only to locate a required historical version. The overview is navigation, not mathematical
+Before drafting, read `results/findings/README.md`, `catalog.md` and `archive.md`
+when available, then the relevant original manuscripts. The overview is navigation, not mathematical
 authority. State the actual increment over existing material. Mere restatement,
 a change of notation, reformatting, transcription, routine formula rechecking,
 or reusing an unchanged result in a later turn does not establish a new finding:
@@ -48,15 +47,6 @@ Use ordinary Markdown links relative to the draft file for local supporting
 files, and use only external URLs present in your inputs. Your manuscript will
 be independently checked before publication. Do not write verification verdicts
 or edit `results/`, shared state, another task's drafts or previously published
-findings. A later strengthening has a new immutable manuscript and check, normally under the same result identifier.
-
-For executions using the Host finding-inventory contract, write the requested
-`finding_manifest.json`. Identify the current manuscript of each result and any
-explicit old-to-new replacement, with a short reason. Keep superseded drafts as
-history. Do not present them as current deliverables or overwrite them. An
-inventory entry only selects a version for independent checking; it grants no
-mathematical approval and cannot withdraw a previously published result.
-Submit the inventory in the same delivery as the manuscripts. If the Host asks
-for an inventory correction, change only its file references and explicit
-version relationships; keep the mathematical files unchanged. Report ambiguity
-instead of inventing a replacement or selecting a version by mathematical merit.
+findings. A later strengthening has a new fixed work manuscript and check, but
+normally keeps the existing finding identifier. Final reports and summaries
+organize the results without becoming another finding.

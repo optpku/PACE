@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-from pace.runtime.output.workspace import stage_ref
-
 import json
 from pathlib import Path
 
-from pace.contracts.proof_binding import (
+from pace.contracts.proof.binding import (
     load_active_target,
     resolve_verification_binding,
 )
@@ -50,8 +48,8 @@ def initialize_proof_state(ws, *, max_loops, resource_variant):
     return state
 
 
-def run_proof(pipeline, ws):
-    """Resume only the committed phase; no Director or RCI is constructed."""
+def run_proof(pipeline, ws, problem):
+    """Resume only the committed phase; no Director or SMI is constructed."""
     ref = ws.work_ref("state/proof_state.json")
     state = json.loads(ws.path(ref).read_text())
 
@@ -93,7 +91,7 @@ def run_proof(pipeline, ws):
             save()
             break
         index = state["loop_index"]
-        directory = stage_ref(index, workdir=ws.root)
+        directory = ws.work_ref(f"round{index}")
         output = f"{directory}/proof.md"
         result_ref = f"{directory}/agent_result.json"
         if state["phase"] == "PROVE":
@@ -107,7 +105,7 @@ def run_proof(pipeline, ws):
                 output,
                 index,
                 f"Proof loop {index}/{state['max_loops']}. Write one complete proof of the same target. "
-                "Use the initial Survey and supplied sources only; external retrieval is disabled. On later loops revise the current proof "
+                "Use the initial Survey and retrieve additional sources when needed. On later loops revise the current proof "
                 "using its verifier feedback; preserve sound arguments and repair the actual gap. "
                 "Do not produce independent alternatives or a candidate pool.",
                 target_id,
@@ -155,7 +153,7 @@ def run_proof(pipeline, ws):
         state["loop_index"] += 1
         state["phase"] = "PROVE"
         save()
-    return _finish( ws, state, target_id)
+    return _finish(pipeline, ws, state, target_id)
 
 
 def _run_task(pipeline, ws, state, agent, output, index, brief, target_id):
@@ -182,11 +180,8 @@ def _run_task(pipeline, ws, state, agent, output, index, brief, target_id):
             return
     directory = ws.path(output).parent
     directory.mkdir(parents=True, exist_ok=True)
-    from pace.orchestrator.director_led_adapters import recover_completed_specialist_delivery
-
-    recover_completed_specialist_delivery(ws.root, output)
     # Incomplete files are useful drafts, never committed candidates.
-    if ws.path(output).exists() and not (directory / "artifact_delivery.json").exists():
+    if ws.path(output).exists():
         archive = directory / "interrupted_attempts"
         archive.mkdir(exist_ok=True)
         saved = archive / f"partial-{len(list(archive.iterdir())) + 1:04d}.md"
@@ -295,8 +290,9 @@ def _complete_survey_sources(ws, output, result_ref, result):
     ws.write_json(result_ref, result)
 
 
-def _finish( ws, state, target_id):
+def _finish(pipeline, ws, state, target_id):
     from pace.orchestrator.recovery import _project_terminal_result
+    from pace.runtime.output.results import finding_entries, publish_finding
 
     report_ref = ws.work_ref("final_report.json")
     policy = json.loads(ws.path(ws.work_ref("state/research_execution_policy.json")).read_text())
@@ -339,12 +335,13 @@ def _finish( ws, state, target_id):
             },
             "publication_status": "NO_PUBLICATION",
         }
-        from pace.runtime.output.results import publish_finding, finding_entries
         if passed:
             kernel = json.loads(ws.path(report["artifact_refs"]["kernel"]).read_text())
-            publish_finding(ws.root, source_ref=report["artifact_refs"]["proof"],
-                verification_ref=report["artifact_refs"]["verification"], round_index=state["loop_index"],
-                publication=kernel["publication"])
+            publish_finding(
+                ws.root, source_ref=report["artifact_refs"]["proof"],
+                verification_ref=report["artifact_refs"]["verification"],
+                round_index=state["loop_index"], publication=kernel["publication"],
+            )
             report["publication_status"] = "PUBLISHED"
         report["artifact_refs"]["findings"] = [row["ref"] for row in finding_entries(ws.root)]
         ws.write_json(report_ref, report)

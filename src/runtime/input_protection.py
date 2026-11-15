@@ -24,11 +24,12 @@ class protected_inputs:
         )
         # These immutable originals may be reached through a catalogue link
         # rather than explicitly named in this call's suggested input list.
-        from pace.runtime.output.results import finding_entries, finding_publications
+        from pace.runtime.output.results import finding_entries
 
         for row in finding_entries(self.root):
+            # The publisher can replace the current reading view between calls.
+            # Its bound manuscript and verification remain immutable originals.
             fixed.append(self.root / row["ref"])
-        for row in finding_publications(self.root):
             critical.extend(self.root / row[key] for key in ("source_ref", "verification_ref"))
         terminal = self.root / work_ref(root, "final_report.json")
         if terminal.is_file():

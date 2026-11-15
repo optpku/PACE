@@ -1,13 +1,12 @@
 """Small, explicit coercions used at JSON artifact boundaries.
 
-A caller must choose whether a scalar object is accepted as a single row;
-that choice is part of the artifact's interface.
+A caller must choose whether scalar values are accepted and whether strings
+are trimmed or deduplicated; those differences are part of persisted behavior.
 """
 
 from __future__ import annotations
 
 from typing import Any
-from collections.abc import Iterable
 import json
 
 
@@ -75,6 +74,47 @@ def one_or_many_dict_rows(value: Any) -> list[dict[str, Any]]:
     ]
 
 
-def unique_strings(values: Iterable[Any]) -> tuple[str, ...]:
-    """Normalize nonempty text values while preserving first-seen order."""
-    return tuple(dict.fromkeys(text for value in values if (text := str(value or "").strip())))
+def stripped_strings(value: Any) -> list[str]:
+    """Trim non-empty strings from either a scalar or a JSON array."""
+
+    if value is None:
+        return []
+    return [
+        str(item).strip()
+        for item in (value if isinstance(value, list) else [value])
+        if str(item).strip()
+    ]
+
+
+def list_strings(value: Any) -> list[str]:
+    """Trim non-empty strings from a JSON array; reject scalar values."""
+
+    return [
+        str(item).strip()
+        for item in (value if isinstance(value, list) else [])
+        if str(item).strip()
+    ]
+
+
+def deduplicated_strings(value: Any) -> list[str]:
+    """Trim and order-deduplicate strings from a JSON array."""
+
+    return list(
+        dict.fromkeys(
+            str(item).strip()
+            for item in (value if isinstance(value, list) else [])
+            if str(item).strip()
+        )
+    )
+
+
+def raw_strings(value: Any) -> list[str]:
+    """Stringify non-empty scalar or array values without trimming them."""
+
+    if value is None:
+        return []
+    return [
+        str(item)
+        for item in (value if isinstance(value, list) else [value])
+        if str(item)
+    ]

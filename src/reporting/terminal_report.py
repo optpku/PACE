@@ -25,7 +25,36 @@ class FinalReportEnvelope:
     result: str
     artifact_refs: dict[str, Any]
 
+    @staticmethod
+    def _validate_terminal_values(run_status: str, result: str) -> None:
+        if run_status not in TERMINAL_RUN_STATUSES:
+            raise FinalReportEnvelopeError(
+                "final_report.json has no terminal run_status"
+            )
+        if result not in TERMINAL_RESULTS:
+            raise FinalReportEnvelopeError(
+                "final_report.json has no terminal result"
+            )
 
+    @classmethod
+    def from_finalization(
+        cls,
+        report: dict[str, Any],
+        *,
+        result: str,
+    ) -> FinalReportEnvelope:
+        """Project the report already validated and published by finalization."""
+
+        run_status = str(report.get("run_status") or "completed")
+        terminal_result = str(result or "")
+        cls._validate_terminal_values(run_status, terminal_result)
+        refs = report.get("artifact_refs")
+        return cls(
+            report,
+            run_status,
+            terminal_result,
+            refs if isinstance(refs, dict) else {},
+        )
 
     @classmethod
     def validate(cls, report: dict[str, Any]) -> FinalReportEnvelope:
@@ -35,10 +64,7 @@ class FinalReportEnvelope:
             )
         run_status = str(report.get("run_status") or "")
         result = str(report.get("result") or "")
-        if run_status not in TERMINAL_RUN_STATUSES:
-            raise FinalReportEnvelopeError("final_report.json has no terminal run_status")
-        if result not in TERMINAL_RESULTS:
-            raise FinalReportEnvelopeError("final_report.json has no terminal result")
+        cls._validate_terminal_values(run_status, result)
         refs = report.get("artifact_refs")
         if not isinstance(refs, dict):
             raise FinalReportEnvelopeError(
