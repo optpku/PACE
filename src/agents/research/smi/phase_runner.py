@@ -617,6 +617,7 @@ class SmiPhaseRunner:
             )
             correction = (
                 f"Repair only the JSON receipt/interface for the previous SMI call. Do not run research, rewrite any existing mathematical file, change the question, or create missing mathematical evidence. Reuse the files that already exist. Allowed actions: {list(actions)}. Prior receipt: `{raw_ref}`. A valid prior action must remain unchanged. Correct only invalid control fields or file references. If the mathematics needs revision, leave this call failed for its owning mathematical phase.\n"
+                "Return only the corrected JSON receipt, following the original role's routing fields and file references. Do not append correction notes or a change log.\n"
                 + json.dumps(list(result.diagnostics), ensure_ascii=False)
                 + "\nExisting files:\n"
                 + "\n".join(drafts)

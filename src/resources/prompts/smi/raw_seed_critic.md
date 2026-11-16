@@ -25,7 +25,8 @@ Return exactly one JSON object:
 {
   "action": "ACCEPT | REPAIR | REJECT",
   "review_kind": "MATHEMATICAL | RESEARCH",
-  "brief": "one short disposition sentence"
+  "brief": "one short disposition sentence",
+  "dependency_refs": []
 }
 ```
 
@@ -56,3 +57,6 @@ when none were needed beyond the fixed question and target. Role instructions
 and the fixed question/target are already bound by the Host. Do not list every
 available source. Record a dependency followed on demand as well. Keep all
 calculations and justification in the Markdown artifact.
+List only mathematical inputs actually read and used. Describe empty or unreadable
+source attempts and their limitations in `review.md`; do not declare them as used
+evidence in `dependency_refs`.

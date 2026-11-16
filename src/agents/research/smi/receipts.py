@@ -9,22 +9,6 @@ from pace.runtime.output.workspace import (
 from pace.runtime.text_revisions import render_revision
 from pace.runtime.output.workspace import _write_text_atomic
 
-REVIEW_CONTROL_FIELDS = frozenset(
-    {
-        "action",
-        "brief",
-        "rationale",
-        "review_kind",
-        "mechanism_id",
-        "support_disposition",
-        "selected_mechanism_ids",
-        "representative_mechanism_id",
-        "handoff_disposition",
-        "handoff_reason",
-        "resolution_kind",
-        "resolution_argument",
-    }
-)
 REVIEW_PHASES = frozenset(
     {
         "RAW_SEED_CRITIC_MATH",
@@ -71,6 +55,7 @@ def host_receipt_fields(root, directory, phase, action, *, routing_context=None)
 def validate_receipt(
     root, directory, phase, payload, *, seed_base="", inputs=(), routing_context=None
 ):
+    """Check Host-consumed routing and files; retain additional model context."""
     fixed = host_receipt_fields(
         root, directory, phase, payload.get("action"), routing_context=routing_context
     )
@@ -266,15 +251,6 @@ def validate_receipt(
             else:
                 for ref in value:
                     file(key, ref)
-    if phase in REVIEW_PHASES:
-        for key in payload:
-            if key not in REVIEW_CONTROL_FIELDS and (
-                not key.endswith(("_ref", "_refs"))
-            ):
-                error(
-                    key,
-                    "put mathematical review content in review.md; the receipt contains only control fields and file references",
-                )
     refs = payload.get("dependency_refs")
     if (phase in REVIEW_PHASES or phase == "FRONTIER_EXPLORER" or "dependency_refs" in payload) and (
         not isinstance(refs, list) or not all(isinstance(ref, str) for ref in refs)
