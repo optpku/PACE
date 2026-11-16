@@ -4,6 +4,8 @@ import fcntl
 import json
 import logging
 import uuid
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +24,19 @@ TERMINAL_OUTCOMES = {
     "ABORTED_BY_USER",
 }
 _READ_CACHE: dict[str, dict[str, Any]] = {}
+_event_listener: Callable[[Path, str, dict[str, Any]], None] | None = None
+
+
+@contextmanager
+def listen_events(listener: Callable[[Path, str, dict[str, Any]], None]) -> Iterator[None]:
+    """Observe committed events for this CLI invocation, including worker threads."""
+    global _event_listener
+    previous = _event_listener
+    _event_listener = listener
+    try:
+        yield
+    finally:
+        _event_listener = previous
 
 
 def initialize_events(workdir: Path) -> None:
@@ -64,7 +79,14 @@ def append_event(workdir: Path, event_kind: str, **fields: Any) -> dict[str, Any
         }
         stream.write(json.dumps(event, ensure_ascii=False) + "\n")
         stream.flush()
-        return event
+    # Notify after releasing the journal lock; observers may read committed rows.
+    listener = _event_listener
+    if listener is not None:
+        try:
+            listener(Path(workdir), path.parent.name, event)
+        except Exception:
+            logger.warning("Committed event notification failed", exc_info=True)
+    return event
 
 
 def _decode_rows(content: str) -> list[dict[str, Any]]:
