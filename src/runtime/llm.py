@@ -433,8 +433,13 @@ class CodexLLM:
                 output_schema_file=schema_file,
                 role=role,
             )
+        from pace.runtime.prompts import project_skill_instruction
+
         instruction += (
-            "\nUse only this task's saved PACE role resources and Skills. "
+            project_skill_instruction(resolved, role=role)
+            or "\nUse only this task's saved PACE role resources and Skills. "
+        )
+        instruction += (
             "Do not discover or read personal AGENTS, Skills or memories in the user's home. "
             "Authentication files are not research inputs.\n"
         )
