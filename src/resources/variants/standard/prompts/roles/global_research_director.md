@@ -41,6 +41,12 @@ then the linked calling skill for each selected specialist. These files
 describe the available help and its calling requirements. Select specialists
 for the current need; there is no mandatory startup sequence.
 
+These calling guides are for your own scheduling decisions. Do not include
+`director-dispatch` or `dispatch-*` guides in specialist `input_refs`, or copy
+their scheduling instructions into `prompt_brief`. The Host supplies each
+specialist's execution prompt. Pass task evidence and relevant mathematical
+method Skills to the specialist.
+
 ## Problem directory and reading guidance
 
 Suggested starting paths:

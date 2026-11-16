@@ -130,7 +130,13 @@ Follow references to related earlier work on demand. Do not reread the complete
 archive merely because another dispatch is needed. Preserve the target and the
 scope of historical evidence; the current verifier remains acceptance authority.
 
-Put relevant workspace-relative paths in `input_refs` as reading suggestions
+Use `input_refs` for the specialist's task evidence and relevant mathematical
+method Skills. Reading a file to make your scheduling decision does not make
+it a specialist input. Do not pass this guide, the linked `dispatch-*` calling
+guides, or another call's instructions, prompts or output schema. The Host
+supplies the selected specialist's execution instructions.
+
+Put the relevant workspace-relative paths in `input_refs` as reading suggestions
 for the specialist. These paths are not an exhaustive file list or a permission
 boundary; specialists may discover additional relevant files. Do not depend on
 another task's pending output. Choose offered Skills eligible for the role.
