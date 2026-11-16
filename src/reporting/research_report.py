@@ -136,6 +136,7 @@ class ResearchReportOutliner:
             task_id=task_id,
             stage="reporter",
             status="started",
+            final=True,
             round_index=round_index,
         )
         try:
@@ -211,6 +212,7 @@ class ResearchReportOutliner:
                 task_id=task_id,
                 stage="reporter",
                 status="failed",
+                final=True,
                 round_index=round_index,
             )
             return False
@@ -219,6 +221,7 @@ class ResearchReportOutliner:
             task_id=task_id,
             stage="reporter",
             status="completed",
+            final=True,
             round_index=round_index,
             publication_refs={"research_outline": output_ref},
         )
@@ -324,6 +327,7 @@ class ResearchReportWriter:
             task_id=task_id,
             stage="reporter",
             status="started",
+            final=True,
             round_index=round_index,
         )
         handle = None
@@ -406,6 +410,7 @@ class ResearchReportWriter:
                 task_id=task_id,
                 stage="reporter",
                 status="failed",
+                final=True,
                 round_index=round_index,
             )
             return False
@@ -414,6 +419,7 @@ class ResearchReportWriter:
             task_id=task_id,
             stage="reporter",
             status="completed",
+            final=True,
             round_index=round_index,
             publication_refs={
                 "research_report": output_ref,

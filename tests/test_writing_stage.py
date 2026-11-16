@@ -1,0 +1,87 @@
+"""Writing progress belongs with its finalization calls, including on failure."""
+
+import json
+import re
+from pathlib import Path
+
+import pytest
+
+from pace import cli
+from pace.runtime.llm import TransportSuccess
+from pace.runtime.output.calls import attempt_directory
+from pace.runtime.output.events import read_updates
+from test_terminal_result import ResearchTransport
+
+
+class WritingTransport(ResearchTransport):
+    def __init__(self, *, failed_action=None):
+        super().__init__()
+        self.failed_action = failed_action
+
+    def complete_unstructured_result(self, prompt, *, workdir, call_name, ledger_context, **kwargs):
+        self.calls.append(call_name)
+        root = Path(workdir)
+        output = root / re.search(r"## Deliverable\nWrite `([^`]+)`", prompt)[1]
+        output.parent.mkdir(parents=True, exist_ok=True)
+        if call_name != self.failed_action:
+            output.write_text(
+                r"\documentclass{article}\begin{document}An open target.\end{document}"
+                if output.suffix == ".tex" else "# Writing result\n\nThe original target remains open.\n"
+            )
+        folder = attempt_directory(root, ledger_context["call_ref"], 1)
+        (folder / "response.txt").write_text("The writing task returned.")
+        return TransportSuccess(
+            text="The writing task returned.", invocation_id=f"writing-{len(self.calls)}",
+            call_name=call_name, exit_code=0, terminal_event_type="turn.completed",
+            accepted_output_source="file", output_schema_valid=True, attempt_count=1,
+            artifact_dir=folder,
+        )
+
+
+@pytest.mark.parametrize("failed_action", [
+    None, "research_report_outline", "research_report_writer",
+    "theory_paper_outline", "theory_paper_writer",
+])
+def test_cli_keeps_writing_progress_out_of_orientation(tmp_path, monkeypatch, failed_action):
+    transport = WritingTransport(failed_action=failed_action)
+    monkeypatch.setattr("pace.orchestrator.pipeline.build_llm", lambda **settings: transport)
+    builds = []
+
+    def build_paper(directory):
+        builds.append(directory)
+        status = "UNAVAILABLE" if len(builds) == 1 else "COMPLETE"
+        result = {"status": status, "reason": ""}
+        (directory / "build.json").write_text(json.dumps(result))
+        if status == "COMPLETE":
+            (directory / "main.pdf").write_bytes(b"%PDF-writing-stage")
+        return result
+
+    monkeypatch.setattr("pace.reporting.theory_paper.build_paper", build_paper)
+    problem = tmp_path / "problem.md"
+    problem.write_text("Classify all structures satisfying the stated axioms.\n")
+    assert cli.main(["run", "--problem", str(problem), "--problem-id", "topic",
+                     "--output", str(tmp_path), "--json"]) == 0
+    root = tmp_path / "topic"
+    final_report = root / "work/turn001/final_report.json"
+    original = final_report.read_bytes()
+    for action, agent in (
+        ("outline", "research_report_outline"), ("report", "research_report_writer"),
+        ("paper-outline", "theory_paper_outline"), ("paper", "theory_paper_writer"),
+    ):
+        arguments = [action, "--run-dir", str(root), "--json"]
+        if action in {"outline", "paper-outline"}:
+            arguments.extend(("--message", str(problem)))
+        if agent == failed_action:
+            assert cli.main(arguments) == 2
+            break
+        assert cli.main(arguments) == 0
+    if failed_action is None:
+        # Rebuilding an already delivered paper also publishes a finalization event.
+        assert cli.main(["resume", "--run-dir", str(root), "--json"]) == 0
+        assert len(builds) == 2
+    updates = [event for event in read_updates(root) if event["stage"] == "reporter"]
+    assert updates
+    assert all(event["stage_ref"] == "work/turn001/finalization" for event in updates)
+    assert all(not event["terminal"] for event in updates)
+    assert updates[-1]["status"] == ("failed" if failed_action else "completed")
+    assert final_report.read_bytes() == original

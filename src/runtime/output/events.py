@@ -131,19 +131,19 @@ def read_updates(workdir: Path, after: int = 0) -> list[dict[str, Any]]:
 
 def publish_progress(
     workdir: Path | None, *, task_id: str, stage: str, status: str,
-    round_index: int = 0, parent_task_id: str = "", notice: str = "",
+    round_index: int = 0, parent_task_id: str = "", notice: str = "", final: bool = False,
     task_count: int = 0, artifact_refs=(), publication_refs=None,
     final_report: dict | None = None, final_report_ref: str = "",
     execution_mode: str = "", mode_source: str = "", mode_reason: str = "",
     proof_loops_used: int = 0, max_proof_loops: int = 0,
 ) -> dict | None:
-    """Persist an observed task transition after its scientific files commit."""
+    """Persist a task transition; finalization ownership is separate from termination."""
     if workdir is None:
         return None
     root = Path(workdir)
     terminal = final_report is not None or bool(final_report_ref) or status in {"cancelled", "stopped"}
     fields = dict(task_id=task_id, parent_task_id=parent_task_id, stage=stage,
-        stage_ref=stage_ref(round_index, final=terminal, workdir=root),
+        stage_ref=stage_ref(round_index, final=final or terminal, workdir=root),
         round_index=round_index, status=status, notice=notice, task_count=task_count,
         artifact_refs=list(artifact_refs), publication_refs=dict(publication_refs or {}),
         final_report_ref=final_report_ref or (work_ref(root, "final_report.json") if final_report is not None else ""),

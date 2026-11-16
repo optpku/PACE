@@ -177,6 +177,7 @@ class TheoryPaperWriter:
                     task_id="reporter-artifacts-paper-build",
                     stage="reporter",
                     status="completed",
+                    final=True,
                     publication_refs=paper_artifacts(self.workdir, snapshots=True),
                 )
             return True
@@ -217,7 +218,7 @@ class TheoryPaperWriter:
             task += "Deliver only the paper outline. Use Markdown links relative to the exact output file.\n"
         else:
             task += f"Selected outline snapshot (read-only): `{state['outline_ref']}`.\nWrite the whole paper and its complete supplied proofs in `{Path(output_ref).parent}`. Keep main.tex and all required assets together using relative paths. Include bibliography files when cited; an uncited paper needs no bibliography file. The Host compiles with XeLaTeX and BibTeX. For Chinese use ctex with the installed Fandol fonts. Keep compilation logs and PDF text exports outside the delivered source directory. Complete all prose in this single author task; no independent editorial review or revision loop.\nNeurIPS template: `{resources}/templates/neurips2026/neurips_2026.sty`; use this NeurIPS preprint style and copy it unchanged into the output directory. Do not generate a checklist or submission questionnaire.\nYou may compile and fix concrete formatting errors within this task. The Host builds the delivered source and records build status separately from source delivery.\n"
-        publish_progress(self.workdir, task_id=task_id, stage="reporter", status="started")
+        publish_progress(self.workdir, task_id=task_id, stage="reporter", status="started", final=True)
         handle = None
         try:
             composed = compose_prompt(
@@ -291,13 +292,14 @@ class TheoryPaperWriter:
                     else "MODEL_REPRESENTATION",
                     diagnostics_ref=diagnostic,
                 )
-            publish_progress(self.workdir, task_id=task_id, stage="reporter", status="failed")
+            publish_progress(self.workdir, task_id=task_id, stage="reporter", status="failed", final=True)
             return False
         publish_progress(
             self.workdir,
             task_id=task_id,
             stage="reporter",
             status="completed",
+            final=True,
             publication_refs=publications,
         )
         return True
