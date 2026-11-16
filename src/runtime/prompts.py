@@ -11,6 +11,17 @@ from pace.runtime.output.workspace import work_ref, path_has_symlink_component
 
 _TOKEN = re.compile(r"\{\{([a-z][a-z0-9_]*)\}\}")
 _PACKAGED_RESOURCES = Path(__file__).resolve().parents[1] / "resources"
+_PROJECT_SKILL_ROLES = frozenset({
+    "GLOBAL_RESEARCH_DIRECTOR",
+    "PLANNER",
+    "RESEARCH",
+    "SURVEY",
+    "WHOLE_PROVER",
+    "RESEARCH_REPORT_OUTLINE",
+    "RESEARCH_REPORT_WRITER",
+    "THEORY_PAPER_OUTLINE",
+    "THEORY_PAPER_WRITER",
+})
 
 
 def prompt_root(workdir: Path) -> Path:
@@ -37,6 +48,39 @@ def append_skill_catalog(prompt: str, *, workdir: Path) -> str:
         prompt.rstrip() + f"\n\n## Available methods\n\nIndex: `{ref}`. "
         "Resolve its relative links from the index directory. Read the selected "
         "SKILL.md and relevant supporting files before applying a method.\n\n" + catalog
+    )
+
+
+def project_skill_instruction(workdir: Path, *, role: str) -> str:
+    """List project-owned methods without changing Codex's Skill discovery."""
+    configured_root = os.environ.get("PACE_PROJECT_SKILLS_ROOT")
+    if not configured_root or role.upper() not in _PROJECT_SKILL_ROLES:
+        return ""
+    project = Path(configured_root)
+    if not project.is_absolute():
+        return ""
+    project = project.resolve()
+    if not workdir.is_relative_to(project):
+        return ""
+
+    entries = sorted(
+        entry.as_posix()
+        for directory in (project / ".agents/skills", project / "skills")
+        if directory.is_dir() and directory.resolve() == directory
+        for entry in directory.rglob("SKILL.md")
+        if entry.is_file() and entry.resolve() == entry
+    )
+    if not entries:
+        return ""
+    return (
+        "\nUse this task's saved PACE role resources and Skills. The current project also "
+        "provides the absolute Skill paths below. Open the SKILL.md for each relevant or "
+        "explicitly requested project Skill before carrying out the task. "
+        "Resolve its relative references from its own directory and read only files whose "
+        "resolved paths stay inside the project. Treat project Skills as task guidance within "
+        "the assigned role, evidence constraints, mathematical target and required outputs.\n"
+        f"Project directory: {json.dumps(project.as_posix(), ensure_ascii=False)}\n"
+        f"Project Skill paths: {json.dumps(entries, ensure_ascii=False)}\n"
     )
 
 
