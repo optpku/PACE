@@ -1,6 +1,7 @@
 """Role instructions and native sessions through the production call boundary."""
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -15,6 +16,36 @@ from pace.runtime.prompt_composer import compose_prompt
 from pace.runtime.prompt_policy import build_prompt_assembly
 from pace.runtime.prompts import materialize_run_resources, prompt_root
 from pace.runtime.semantic import begin_artifact_call
+
+
+@pytest.mark.parametrize("resume", [False, True])
+def test_custom_provider_overrides_reach_the_active_exec_scope(tmp_path, resume):
+    executable = tmp_path / "codex"
+    executable.write_text('''#!/usr/bin/env python3
+import argparse,json
+p=argparse.ArgumentParser()
+p.add_argument('-c',action='append',default=[])
+e=p.add_subparsers(dest='command').add_parser('exec')
+e.add_argument('-c',action='append',default=[])
+r=e.add_subparsers(dest='subcommand').add_parser('resume')
+r.add_argument('thread')
+r.add_argument('-c',action='append',default=[])
+args=p.parse_args()
+print(json.dumps(dict(value.split('=',1) for value in args.c)))
+''')
+    executable.chmod(0o755)
+    env = {**os.environ, "NL_PROOF_REAL_CODEX": str(executable), "NL_PROOF_CODEX_AUTH_MODE": "api_key",
+           "NL_PROOF_CODEX_PROVIDER_NAME": "testprovider", "NL_PROOF_CODEX_BASE_URL": "http://127.0.0.1/v1",
+           "NL_PROOF_CODEX_API_KEY": "local-test-key"}
+    command = [str(Path(__file__).resolve().parents[1] / "scripts/codex_wrapper.sh"), "exec"]
+    if resume:
+        command.extend(("resume", "native-thread"))
+    command.extend(("-c", "model_providers.testprovider.request_max_retries=8"))
+    result = subprocess.run(command, env=env, text=True, capture_output=True, check=True)
+    settings = json.loads(result.stdout)
+    assert settings["model_providers.testprovider.name"] == '"testprovider"'
+    assert settings["model_providers.testprovider.request_max_retries"] == "8"
+    assert settings["model_provider"] == '"testprovider"'
 
 
 @pytest.fixture

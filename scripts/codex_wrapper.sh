@@ -35,21 +35,10 @@ else
   exit 2
 fi
 
-forwarded_args=()
-provider_config_inserted=false
-for argument in "$@"; do
-  forwarded_args+=("$argument")
-  if [[ "$argument" == "exec" && "$provider_config_inserted" == false ]]; then
-    forwarded_args+=("${config_args[@]}")
-    provider_config_inserted=true
-  fi
-done
-
-if [[ "$provider_config_inserted" == false ]]; then
-  if [[ "$#" -eq 0 ]]; then
-    exec "$real_codex" "${config_args[@]}"
-  fi
-  forwarded_args=("${config_args[@]}" "${forwarded_args[@]}")
+# Keep provider and per-call overrides in the same command scope. In particular,
+# exec resume owns its own -c list rather than inheriting exec's list.
+if [[ "${1:-}" == "exec" ]]; then
+  exec "$real_codex" "$@" "${config_args[@]}"
 fi
 
-exec "$real_codex" "${forwarded_args[@]}"
+exec "$real_codex" "${config_args[@]}" "$@"
