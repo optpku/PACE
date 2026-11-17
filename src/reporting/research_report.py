@@ -129,7 +129,7 @@ class ResearchReportOutliner:
             *completed_result_refs,
         )
         refs = tuple(dict.fromkeys((ref for ref in candidates if (self.workdir / ref).is_file())))
-        task = f"Run directory: `{self.workdir.resolve()}`\nRead the complete current user input and additional requirements: `{state['request_ref']}`.\nApply the assigned role `{guides[0]}` and report composition Skill `{guides[1]}` once.\nBrowse the entire run, including historical turns, and follow source references as needed. The listed files are entry points, not a reading allowlist. Preserve the original request; do not replace it with a summary. Generate only the complete research report's outline. All mathematical evidence, targets, budgets and verdicts are read-only.\nRequired output file: `{output_ref}`\nUse Markdown links relative to this exact output file.\n"
+        task = f"Run directory: `{self.workdir.resolve()}`\nRead the complete current user input and additional requirements: `{state['request_ref']}`.\nUse the report composition Skill `{guides[1]}` for this task.\nBrowse the entire run, including historical turns, and follow source references as needed. The listed files are entry points, not a reading allowlist. Preserve the original request; do not replace it with a summary. Generate only the complete research report's outline. All mathematical evidence, targets, budgets and verdicts are read-only.\nRequired output file: `{output_ref}`\nUse Markdown links relative to this exact output file.\n"
         handle = None
         publish_progress(
             self.workdir,
@@ -321,7 +321,7 @@ class ResearchReportWriter:
             work_ref(self.workdir, "final_report.json"),
         )
         refs = tuple(dict.fromkeys((ref for ref in candidates if (self.workdir / ref).is_file())))
-        task = f"Run directory: `{self.workdir.resolve()}`\nRead the complete current user input and additional requirements: `{state['request_ref']}`.\nSelected outline snapshot (read-only): `{state['outline_ref']}`.\nApply the assigned role `{guides[0]}` and report composition Skill `{guides[1]}` once.\nFollow the outline's source links and read the original statements, proofs and evidence. The listed files are entry points, not a reading allowlist. Complete the whole report, including technical appendices, in this single author task. All source evidence, the selected outline, mathematical targets and verdicts are read-only.\nRequired output file: `{output_ref}`\nUse Markdown links relative to this exact output file.\n"
+        task = f"Run directory: `{self.workdir.resolve()}`\nRead the complete current user input and additional requirements: `{state['request_ref']}`.\nSelected outline snapshot (read-only): `{state['outline_ref']}`.\nUse the report composition Skill `{guides[1]}` for this task.\nFollow the outline's source links and read the original statements, proofs and evidence. The listed files are entry points, not a reading allowlist. Complete the whole report, including technical appendices, in this single author task. All source evidence, the selected outline, mathematical targets and verdicts are read-only.\nRequired output file: `{output_ref}`\nUse Markdown links relative to this exact output file.\n"
         publish_progress(
             self.workdir,
             task_id=task_id,

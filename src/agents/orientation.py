@@ -15,7 +15,7 @@ from pace.contracts.problem.target import (
 from pace.contracts.problem.target import target_contract_id
 from pace.runtime.json_values import dict_rows as _rows
 from pace.runtime.output.workspace import RunWorkspace, work_ref
-from pace.runtime.prompts import render_prompt_template
+from pace.runtime.prompts import render_role_task
 from pace.runtime.roles import SemanticRoleSpec
 from pace.runtime.schema import (
     INTEGER,
@@ -183,7 +183,7 @@ def run_problem_orientation(
 
 def build_research_decision_prompt(*, workdir: Path, proof_brief: bool = False) -> str:
     mode = "proof" if proof_brief else "research"
-    prompt = f"Host execution mode: {mode}.\n\n" + render_prompt_template(
+    prompt = f"Host execution mode: {mode}.\n\n" + render_role_task(
         "roles/research_decision.md",
         workdir=workdir,
         problem_ref=work_ref(workdir, "input/problem.md"),
@@ -218,7 +218,7 @@ def build_problem_extraction_prompt(
             for index, line in enumerate(_normalize_newlines(problem_text).splitlines(), 1)
         ],
     }
-    return render_prompt_template(
+    return render_role_task(
         "roles/problem_extraction.md", workdir=workdir,
         host_context=json.dumps(context, ensure_ascii=False, indent=2),
     )

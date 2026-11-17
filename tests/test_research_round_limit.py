@@ -23,6 +23,10 @@ class RoundLimitTransport(ProofPublicationTransport):
     def complete_structured_result(self, prompt, *, workdir, call_name, ledger_context, **kwargs):
         root = Path(workdir)
         if call_name == "problem_orientation_extract":
+            from pace.runtime.agent_environment import role_home
+
+            for role in ("GLOBAL_RESEARCH_DIRECTOR", "SURVEY", "PROBLEM_ORIENTATION_EXTRACTOR"):
+                assert (role_home(root, role) / "AGENTS.md").is_file()
             payload = {"target_clauses": [{"start_line": 1, "end_line": 1}],
                        "recommended_mode": "research", "mode_reason": "Investigate the exact target."}
         elif call_name == "problem_research_decision":

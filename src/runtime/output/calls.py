@@ -35,6 +35,9 @@ def begin_call(
         prompt_ref = (directory / "prompt.md").relative_to(workdir).as_posix()
         _write_text_atomic(Path(workdir) / prompt_ref, prompt)
     record_ref = (directory / "record.json").relative_to(workdir).as_posix()
+    from pace.runtime.agent_environment import role_home
+
+    home = meta.get("agent_home") or role_home(workdir, role)
     _write_json_atomic(
         Path(workdir) / record_ref,
         {
@@ -54,6 +57,8 @@ def begin_call(
             "response_ref": "",
             "deliverable_ref": "",
             "invocation_ids": [],
+            "agent_home": str(home) if home else "",
+            "thread_id": "",
         },
     )
     return record_ref

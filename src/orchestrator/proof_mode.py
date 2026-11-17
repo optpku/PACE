@@ -15,7 +15,6 @@ from pace.orchestrator.director_led_adapters import (
 from pace.orchestrator.director_verifier import build_default_verifier
 from pace.runtime.output.events import publish_progress
 from pace.runtime.prompts import (
-    load_prompt_template,
     materialize_run_resources,
     validate_resource_snapshot,
 )
@@ -214,16 +213,10 @@ def _run_task(pipeline, ws, state, agent, output, index, brief, target_id):
             ws.work_ref("resources/skills/direct-proving-and-gap-closure/SKILL.md"),
         )
     refs = tuple(x for x in refs if ws.path(x).is_file())
-    role_ref = (
-        "roles/proof_prover.md" if agent == "prover" else "roles/director_led_survey.md"
-    )
-    prompt = load_prompt_template(role_ref, workdir=ws.root)
-    prompt += "\n\nHost execution mode: proof. " + brief
+    prompt = "Host execution mode: proof. " + brief
     prompt += "\nEarlier-turn sources, candidates and reviews are reading context only. Check their conditions again for this turn; historical acceptance never grants a new proof verdict."
     prompt += "\n## Files to read\n" + "\n".join(f"- `{ref}`" for ref in refs)
     prompt += f"\n## Deliverable\nWrite `{output}`.\n"
-    from pace.runtime.prompts import prompt_root
-
     if agent == "prover":
         from pace.runtime.prompt_composer import write_dependency_manifest
 
@@ -232,14 +225,6 @@ def _run_task(pipeline, ws, state, agent, output, index, brief, target_id):
         )
         refs = (*refs, dependency_ref)
         prompt += "\n" + dependencies
-        for name in (
-            "target_immutability",
-            "scope_and_failure",
-            "source_use",
-            "numerical_boundary",
-        ):
-            guide = prompt_root(ws.root) / "guides" / f"{name}.md"
-            prompt += "\n" + guide.read_text(encoding="utf-8")
     ws.write_json(
         str(Path(output).parent / "prompt_assembly.json"),
         {

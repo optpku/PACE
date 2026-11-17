@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 
-def isolated_codex_args(workdir: Path) -> list[str]:
+def isolated_codex_args(workdir: Path, *, agent_home: Path | None = None) -> list[str]:
     """Keep authentication in CODEX_HOME while excluding personal context.
 
     Provider options supplied explicitly by codex_wrapper.sh remain CLI
@@ -38,7 +38,9 @@ def isolated_codex_args(workdir: Path) -> list[str]:
         "features.apps": "false",
         "features.hooks": "false",
         "features.multi_agent": "false",
-        "project_doc_max_bytes": "0",
+        "project_doc_max_bytes": (
+            str(max(32768, (agent_home / "AGENTS.md").stat().st_size)) if agent_home else "0"
+        ),
         "project_root_markers": "[]",
         "skills.config": disabled_skills,
     }
@@ -71,14 +73,18 @@ def check_codex_isolation(executable: str) -> dict[str, Any]:
 def isolated_codex_environment(
     environment: dict[str, str], directory: Path
 ) -> dict[str, str]:
-    """Reuse only authentication in an empty per-call configuration home."""
+    """Reuse only authentication in the selected Codex configuration home."""
     source = Path(environment.get("CODEX_HOME") or Path.home() / ".codex")
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     authentication = source / "auth.json"
     original = authentication.read_bytes() if authentication.is_file() else None
     local = directory / "auth.json"
     if original is not None:
-        local.symlink_to(authentication.resolve())
+        try:
+            local.symlink_to(authentication.resolve())
+        except FileExistsError:
+            # Persistent role homes already have the shared authentication link.
+            pass
     try:
         yield {**environment, "CODEX_HOME": str(directory)}
     finally:

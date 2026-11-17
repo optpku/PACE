@@ -10,9 +10,8 @@ from pace.runtime.json_values import as_dict as _as_dict
 from pace.runtime.output.results import FINDINGS_INDEX_REF, FINDINGS_CATALOG_REF, FINDINGS_ARCHIVE_REF
 from pace.runtime.output.workspace import work_ref
 from pace.runtime.prompts import (
-    load_prompt_template,
     prompt_root,
-    render_prompt_template,
+    render_role_task,
 )
 from pace.runtime.roles import SemanticRoleSpec
 from pace.runtime.schema import open_object
@@ -34,12 +33,12 @@ def verify_finding(
 ) -> SemanticCallResult:
     """Check one standalone result without granting whole-target acceptance."""
 
-    prompt = render_prompt_template(
+    prompt = render_role_task(
         "roles/finding_verifier.md", workdir=workdir,
         draft_ref=draft_ref,
         target_contract_id=target_contract_id,
         input_files="\n".join(f"- `{ref}`" for ref in input_refs),
-    ) + "\n\n" + load_prompt_template("output/finding_publication.md", workdir=workdir)
+    )
     return run_semantic_role(
         llm, prompt, workdir=workdir,
         call_name=f"finding_verifier_{round_index:04d}_{Path(draft_ref).stem}",
@@ -288,29 +287,20 @@ def build_math_verifier_kernel_prompt(
         if path:
             unique_files.setdefault(path, purpose)
     file_lines = "\n".join(f"- {purpose}: `{path}`" for path, purpose in unique_files.items())
-    prompt = render_prompt_template(
+    prompt = render_role_task(
         "roles/math_verifier_kernel.md",
         workdir=workdir,
         artifact_refs=file_lines,
-    ) + "\n\n" + load_prompt_template("output/structured.md", workdir=workdir)
-    prompt += "\n\n" + load_prompt_template("output/finding_publication.md", workdir=workdir)
+    )
     proof_ref = artifact_refs.get("proof_file")
     if proof_ref:
         draft_dir = (Path(proof_ref).parent / "findings").as_posix()
         prompt += (
-            "\n\n" + load_prompt_template("output/findings.md", workdir=workdir)
-            + f"\nFinding draft directory for this candidate: `{draft_dir}`. "
-            "Apply the shared finding guidance to useful checked local results, "
-            "including when the complete target fails. Leave existing drafts "
-            "unchanged. A separate independent check precedes publication."
+            f"\nFinding draft directory for this candidate: `{draft_dir}`."
         )
         memory_ref = (Path(proof_ref).parent / "verification/memory_note.md").as_posix()
         prompt += (
-            "\n\n" + load_prompt_template("output/memory.md", workdir=workdir)
-            + f"\nMemory draft path for this Kernel task: `{memory_ref}`. "
-            "Record useful checked local implications, exact failed steps and "
-            "conditions that remain open. Keep the structured verdict authoritative; "
-            "the optional note does not change that verdict."
+            f"\nMemory draft path for this Kernel task: `{memory_ref}`."
         )
     return prompt
 
@@ -320,9 +310,6 @@ def _kernel_method_refs(workdir: Path) -> tuple[str, ...]:
     method_root = prompt_root(root) / "kernel"
     return (
         (method_root / "verification_methods.md").relative_to(root).as_posix(),
-        (prompt_root(root) / "output/findings.md").relative_to(root).as_posix(),
-        (prompt_root(root) / "output/finding_publication.md").relative_to(root).as_posix(),
-        (prompt_root(root) / "output/memory.md").relative_to(root).as_posix(),
         *(path.relative_to(root).as_posix() for path in sorted((method_root / "verification_cards").glob("*.md"))),
     )
 

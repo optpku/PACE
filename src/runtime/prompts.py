@@ -180,3 +180,21 @@ def render_prompt_template(name: str, *, workdir: Path, **values: object) -> str
             f"missing={missing}, extra={extra}"
         )
     return _TOKEN.sub(lambda match: str(values[match.group(1)]), template)
+
+
+def render_role_task(name: str, *, workdir: Path, **values: object) -> str:
+    """Keep current template bindings in the task; Codex loads fixed AGENTS.md."""
+    render_prompt_template(name, workdir=workdir, **values)
+    return "\n\n".join(
+        f"## {name}\n{value}" for name, value in values.items() if name != "turn_dir"
+    )
+
+
+def is_prompt_resource(path: Path, *, workdir: Path) -> bool:
+    """Include writing-task resource snapshots as well as the turn snapshot."""
+    root = Path(workdir).resolve()
+    path = path.resolve()
+    if not path.is_relative_to(root):
+        return False
+    parts = path.relative_to(root).parts
+    return any(parts[index:index + 2] == ("resources", "prompts") for index in range(len(parts) - 1))

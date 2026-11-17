@@ -11,6 +11,7 @@ import time
 import uuid
 import tempfile
 from collections.abc import Iterable
+from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Protocol, TextIO, Union
@@ -416,6 +417,9 @@ class CodexLLM:
         record_ref = str(ledger_context["call_ref"])
         invocation_dir = call_directory(resolved, record_ref)
         record = json.loads((resolved / record_ref).read_text(encoding="utf-8"))
+        from pace.runtime.agent_environment import director_thread, record_native_session
+
+        agent_home = Path(record["agent_home"]) if record["agent_home"] else None
         prompt_file = resolved / record["prompt_ref"]
         schema_file = None
         if output_schema is not None:
@@ -424,12 +428,15 @@ class CodexLLM:
         if ledger_context.get("inline_task") is True:
             instruction = _search_instruction(self.web_search) + prompt
         else:
+            from pace.runtime.prompts import is_prompt_resource
+
             instruction = _build_file_driven_cli_instruction(
                 web_search=self.web_search,
                 call_name=call_name,
                 workdir=resolved,
                 prompt_file=prompt_file,
-                input_refs=ledger_context.get("input_refs", ()),
+                input_refs=(ref for ref in ledger_context.get("input_refs", ())
+                            if agent_home is None or not is_prompt_resource(resolved / ref, workdir=resolved)),
                 output_schema_file=schema_file,
                 role=role,
             )
@@ -485,8 +492,11 @@ class CodexLLM:
             response_file = attempt_dir / "response.txt"
             stdout_path = attempt_dir / "stdout.jsonl"
             stderr_path = attempt_dir / "stderr.txt"
+            thread_id = director_thread(agent_home) if agent_home and role.upper() == "GLOBAL_RESEARCH_DIRECTOR" else ""
             cmd = [self.cli_path, "exec"]
-            cmd.extend(isolated_codex_args(resolved))
+            if thread_id:
+                cmd.extend(["resume", thread_id])
+            cmd.extend(isolated_codex_args(resolved, agent_home=agent_home))
             cmd.extend(retry_codex_args())
             # Codex enables search by default, including in full-access mode.
             # Pin both states instead of relying on the absence of --search.
@@ -508,18 +518,18 @@ class CodexLLM:
             cmd.extend(
                 [
                     "--json",
-                    "--ephemeral",
-                    "--skip-git-repo-check",
-                    "-C",
-                    str(resolved),
                     "-m",
                     self.model,
                     "--dangerously-bypass-approvals-and-sandbox",
                     "-o",
                     str(response_file),
-                    "-",
                 ]
             )
+            if agent_home is None:
+                cmd.append("--ephemeral")
+            if not thread_id:
+                cmd.extend(["--skip-git-repo-check", "-C", str(resolved)])
+            cmd.append("-")
             record_transport_attempt_started(
                 resolved,
                 call_id=call_id,
@@ -548,9 +558,9 @@ class CodexLLM:
                             environment.get("CODEX_HOME") or Path.home() / ".codex"
                         )
                         config_root.mkdir(parents=True, exist_ok=True)
-                        with tempfile.TemporaryDirectory(
-                            prefix="pace-call-", dir=config_root
-                        ) as config_home:
+                        home_context = (nullcontext(agent_home) if agent_home else
+                                        tempfile.TemporaryDirectory(prefix="pace-call-", dir=config_root))
+                        with home_context as config_home:
                             with isolated_codex_environment(
                                 environment, Path(config_home)
                             ) as isolated_env:
@@ -577,6 +587,9 @@ class CodexLLM:
                                 exc_info=True,
                             )
                         finally:
+                            if agent_home is not None:
+                                record_native_session(home=agent_home, role=role, stdout_path=stdout_path,
+                                                      record_path=resolved / record_ref)
                             if (
                                 getattr(self, "profile", False)
                                 or os.environ.get("PACE_PROFILE") == "1"

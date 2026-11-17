@@ -6,7 +6,7 @@ from typing import Any
 from pace.agents.roles import run_semantic_role
 from pace.runtime.json_values import as_dict as _as_dict
 from pace.runtime.output.workspace import work_ref
-from pace.runtime.prompts import load_prompt_template, render_prompt_template
+from pace.runtime.prompts import render_role_task
 from pace.runtime.roles import SemanticRoleSpec
 from pace.runtime.semantic import (
     SemanticInterfaceFailure,
@@ -150,10 +150,10 @@ def build_proof_contract_auditor_prompt(*, artifact_refs: dict[str, str], workdi
         if path:
             unique_files.setdefault(path, purpose)
     file_lines = "\n".join(f"- {purpose}: `{path}`" for path, purpose in unique_files.items())
-    return render_prompt_template(
+    return render_role_task(
         "roles/proof_contract_auditor.md", workdir=workdir,
         artifact_refs=file_lines,
-    ) + "\n\n" + load_prompt_template("output/structured.md", workdir=workdir)
+    )
 
 
 def proof_contract_auditor_output_schema() -> dict[str, Any]:

@@ -213,7 +213,7 @@ class TheoryPaperWriter:
             work_ref(self.workdir, "final_report.json"),
         )
         refs = tuple(dict.fromkeys((ref for ref in candidates if (self.workdir / ref).is_file())))
-        task = f"Run directory: `{self.workdir.resolve()}`\nRead the complete user input and additional requirements: `{state['request_ref']}`.\nApply the assigned role `{guides[0]}` and paper composition Skill `{guides[1]}` once.\nBrowse the entire run and historical turns, following original proof and literature sources. The listed files are entry points, not a reading allowlist. A research report is optional context. All source evidence, mathematical targets, budgets and verdicts are read-only. Do not perform new research or experiments.\nRequired output file: `{output_ref}`\n"
+        task = f"Run directory: `{self.workdir.resolve()}`\nRead the complete user input and additional requirements: `{state['request_ref']}`.\nUse the paper composition Skill `{guides[1]}` for this task.\nBrowse the entire run and historical turns, following original proof and literature sources. The listed files are entry points, not a reading allowlist. A research report is optional context. All source evidence, mathematical targets, budgets and verdicts are read-only. Do not perform new research or experiments.\nRequired output file: `{output_ref}`\n"
         if outline:
             task += "Deliver only the paper outline. Use Markdown links relative to the exact output file.\n"
         else:

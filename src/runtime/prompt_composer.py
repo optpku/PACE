@@ -1,4 +1,4 @@
-"""Deterministic assembly of fixed mathematical role instructions."""
+"""Deterministic assembly of current tasks, separate from role AGENTS.md."""
 
 from __future__ import annotations
 
@@ -42,11 +42,10 @@ def compose_prompt(
     round_index: int = 0,
 ) -> PromptComposerResult:
     """Render a fixed role task without a model call."""
-    from pace.runtime.prompts import prompt_root
+    from pace.runtime.prompts import is_prompt_resource
 
     root = Path(workdir).resolve()
-    resources = prompt_root(root).resolve()
-    guidance, inputs = [], []
+    inputs = []
     for ref in dict.fromkeys(
         (*assembly.required_refs, *input_refs, *assembly.candidate_refs)
     ):
@@ -55,13 +54,10 @@ def compose_prompt(
             if ref in assembly.required_refs:
                 raise PromptComposerError(f"required task input is missing: {ref}")
             continue
-        if path.is_relative_to(resources):
-            guidance.append(path.read_text(encoding="utf-8").strip())
-        else:
+        if not is_prompt_resource(path, workdir=root):
             inputs.append(ref)
     prompt = "\n\n".join(
         (
-            *dict.fromkeys(guidance),
             f"## Target\n{assembly.target_contract_id}",
             "## Assigned task\n" + assembly.prompt_seed,
             "## Files to read\n" + "\n".join(f"- `{ref}`" for ref in inputs),

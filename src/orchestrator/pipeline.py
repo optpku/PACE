@@ -397,6 +397,9 @@ class ProofPipeline:
             materialize_run_resources(
                 ws.root, resource_variant=policy["resource_variant"]
             )
+        from pace.runtime.agent_environment import prepare_agent_environments
+
+        prepare_agent_environments(ws.root, mode=policy["mode"])
         if policy["mode"] is None:
             return
         ws.write_json(

@@ -22,7 +22,7 @@ from pace.contracts.research.director_protocol import (
     validate_director_reference_bindings,
 )
 from pace.runtime.output.workspace import work_ref
-from pace.runtime.prompts import append_skill_catalog, render_prompt_template, skill_index_ref
+from pace.runtime.prompts import render_role_task, skill_index_ref
 from pace.runtime.roles import SemanticRoleSpec
 from pace.runtime.semantic import (
     SemanticCallResult,
@@ -53,7 +53,7 @@ def build_global_director_prompt(
     control_context: str = "",
     specialist_ids: Iterable[str] | None = None,
 ) -> str:
-    """Render the static Director prompt around suggested reading paths.
+    """Render current Director task fields; fixed instructions live in AGENTS.md.
 
     Only reference names and scheduling metadata are interpolated. Mathematical
     artifacts remain files for the model to read, so this constructor cannot
@@ -77,7 +77,7 @@ def build_global_director_prompt(
     ) or "- none"
     context = str(control_context or "").strip()
     context_text = context if context else "No additional control context was supplied."
-    prompt = render_prompt_template(
+    prompt = render_role_task(
         GLOBAL_DIRECTOR_PROMPT_REF,
         workdir=workdir,
         input_refs=reading_text,
@@ -86,7 +86,7 @@ def build_global_director_prompt(
         control_context=context_text,
         specialist_catalog=specialist_text,
     )
-    return append_skill_catalog(prompt, workdir=workdir)
+    return prompt
 
 
 def run_global_director(

@@ -1,8 +1,7 @@
-"""References for model-owned prompt assembly.
+"""References for deterministic task assembly and its provenance.
 
-The Host selects stable references and records provenance metadata.  The
-Prompt Composer model arranges those references and writing guidance. The
-Host does not inspect or summarize mathematical JSON.
+Fixed role instructions are loaded from the turn-owned AGENTS.md. Mathematical
+inputs stay in their original files; the Host does not summarize their content.
 """
 
 from __future__ import annotations
