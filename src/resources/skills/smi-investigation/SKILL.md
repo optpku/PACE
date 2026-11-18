@@ -31,10 +31,9 @@ to the current phase. The phase prompt owns the requested files and receipt.
    candidate, or decomposition in response to the actual failed relation.
    Read [challenge review](references/multi_mechanism/semi_open_audit.md).
 
-SMI may retrieve and analyze external sources when the run enables Web Search.
-Blind phases use their supplied probe statement for independent searches;
-their local workspace inputs remain limited to the probe task and static
-methods. Never consult hidden candidate mechanisms, source leads, reviews,
+Only Survey may retrieve external sources. SMI analyzes the supplied sources
+and reports missing evidence to the Director. Blind phases remain limited to
+the supplied probe task and static methods. Never consult hidden candidate mechanisms, source leads, reviews,
 sibling work, or history through this library.
 
 ## Output and handoff
@@ -48,3 +47,21 @@ complete proof's fresh Auditor/Kernel review.
 
 - [Shared phase discipline](references/smi_search_core.md)
 - [Example: repair a mechanism or revise a claim](examples/support-versus-coverage.md)
+
+
+## Versioned task continuity
+
+Preserve the accepted question version when only the method changes. Read the
+relevant prior attempt and its exact obstacle before trying the same mechanism.
+State what differs in the present attempt: assumptions, parameters, evidence,
+method, or the relation being tested. Keep the parent objective and the missing
+connection to that objective visible.
+
+A local task is legitimate when its contribution and missing downstream bridge
+are explicit. Do not repeatedly enlarge its scope merely because it does not
+solve the full target. If the present inputs yield no informative continuation,
+save the scoped obstacle and return control rather than repeating the same test.
+
+A failure of this argument is not a refutation of the question. A negative
+result applies only to the claim, mechanism, and conditions actually checked.
+Keep mathematical changes separate from control-field or formatting repairs.

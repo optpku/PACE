@@ -115,6 +115,17 @@ def resume_existing_run(
             return workspace.root / artifacts[key]
         raise RecoveryError("continuation_hook_unavailable", "the requested writing task needs a pipeline continuation")
 
+    # Restore derived records before terminal shortcuts or publication checks.
+    # Only parent-committed handoffs are replayed; this never calls a model.
+    from pace.contracts.research.memory import enabled
+    if enabled(workspace.root):
+        from pace.runtime.output.memory import commit_research_memory, refresh_memory_index
+        try:
+            commit_research_memory(workspace.root)
+            refresh_memory_index(workspace.root)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise RecoveryError('invalid_research_memory', str(exc)) from exc
+
     proof_state = workspace.path(work_ref(workspace.root, "state/proof_state.json"))
     if proof_state.is_file():
         state = _read_json_object(proof_state)

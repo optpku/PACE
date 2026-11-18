@@ -39,11 +39,19 @@ def reserve_batch(engine, state, decision):
     reserved = replace(state, round_index=state.round_index + len(tasks),
                        proof_states_used=state.max_proof_states - credits,
                        phase="PENDING_BATCH", pending_assignment_ref=manifest_ref)
+    # Freeze every input before any worker starts. Siblings never observe a new route.
+    frozen = []
+    for offset, task in enumerate(tasks):
+        index = first + offset
+        # All workers use the first round's already committed progress snapshot.
+        refs = engine._assignment_input_refs(task, index)
+        frozen.append({"round_index": index, "input_refs": list(refs), **engine._context_binding(index)})
     _write_json(engine.workdir / manifest_ref, {
         "reserved_state": reserved.to_json(),
         "first_round": first,
         "tasks": [task.to_json() for task in tasks],
         "input_snapshot": state.to_json(),
+        "contexts": frozen,
     })
     engine._persist_state(reserved)
     return reserved
@@ -62,6 +70,7 @@ class _TaskExecutor(DirectorLedEngine):
             # The parent Host reports once after the batch is merged; workers
             # must never race on the shared user-facing report.
             on_round_committed=None,
+            reporter=parent.reporter,
         )
         self.parent_task_id = f"batch-{first_round:04d}"
         self.commit_progress = False
@@ -88,7 +97,7 @@ def _execute(parent, snapshot, task, index, first_round, control_context):
         directive = worker._round_ref(index, "director_decision.json")
         assignment = worker._round_ref(index, "assignment/task.json")
         _write_json(worker.workdir / directive, {
-            "schema_version": DIRECTOR_PROTOCOL_SCHEMA_VERSION, "round_index": index, **task,
+            "schema_version": "research_director_decision/v3" if task.get("next_step_kind") else DIRECTOR_PROTOCOL_SCHEMA_VERSION, "round_index": index, **task,
         })
         decision = _coerce_decision(task)
         _write_json(worker.workdir / assignment, {
@@ -98,6 +107,7 @@ def _execute(parent, snapshot, task, index, first_round, control_context):
             "input_refs": list(worker._assignment_input_refs(decision, index)),
             "output_ref": worker._default_output_ref(task["agent_id"], index),
             "director_decision_ref": directive,
+            **worker._context_binding(index),
         })
         state = replace(snapshot, round_index=index, phase="PENDING_SPECIALIST",
                         pending_dispatch_ref=directive, pending_assignment_ref=assignment,
@@ -167,7 +177,9 @@ def run_batch(engine, state, *, control_context):
                    "terminal_result": item.terminal_result} for item in results],
     })
     winner = next((item for item in results if item.terminal_result == "PASS"), None)
-    if winner is None and any(item.phase == "FAILED" for item in results):
+    from pace.contracts.research.memory import reporter_owned
+    # A winning proof does not discard a sibling's required reporting handoff.
+    if any(item.phase == "FAILED" for item in results) and (winner is None or reporter_owned(engine.workdir)):
         return engine._fail_round(
             state, state.round_index, "PENDING_BATCH",
             RuntimeError("A batch worker has an unfinished operational failure"),
@@ -192,6 +204,9 @@ def run_batch(engine, state, *, control_context):
         engine.workdir, verification_values,
         current_progress_ref=verifications.get(selected.last_verification_ref, {}).get("verified_progress_ref") or "",
     )
+    committed = engine._persist_state(merged)
+    from pace.runtime.output.memory import commit_research_memory
+    commit_research_memory(engine.workdir, completed)
     commit_memory_notes(engine.workdir, result_refs=completed,
                                 verification_values=verification_values)
     committed = engine._persist_state(merged)

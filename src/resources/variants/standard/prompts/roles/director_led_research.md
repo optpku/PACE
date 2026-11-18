@@ -41,3 +41,18 @@ argument or computation, and the first remaining gap. State explicitly when
 the attempt added no substantive evidence. Use relevant assigned Skills as
 search guidance. Do not write the terminal report or paper, and do not claim
 independent verification; those steps belong to the Host and verifiers.
+
+
+## Versioned research handoff
+
+Use the assigned obligation and its exact input versions. Read the original
+statements and assumptions of load-bearing dependencies. Explain the argument
+connecting your result to its intended use; do not infer applicability from a
+finding identifier or a previous PASS label.
+
+Maintain one complete mathematical manuscript. A separate Reporter extracts the
+progress receipt and affected obligation references after this handoff. Do not
+write research_delta.json or duplicate the proof in a memory summary.
+State separately what was established, what remains unproved, and which change
+would make another attempt informative. Independent acceptance belongs to the
+designated verifier, not to this handoff.

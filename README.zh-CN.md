@@ -75,7 +75,7 @@ $$
 2. **细化猜想与支撑论证。** 猜想细化过程 SMI 同时发展候选命题和支撑机制，即足以推出候选结论的中间命题。它检查这些命题是否有依据、是否存在循环论证，以及是否覆盖完整结论；通过证明尝试和反例搜索，区分论证尚不成立与命题本身为假，据此在原始请求范围内修补、修订或拆分问题。
 3. **构造与核验证明。** Prover 组织适用论证，Auditor 与 Kernel 针对原始目标分别审查候选证明，采用基于模型的自然语言核验。
 4. **保留证据，组织后续任务。** 带版本的记忆分别记录结果本身及其用途，保留假设、适用范围、来源、依赖和审查记录。候选或条件变化后，重新审查受影响的证据，已确立结果仍按原条件保留。复用前须检查这些条件，并建立旧结论通向新用途的论证。缺失步骤和失败路线指导下一步选题；任务上下文区分已核验前提、探索材料与未解决的证明义务。
-5. **汇报与继续研究。** 新增已核验成果及时更新进展；每个研究轮次结束后，启动一套中文报告与英文论文的写作和独立审阅流程，并交付论文 PDF。[resume](docs/user-guide.md#resume-an-interrupted-turn) 复用已完成工作、继续未完成环节；[continue](docs/user-guide.md#continue-with-a-new-question) 沿用已有发现开启新一轮研究。
+5. **汇报与继续研究。** 新增已核验成果及时更新进展；研究结束后，可显式请求研究报告提纲与报告，或独立的论文提纲和 LaTeX/PDF 论文。Web 应用负责用户通知、阅读简介和下载入口。[resume](docs/user-guide.md#resume-an-interrupted-turn) 复用已完成工作、继续未完成环节；[continue](docs/user-guide.md#continue-with-a-new-question) 沿用已有发现开启新一轮研究。
 
 ## 快速开始
 
@@ -88,7 +88,7 @@ finding 编号表示一项持续完善的数学结果。核验完整稿件后，
 
 ### 1. 安装 PACE
 
-需要 **Python 3.11+**，以及能访问所选模型的 **Codex CLI**。Python 运行时没有第三方依赖，Codex 需要单独安装。下方 proof 模式示例无需 TeX 或 Poppler；research 模式的论文交付还需要 `pdflatex`、BibTeX 和 `pdffonts`，详见 [PDF 工具安装](docs/installation.md#paper-pdf-tools)。
+需要 **Python 3.11+**，以及能访问所选模型的 **Codex CLI** 或 [Chat Completions API](docs/configuration.md#chat-completions-api)。安装时会自动安装用于读取 PDF 文献的 `pypdf`；使用 Codex 时需单独安装 Codex CLI。下方 proof 模式示例无需 TeX 或 Poppler；显式请求论文交付时还需要 `xelatex`、BibTeX 和 `pdffonts`，详见 [PDF 工具安装](docs/installation.md#paper-pdf-tools)。
 
 以下命令使用 Bash。当前在 macOS/Linux 上运行，Windows 用户请使用 WSL，详见[环境要求](docs/installation.md#requirements)。
 
@@ -127,9 +127,9 @@ PACE 复用登录凭据，并将角色调用与个人 Codex 记忆、插件、ho
 
 PACE 使用 `--dangerously-bypass-approvals-and-sandbox` 调用 Codex 执行无人值守任务。请在你愿意授予 agent 文件和命令访问权限的环境中运行，具体说明见[运行要求](docs/installation.md#requirements)。
 
-### 3. 为 research 模式的交付准备 PDF 工具
+### 3. 为按需论文写作准备 PDF 工具
 
-research 模式交付论文时，需安装提供 `pdflatex`、`bibtex` 和 `pdffonts` 的 TeX 发行版与 Poppler，详见 [PDF 工具安装说明](docs/installation.md#paper-pdf-tools)。下方 proof 模式示例可跳过这一步；若之后为 proof 模式显式请求完整文稿，也需要这些工具。
+显式请求论文时，需安装提供 `xelatex`、`bibtex` 和 `pdffonts` 的 TeX 发行版与 Poppler，详见 [PDF 工具安装说明](docs/installation.md#paper-pdf-tools)。下方 proof 模式示例可跳过这一步；若之后为 proof 模式显式请求完整文稿，也需要这些工具。
 
 ### 4. 检查运行环境
 
@@ -154,7 +154,7 @@ pace run \
   --web-search-mode on
 ```
 
-这条命令会调用模型，请使用账号支持的模型与推理强度。示例使用 proof 模式：起证前做一次 Survey（按需检索），再直接证明与独立核验，不调用 Director 或 SMI，默认不生成长报告和论文。运行结果从 `outputs/even-square/results/current_report.md` 开始阅读。`--max-proof-states` 限制证明状态数，不限制总调用次数、总时长或费用，详见[预算配置](docs/configuration.md)。
+这条命令会调用模型，请使用账号支持的模型与推理强度。示例使用 proof 模式：起证前做一次 Survey（按需检索），再直接证明与独立核验，不调用 Director 或 SMI，默认不生成长报告和论文。运行状态和核验引用见 `outputs/even-square/work/turn001/final_report.json`。`--max-proof-states` 限制证明状态数，不限制总调用次数、总时长或费用，详见[预算配置](docs/configuration.md)。
 
 ## 研究你的猜想
 
@@ -166,26 +166,31 @@ pace run --problem conjecture.md --problem-id my-conjecture --output outputs \
   --model gpt-6.1-sol --reasoning-effort high --web-search-mode on
 ```
 
-列出研究主题，并打开 `outputs/my-conjecture/results/current_report.md` 阅读结果：
+列出研究主题，并打开 `outputs/my-conjecture/work/` 下当前 turn 的 `final_report.json` 阅读结果：
 
 ```bash
 pace problems --output outputs
 ```
 
-[文稿修订](docs/user-guide.md#revise-the-report-or-paper)、[批量执行](docs/user-guide.md#run-a-batch)及[阅读版导出与结果汇总](docs/user-guide.md#export-for-readers)见用户手册；模型、检索、预算、自定义服务和论文样式见[配置说明](docs/configuration.md)。
+[报告与论文写作](docs/user-guide.md#write-a-report-or-paper)、[批量执行](docs/user-guide.md#run-a-batch)及[结果汇总](docs/user-guide.md#summarize-recorded-results)见用户手册；模型、检索、预算、自定义服务和论文样式见[配置说明](docs/configuration.md)。
 
 ## 阅读研究输出
 
-首先打开 `outputs/my-conjecture/results/current_report.md`。research 模式生成下列输出；proof 模式默认交付简报与核验记录，完整文稿需要[显式请求](docs/user-guide.md#revise-the-report-or-paper)。
+新研究任务固定分派时采用的材料和路线版本。Planner 完成后由父流程提交路线；普通任务完成不要求重新规划。尝试记录保留上级目标、具体障碍和重新尝试的条件。已有成果能否用于某项待证要求，通过独立的应用核验判断，不以是否发布新成果编号为前提。每次 Research、Prover 或 RCI 完成交付后，Reporter 从原稿整理简短的 `progress.md` 和 `research_delta.json`；数学角色不再兼写这份回执，Planner 仍负责 `route_relations.json`。Reporter 单独保存完成记录，恢复时复用已完成的作者与总结。详见[研究记忆](docs/user-guide.md#research-memory-and-task-context)。
+
+PACE 保存数学原稿、断点与运行记录，外部 Web 应用负责研究简报、活动展示和下载包。
 
 | 输出 | 内容 |
 |---|---|
-| `results/current_report.md` | 累计研究简报、最强结论和未解决问题。 |
-| `results/research_report.md` | 经过编辑审阅的完整中文研究报告。 |
-| `results/paper/paper.pdf` | 经过审阅的英文数学论文，同目录保留 TeX 源文件。 |
-| `results/findings/` | 已核验成果及证据链接；研究过程见 `work/README.md`。 |
+| `work/turn001/final_report.json` | 本 turn 的状态、终止原因和核验入口。 |
+| `results/findings/` | 当前成果、原稿和核验目录。 |
+| `memory/research_index.json` | 义务、应用、尝试与调用成本的可重建索引。 |
+| `work/turn001/roundN/assignment/context.json` | 此任务固定的必读材料与按需档案。 |
+| `work/turn001/roundN/progress.md`、`research_delta.json` | Reporter 从本次原稿提取的短进展和结构化变化。 |
+| `results/research_report.md` | 用户显式请求的中文报告。 |
+| `results/paper/main.tex`、`main.pdf` | 用户显式请求的论文源稿与 PDF。 |
 
-报告区分证明、反驳与条件性结论，并说明适用假设及剩余开放问题。详细操作见使用手册中的[结果阅读](docs/user-guide.md#read-results)、[阅读版导出](docs/user-guide.md#export-for-readers)和[文稿修订](docs/user-guide.md#revise-the-report-or-paper)。
+`resume` 接续未完成环节；`continue` 才开启下一 turn。研究结束不会自动写长报告，也不会自动开启下一 turn。
 
 ## 许可与引用
 

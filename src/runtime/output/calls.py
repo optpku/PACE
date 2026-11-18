@@ -28,12 +28,18 @@ def begin_call(
     owner = str(
         meta.get("stage_ref") or stage_ref(int(meta.get("round_index", 0) or 0), workdir=workdir)
     )
+    # Bind nested SMI/verification calls to their outer assignment without exposing private logs.
+    context_path = Path(workdir) / owner / 'assignment/context.json'
+    if not context_path.is_file():
+        context_path = Path(workdir) / stage_ref(int(meta.get('round_index', 0) or 0), workdir=workdir) / 'assignment/context.json'
+    context = json.loads(context_path.read_text()) if context_path.is_file() else {}
     directory = Path(workdir) / owner / "calls" / call_id
     directory.mkdir(parents=True, exist_ok=False)
-    prompt_ref = str(meta.get("prompt_ref") or "")
-    if not prompt_ref:
-        prompt_ref = (directory / "prompt.md").relative_to(workdir).as_posix()
-        _write_text_atomic(Path(workdir) / prompt_ref, prompt)
+    # Metadata may be inherited from an author by a correction/review call.
+    # Bind execution to the actual prompt argument, never that inherited path.
+    source_prompt_ref = str(meta.get("prompt_ref") or "")
+    prompt_ref = (directory / "prompt.md").relative_to(workdir).as_posix()
+    _write_text_atomic(Path(workdir) / prompt_ref, prompt)
     record_ref = (directory / "record.json").relative_to(workdir).as_posix()
     _write_json_atomic(
         Path(workdir) / record_ref,
@@ -49,8 +55,14 @@ def begin_call(
             "task_id": str(meta.get("task_id") or ""),
             "parent_task_id": str(meta.get("parent_task_id") or ""),
             "status": "STARTED",
+            "branch_id": context.get("branch_id", ""),
+            "obligation_ids": context.get("obligation_ids", []),
+            "assignment_ref": context.get("assignment_ref", ""),
+            "attempt_id": str(meta.get("attempt_id") or ""),
             "prompt_ref": prompt_ref,
+            "source_prompt_ref": source_prompt_ref,
             "input_refs": list(dict.fromkeys(str(ref) for ref in input_refs)),
+            "archive_refs": list(dict.fromkeys(str(ref) for ref in meta.get("archive_refs", ()))),
             "response_ref": "",
             "deliverable_ref": "",
             "invocation_ids": [],

@@ -248,6 +248,8 @@ class TheoryPaperWriter:
                 input_refs=refs,
                 metadata={
                     "agent_id": name,
+                    "output_refs": [output_ref],
+                    "output_dirs": [] if outline else [str(Path(output_ref).parent)],
                     "inline_task": True,
                     "task_id": task_id,
                     "protected_input_refs": refs,

@@ -31,6 +31,8 @@ CALL_SCHEMA_VERSION = "math_verifier_kernel_call/v2"
 def verify_finding(
     *, llm: Any, workdir: Path, draft_ref: str,
     input_refs: tuple[str, ...], round_index: int, target_contract_id: str,
+    application_request: dict | None = None,
+    on_accept=None,
 ) -> SemanticCallResult:
     """Check one standalone result without granting whole-target acceptance."""
 
@@ -40,6 +42,34 @@ def verify_finding(
         target_contract_id=target_contract_id,
         input_files="\n".join(f"- `{ref}`" for ref in input_refs),
     ) + "\n\n" + load_prompt_template("output/finding_publication.md", workdir=workdir)
+    request = application_request
+    if request:
+        prompt += "\nIndependent application review: " + json.dumps(request, ensure_ascii=False)
+        prompt += ("\nCheck the exact premise versions, hypotheses, quantifiers and connecting argument against only the requested obligation. "
+                   "A request may cover multiple derivations in the same manuscript for this obligation. "
+                   "Review them together, state which derivations and premises actually support the obligation, and keep distinct scopes explicit. "
+                   "Return application_checks with exactly one entry containing obligation_id, obligation_version, status "
+                   "(APPLICABLE or NOT_ESTABLISHED), and review_ref. Write the detailed review to the assigned review_ref. "
+                   "PASS and reuse_authorized=true are required for APPLICABLE. publication.action=NONE is valid; "
+                   "do not create a new finding merely to authorize an application. Rejecting an application does not refute its premise theorem.")
+    def validate(payload):
+        errors = _validate_finding_receipt(payload)
+        if request:
+            checks = payload.get('application_checks')
+            if (not isinstance(checks, list) or len(checks) != 1 or not isinstance(checks[0], dict)
+                or checks[0].get('obligation_id') != request['obligation_id']
+                or checks[0].get('obligation_version') != request['obligation_version']
+                or checks[0].get('status') not in {'APPLICABLE', 'NOT_ESTABLISHED'}
+                or checks[0].get('review_ref') != request['review_ref']
+                or (checks[0].get('status') == 'APPLICABLE' and
+                    (payload.get('stage_status') != 'PASS' or payload.get('reuse_authorized') is not True))):
+                errors.append({'reason_code': 'invalid_application_review', 'json_pointer': '/application_checks'})
+            from pace.contracts.research.memory import public_file
+            try:
+                if not public_file(workdir, request['review_ref']).read_text().strip(): raise ValueError('empty review')
+            except (ValueError, OSError):
+                errors.append({'reason_code': 'missing_application_review', 'json_pointer': '/application_checks'})
+        return errors
     return run_semantic_role(
         llm, prompt, workdir=workdir,
         call_name=f"finding_verifier_{round_index:04d}_{Path(draft_ref).stem}",
@@ -47,13 +77,16 @@ def verify_finding(
             role="finding_verifier", schema=_finding_receipt_schema,
             host_schema_version="finding_verification",
             authority="MathVerifierKernel", fatal_scope="CALL",
-            validator=_validate_finding_receipt,
+            validator=validate,
+            on_accept=on_accept,
         ),
         input_refs=input_refs,
         semantic_call_fn=semantic_call,
         host_metadata={
             "agent_id": "finding_verifier", "round_index": round_index,
             "draft_ref": draft_ref, "target_contract_id": target_contract_id,
+            "output_refs": [request["review_ref"]] if request else [],
+            **({"purpose": "APPLICATION", "application_key": request["application_key"]} if request else {}),
         },
     )
 
@@ -139,6 +172,8 @@ def run_math_verifier_kernel(
         "round_index": int(round_index),
         "output_ref": str(output_ref or ""),
         "receipt_correction_owner": "KERNEL",
+        "output_refs": [(Path(proof_file_ref).parent / 'verification/memory_note.md').as_posix()] if proof_file_ref else [],
+        "output_dirs": [(Path(proof_file_ref).parent / 'findings').as_posix()] if proof_file_ref else [],
         **binding,
     }
     call_name = f"math_verifier_kernel_round_{round_index}"
@@ -186,6 +221,7 @@ def run_math_verifier_kernel(
                 **metadata, "parent_call_id": result.host["call_id"],
                 "representation_correction_of": result.host["call_id"],
                 "receipt_corrections": 1,
+                "output_refs": [], "output_dirs": [],
             },
         )
     if call_metadata is not None:

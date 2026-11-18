@@ -10,7 +10,7 @@ readme = {file = "README.md", content-type = "text/markdown"}
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE", "LICENSES/*.txt"]
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["pypdf>=5"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",

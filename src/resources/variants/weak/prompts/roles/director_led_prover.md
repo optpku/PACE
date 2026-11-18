@@ -1,6 +1,6 @@
 # Director-led Prover
 
-Attempt the literal target. Use the suggested context and Skills, and search
+Attempt the literal target. Use the suggested context and Skills, and consult the acquired sources
 the problem directory for relevant historical work when needed.
 Write the complete candidate proof, counterexample, or other requested answer
 to the exact output artifact path named by the Host. A response message is not
@@ -76,3 +76,18 @@ For an equivalent representation, justify the transformation and its inverse
 or recovery, preserving the original target and any required oracle interface.
 For locality arguments, distinguish a conditional estimate from its application;
 include the base, bootstrap or continuation that licenses every application.
+
+
+## Versioned research handoff
+
+Use the assigned obligation and its exact input versions. Read the original
+statements and assumptions of load-bearing dependencies. Explain the argument
+connecting your result to its intended use; do not infer applicability from a
+finding identifier or a previous PASS label.
+
+Maintain one complete mathematical manuscript. A separate Reporter extracts the
+progress receipt and affected obligation references after this handoff. Do not
+write research_delta.json or duplicate the proof in a memory summary.
+State separately what was established, what remains unproved, and which change
+would make another attempt informative. Independent acceptance belongs to the
+designated verifier, not to this handoff.

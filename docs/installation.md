@@ -4,10 +4,11 @@
 
 ## Requirements
 
-- Python 3.11 or later. The runtime has no third-party Python dependencies.
+- Python 3.11 or later. Installation includes `pypdf` for reading PDF sources.
 - Git to clone the release branch below, or a downloaded ZIP of that branch.
 - A macOS/Linux environment, or WSL on Windows. The core uses POSIX file locking (`fcntl`), and batch execution uses Bash and POSIX process-group management.
 - A recent Codex CLI supporting `codex exec --ignore-user-config`, a configured sign-in, and access to the selected model. PACE calls `codex exec`; the Python installation does not install Codex. Custom providers use the explicit [batch configuration](configuration.md#authentication-and-custom-providers).
+- With `--provider chat-completions`, a compatible API replaces Codex; see [configuration](configuration.md#chat-completions-api).
 - Network access for model inference. Optional source retrieval can also use the network.
 
 PACE currently invokes Codex with `--dangerously-bypass-approvals-and-sandbox` for unattended file-based tasks. Run it in an environment whose filesystem and command access you intend to grant to the agent. Its working directory is the individual problem workspace.
@@ -31,7 +32,7 @@ source .venv/bin/activate
 python -m pip install .
 ```
 
-If `python3` is older than 3.11, replace it with your installed supported interpreter. The distribution is named `pace-proof-agent`, but the import and executable are `pace`. Installation may download build tools such as setuptools; the installed base runtime has no third-party dependencies.
+If `python3` is older than 3.11, replace it with your installed supported interpreter. The distribution is named `pace-proof-agent`, but the import and executable are `pace`. Installation downloads the `pypdf` runtime dependency and may also download build tools such as setuptools.
 
 Alternatively, with `uv` already installed:
 
@@ -83,6 +84,11 @@ If tools are unavailable or a build fails, the source remains saved. Repair the 
 
 ## 4. Verify the installation without inference
 
+The standard installation includes `pypdf` for reading source PDFs. Survey
+downloads and caches complete documents before returning line or page ranges;
+PDF reading does not require a separate `pdftotext` executable. This is distinct
+from the optional LaTeX toolchain used to build a new paper.
+
 Keep the PACE environment active and use the same shell in which Codex is available:
 
 ```bash
@@ -133,8 +139,8 @@ From the repository root, follow the [quickstart example](../examples/quickstart
 
 ## Optional mathematical tools
 
-The base package has no third-party runtime dependencies. From the source
-directory, install SymPy and mpmath with the same tool used for PACE:
+The base package includes `pypdf`; symbolic and numerical mathematics libraries
+are optional. From the source directory, install SymPy and mpmath with the same tool used for PACE:
 
 ```bash
 # pip environment
@@ -150,3 +156,10 @@ An environment created by uv may not include pip. PACE supplies the current
 Python executable and optional tool availability to roles; missing optional
 packages do not imply that a theorem is false. A proof-mode run does not require
 TeX unless a paper task is explicitly requested.
+
+The compatible Chat Completions transport uses native file tools and a
+`submit_result` function for structured receipts. Its endpoint must support
+function calling. Only assigned artifact paths are writable; receipt-only calls
+expose no file-writing tool. The Host checks the submitted schema and references.
+Survey alone can fetch public source URLs; this transport does not supply a
+search-engine tool or a shell.

@@ -192,7 +192,7 @@ class ProofPipeline:
                 provider=self.config.provider,
                 model=self.config.model,
                 reasoning_effort=self.config.reasoning_effort,
-                web_search=self.config.web_search_mode != "off",
+                web_search=False,
                 timeout_seconds=self.config.timeout_seconds,
             )
         self._core_llm_instance.profile = self.config.profile
@@ -218,7 +218,7 @@ class ProofPipeline:
                 reasoning_effort="none"
                 if self.config.reasoning_effort == "none"
                 else "low",
-                web_search=self.config.web_search_mode != "off",
+                web_search=False,
                 timeout_seconds=self.config.timeout_seconds,
             )
         self._director_llm_instance.profile = self.config.profile
@@ -403,6 +403,9 @@ class ProofPipeline:
             ws.work_ref("state/research_execution_policy.json"),
             {
                 "schema_version": "research_execution_policy/v1",
+                **({"research_memory_version": 1, "reassessment_after_attempts": 3}
+                   if policy.get("research_memory_version") == 1 else {}),
+                **({"research_delta_owner": "reporter"} if policy.get("research_delta_owner") == "reporter" else {}),
                 "resource_variant": policy["resource_variant"],
                 "mode": policy["mode"],
                 "requested_mode": policy["requested_mode"],
@@ -433,6 +436,8 @@ class ProofPipeline:
                 "problem_text": _canonical_problem_text(problem.text),
                 "phase": "RESOURCES",
                 "policy": {
+                    "research_memory_version": 1,
+                    "research_delta_owner": "reporter",
                     "resource_variant": self.config.resource_variant,
                     "max_proof_states": self.config.max_proof_states,
                     "max_calls": self.config.max_calls,
@@ -896,6 +901,8 @@ class ProofPipeline:
         if complete is False:
             pause_delivery(ws.root, trigger=trigger, round_index=state.round_index, stage="findings")
             raise DeliveryPaused("Finding verification is incomplete; resume the saved task")
+        from pace.runtime.output.memory import update_research_costs
+        update_research_costs(ws.root)
         refresh_memory_index(ws.root)
         clear_delivery_pause(ws.root)
 
@@ -984,6 +991,8 @@ class ProofPipeline:
         ws.write_json(work_ref(ws.root, "state/research_execution_policy.json"), policy)
         ws.write_json(work_ref(ws.root, "state/proof_loop_budget.json"), proof_budget)
 
+        from pace.runtime.output.memory import initialize_research_memory
+        initialize_research_memory(ws.root)
         return max_proof_states
 
     def _build_director_led_engine(
@@ -1006,13 +1015,9 @@ class ProofPipeline:
                 workdir=ws.root,
                 target_contract_id=target_contract_id,
                 input_refs=kwargs.get("input_refs") or (),
-                control_context=(
-                    str(kwargs.get("control_context") or "")
-                    + "\nRemaining shared proof states: "
-                    + str(kwargs["proof_states_remaining"])
-                    + "\nRemaining research rounds (including the next dispatch): "
-                    + str(kwargs["research_rounds_remaining"])
-                ),
+                control_context=str(kwargs.get("control_context") or ""),
+                proof_states_remaining=kwargs["proof_states_remaining"],
+                research_rounds_remaining=kwargs["research_rounds_remaining"],
                 host_metadata={
                     "round_index": int(kwargs["round_index"]),
                     "agent_id": "director",
@@ -1041,6 +1046,8 @@ class ProofPipeline:
             state = kwargs.get("state")
             return self._update_publication(ws, state, trigger=str(kwargs.get('trigger_id') or 'round'))
 
+        from pace.reporting.research_progress import run_research_reporter
+
         return DirectorLedEngine(
             workdir=ws.root,
             director=director,
@@ -1055,6 +1062,8 @@ class ProofPipeline:
             max_proof_states=max_proof_states,
             max_rounds=policy.get("max_rounds"),
             on_round_committed=publish_results,
+            reporter=lambda result_ref: run_research_reporter(
+                llm=llm, workdir=ws.root, result_ref=result_ref),
         )
 
     def _finalize_director_led_setup_failure(

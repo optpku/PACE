@@ -66,6 +66,10 @@ def build_smi_handler(*, llm, workdir, phase_runner=None):
             )
             if frozen_refs_path.is_file():
                 snapshot = json.loads(frozen_refs_path.read_text())
+                from pace.contracts.research.memory import check_binding
+                for row in snapshot.get('provenance', []):
+                    if row.get('snapshot_sha256'):
+                        check_binding(root, {'ref': row['snapshot_ref'], 'sha256': row['snapshot_sha256']})
                 sources = tuple(snapshot["refs"])
                 independent_sources = tuple(snapshot["independent_refs"])
             else:
@@ -96,7 +100,9 @@ def build_smi_handler(*, llm, workdir, phase_runner=None):
                     reference = destination.relative_to(root).as_posix()
                     sources.append(reference)
                     provenance.append(
-                        {"original_ref": original, "snapshot_ref": reference}
+                        {"original_ref": original, "snapshot_ref": reference,
+                         "original_sha256": __import__("hashlib").sha256(source.read_bytes()).hexdigest(),
+                         "snapshot_sha256": __import__("hashlib").sha256(destination.read_bytes()).hexdigest()}
                     )
                 independent_sources = tuple(
                     row["snapshot_ref"] for row in provenance
@@ -195,9 +201,7 @@ def build_smi_handler(*, llm, workdir, phase_runner=None):
         text += "All proposed tasks and probe resolutions require downstream proof and independent verification.\n\n"
         for ref in changes.values():
             text += f"## Original exploration handoff\n\nSource: `{ref}`\n\n"
-            text += relocate_links(
-                (root / ref).read_text(encoding="utf-8").strip(), root / ref, output,
-            ) + "\n\n"
+            text += f"Read the complete mathematical handoff at [{Path(ref).name}]({Path(os.path.relpath(root / ref, output.parent)).as_posix()}).\n\n"
         text += "## Original task and review files\n"
         text += (
             "\n".join(
@@ -207,7 +211,30 @@ def build_smi_handler(*, llm, workdir, phase_runner=None):
             + "\n"
         )
         output.write_text(text, encoding="utf-8")
-        return {
+        from pace.contracts.research.memory import enabled, reporter_owned
+        if enabled(root) and not reporter_owned(root):
+            from pace.runtime.research_context import task_context
+            from pace.runtime.output.workspace import _write_json_atomic
+            context = task_context(root, kwargs['output_ref'])
+            deltas = [json.loads((root / json.loads(p.read_text())['research_delta_ref']).read_text())
+                      for p in phase_outputs if json.loads(p.read_text()).get('research_delta_ref')]
+            # These are author declarations, not Host judgments of progress.
+            delta = deltas[-1] if deltas else {
+                'schema_version': 'research_delta/v1', 'obligation_ids': context['obligation_ids'],
+                'branch_id': context['branch_id'], 'change_ref': kwargs['output_ref'], 'applications': [],
+                'attempt': {'outcome': 'CONTEXT_GAP' if recoverable else 'NOT_ESTABLISHED',
+                            'obstacle_ref': '', 'reopen_condition_ref': kwargs['output_ref']}}
+            # Keep proposals from every completed Explorer iteration; later attempts
+            # do not silently discard an earlier, independently checkable application.
+            from pace.contracts.research.memory import digest
+            applications = {}
+            for source_delta in deltas:
+                for application in source_delta['applications']:
+                    identity = digest({k: v for k, v in application.items() if k != 'id'})
+                    applications.setdefault(identity, {**application, 'id': identity})
+            delta = {**delta, 'applications': list(applications.values())}
+            _write_json_atomic(output.parent / 'research_delta.json', delta)
+        result = {
             **SpecialistAdapterResult(
                 agent_id="smi",
                 status="SUCCEEDED",
@@ -217,6 +244,8 @@ def build_smi_handler(*, llm, workdir, phase_runner=None):
             ).to_json(),
             "published_refs": refs,
         }
+        if kwargs.get("on_accept"): kwargs["on_accept"](result)
+        return result
 
     return run
 

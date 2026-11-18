@@ -168,6 +168,7 @@ class ResearchReportOutliner:
                 input_refs=refs,
                 metadata={
                     "agent_id": "research_report_outline",
+                    "output_refs": [output_ref],
                     "inline_task": True,
                     "task_id": task_id,
                     "protected_input_refs": refs,
@@ -360,6 +361,7 @@ class ResearchReportWriter:
                 input_refs=refs,
                 metadata={
                     "agent_id": "research_report_writer",
+                    "output_refs": [output_ref],
                     "inline_task": True,
                     "task_id": task_id,
                     "protected_input_refs": refs,

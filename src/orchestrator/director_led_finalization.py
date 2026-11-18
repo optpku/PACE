@@ -613,6 +613,10 @@ def _publish_report(ws: RunWorkspace, report: dict[str, Any]) -> dict[str, Any]:
             report["finding_publication_diagnostics"] = [str(exc)]
             logger.warning("Verified final finding publication failed", exc_info=True)
     refs["findings"] = [row["ref"] for row in finding_entries(ws.root)]
+    from pace.contracts.research.memory import enabled
+    if enabled(ws.root) and ws.path('memory/research_index.json').is_file():
+        refs['research_memory'] = 'memory/research_index.json'
+        refs['research_memory_navigation'] = 'memory/README.md'
     report["publication_status"] = "PUBLISHED" if report["result"] == "PASS" else "REPORT_ONLY"
     FinalReportEnvelope.validate(report)
 

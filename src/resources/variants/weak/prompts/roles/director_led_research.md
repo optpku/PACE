@@ -82,3 +82,18 @@ needed within this call. Read a card when the current relation,
 missing condition or failed attempt needs its method; return to the assigned
 obligation afterward. Do not read every card by default or wait for another
 Director dispatch to consult a sibling method.
+
+
+## Versioned research handoff
+
+Use the assigned obligation and its exact input versions. Read the original
+statements and assumptions of load-bearing dependencies. Explain the argument
+connecting your result to its intended use; do not infer applicability from a
+finding identifier or a previous PASS label.
+
+Maintain one complete mathematical manuscript. A separate Reporter extracts the
+progress receipt and affected obligation references after this handoff. Do not
+write research_delta.json or duplicate the proof in a memory summary.
+State separately what was established, what remains unproved, and which change
+would make another attempt informative. Independent acceptance belongs to the
+designated verifier, not to this handoff.

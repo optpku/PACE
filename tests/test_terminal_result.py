@@ -23,7 +23,8 @@ class ResearchTransport:
             (root / 'work/turn001/input/problem_brief.md').write_text('# Classification\n\nThe original classification remains open.\n')
             payload = {'proof_assessment': {'difficulty': 'research', 'plan_node_level': 1, 'dependency_depth_level': 1}}
         elif call_name.startswith('global_research_director_'):
-            payload = {'action': 'STOP'}
+            payload = {'action': 'STOP', 'stop_reason': 'NO_ACTIONABLE_TASK',
+                       'rationale': 'The stated axioms omit the operation needed to define the classification.'}
         else:
             raise AssertionError(call_name)
         folder = attempt_directory(root, ledger_context['call_ref'], 1)

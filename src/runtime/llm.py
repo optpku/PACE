@@ -432,6 +432,9 @@ class CodexLLM:
                 input_refs=ledger_context.get("input_refs", ()),
                 output_schema_file=schema_file,
                 role=role,
+                read_scope=str(ledger_context.get("read_scope") or ""),
+                output_refs=ledger_context.get("output_refs", ()),
+                output_dirs=ledger_context.get("output_dirs", ()),
             )
         from pace.runtime.prompts import project_skill_instruction
 
@@ -473,7 +476,9 @@ class CodexLLM:
         protection = protected_inputs(
             resolved,
             (
+                prompt_file.relative_to(resolved).as_posix(),
                 *ledger_context.get("input_refs", ()),
+                *ledger_context.get("archive_refs", ()),
                 *ledger_context.get("protected_input_refs", ()),
             ),
             invocation_dir,
@@ -577,26 +582,24 @@ class CodexLLM:
                                 exc_info=True,
                             )
                         finally:
-                            if (
-                                getattr(self, "profile", False)
-                                or os.environ.get("PACE_PROFILE") == "1"
-                            ):
-                                try:
-                                    append_event(
-                                        resolved,
-                                        "PROFILE_SPAN",
-                                        name=f"transport.{role}",
-                                        elapsed_seconds=time.monotonic() - started,
-                                        metadata={
-                                            "call_id": call_id,
-                                            "attempt_index": attempt,
-                                        },
-                                    )
-                                except Exception:
-                                    logger.warning(
-                                        "Could not persist transport timing",
-                                        exc_info=True,
-                                    )
+                            # Always record a transport's actual active interval. Higher-level
+                            # profiling remains optional and must not be added to this cost.
+                            try:
+                                append_event(
+                                    resolved,
+                                    "TRANSPORT_TIMING",
+                                    name=f"transport.{role}",
+                                    elapsed_seconds=time.monotonic() - started,
+                                    metadata={
+                                        "call_id": call_id,
+                                        "attempt_index": attempt,
+                                    },
+                                )
+                            except Exception:
+                                logger.warning(
+                                    "Could not persist transport timing",
+                                    exc_info=True,
+                                )
             except (OSError, subprocess.TimeoutExpired, InputModifiedError) as exc:
                 missing = isinstance(exc, FileNotFoundError)
                 timed_out = isinstance(exc, subprocess.TimeoutExpired)
@@ -878,6 +881,13 @@ def build_llm(
     web_search: bool = False,
     timeout_seconds: int | None = None,
 ) -> LLM:
+    if provider == "chat-completions":
+        from pace.runtime.chat_api import ChatCompletionsLLM
+        base_url = os.environ.get("PACE_API_BASE_URL", "").strip()
+        if not base_url or not os.environ.get("PACE_API_KEY"):
+            raise ValueError("chat-completions requires PACE_API_BASE_URL and PACE_API_KEY")
+        return ChatCompletionsLLM(model=model, reasoning_effort=reasoning_effort, web_search=web_search,
+                                  timeout_seconds=timeout_seconds, base_url=base_url)
     if provider in {"newapi", "llmmelon"} and not (
         os.getenv("NL_PROOF_CODEX_AUTH_MODE") == "api_key"
         and os.getenv("NL_PROOF_CODEX_BASE_URL")
@@ -1518,6 +1528,9 @@ def _build_file_driven_cli_instruction(
     input_refs: Iterable[str] = (),
     output_schema_file: Path | None = None,
     role: str = "",
+    read_scope: str = "",
+    output_refs: Iterable[str] = (),
+    output_dirs: Iterable[str] = (),
 ) -> str:
     suggested = tuple(dict.fromkeys(str(ref) for ref in input_refs if str(ref).strip()))
     turn_dir = work_ref(workdir)
@@ -1544,6 +1557,14 @@ def _build_file_driven_cli_instruction(
             "recovering context from other files. Write only the artifacts requested by the "
             "phase prompt; you may reread files you create in this invocation to check them.\n\n"
         )
+    elif read_scope == "declared":
+        base += (
+            f"Read `{prompt_file}` for this bounded correction task. Read only that prompt, "
+            "the output schema if supplied, and the explicit input/output files below. "
+            "Do not browse the workspace, memory, source archives or prior task prompts. "
+            "Input manuscripts are read-only; do not revise mathematical content, plans or verdicts. "
+            "If a mathematical revision is necessary, report it instead of performing it.\n\n"
+        )
     else:
         base += (
             f"Read `{prompt_file}` for your task. The current exploration is `{turn_dir}/`. "
@@ -1560,6 +1581,12 @@ def _build_file_driven_cli_instruction(
             "Write task artifacts to the assigned output location in the current turn and preserve "
             "earlier turns. Keep full mathematical content in the assigned deliverable.\n\n"
         )
+    outputs = tuple(str(ref) for ref in output_refs if ref)
+    directories = tuple(str(ref) for ref in output_dirs if ref)
+    if outputs or directories or read_scope == "declared":
+        base += ("Writable files: " + json.dumps(outputs, ensure_ascii=False)
+                 + ". Writable directories: " + json.dumps(directories, ensure_ascii=False)
+                 + ". All other task files are read-only.\n\n")
     if suggested:
         base += (
             "Suggested reading paths:\n"

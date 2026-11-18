@@ -89,7 +89,7 @@ without overwriting the thematic overview or changing target acceptance.
 
 ### 1. Install PACE
 
-Requirements: **Python 3.11+** and **Codex CLI** with access to your chosen model. The Python runtime has no third-party dependencies; Codex is installed separately. The proof-mode example below needs no TeX or Poppler. Explicit paper writing also needs `xelatex`, BibTeX, and `pdffonts`; see [PDF tools](docs/installation.md#paper-pdf-tools).
+Requirements: **Python 3.11+** and model access through **Codex CLI** or a [Chat Completions API](docs/configuration.md#chat-completions-api). Installation includes `pypdf` for reading PDF sources; Codex is installed separately when used. The proof-mode example below needs no TeX or Poppler. Explicit paper writing also needs `xelatex`, BibTeX, and `pdffonts`; see [PDF tools](docs/installation.md#paper-pdf-tools).
 
 The commands below use Bash. Run PACE on macOS/Linux or, on Windows, inside WSL; see the [environment requirements](docs/installation.md#requirements).
 
@@ -124,7 +124,7 @@ codex login status
 
 If sign-in is needed, run `codex login`. Custom provider and executable settings are covered in [Configuration](docs/configuration.md).
 
-PACE reuses the login and isolates role calls from personal Codex memories, plugins, hooks and directory instructions. Search is available to each role within its assigned task by default (`--web-search-mode on`). Use `off` to disable external retrieval; blind probes retain their restricted local context. Use a recent CLI supporting `codex exec --ignore-user-config`; `pace doctor` checks compatibility before inference.
+PACE reuses the login and isolates role calls from personal Codex memories, plugins, hooks and directory instructions. Only Survey may retrieve external sources (`--web-search-mode on` by default). All other roles explicitly disable retrieval; `off` also disables Survey retrieval. Blind probes retain their restricted local context. Use a recent CLI supporting `codex exec --ignore-user-config`; `pace doctor` checks compatibility before inference.
 
 PACE runs Codex with `--dangerously-bypass-approvals-and-sandbox` for unattended tasks. Use an environment whose filesystem and command access you intend to grant to the agent; see [execution permissions](docs/installation.md#requirements).
 
@@ -190,6 +190,8 @@ remain subject to the research-round, call and time budgets.
 
 The user guide covers [report and paper writing](docs/user-guide.md#write-a-report-or-paper), [batch execution](docs/user-guide.md#run-a-batch), and [recorded result summaries](docs/user-guide.md#summarize-recorded-results). See [Configuration](docs/configuration.md) for models, retrieval, budgets, custom providers, and paper styles.
 
+New research turns freeze task inputs and route versions. After each completed Research, Prover or RCI handoff, a short Reporter call extracts `progress.md` and `research_delta.json` from the originals. Authors focus on mathematics; Planner continues to write `route_relations.json`. Reporter receipts are saved separately, so recovery reuses completed authors and summaries. Planner updates are committed by the parent after task completion; ordinary node completion does not require replanning. Attempts retain their parent obligation and scoped obstacles. Independent application checks connect an existing result to a particular obligation, even when no new finding is published. See [research memory](docs/user-guide.md#research-memory-and-task-context).
+
 ## Read the research output
 
 PACE saves mathematical originals, checkpoints and factual runtime records. The external Web application renders user updates, thematic reader briefs, activity cards and download packages from these records.
@@ -200,6 +202,9 @@ The core's reader layout keeps each public `work/turnNNN/roundN/` directory limi
 |---|---|
 | `work/turnNNN/final_report.json` | Bound mathematical result, mode selection and execution status. |
 | `results/findings/` | Independently checked manuscripts with their verification references. |
+| `memory/research_index.json` | Rebuildable obligation, application, attempt and cost records. |
+| `work/turnNNN/roundN/assignment/context.json` | Frozen required inputs and on-demand archives. |
+| `work/turnNNN/roundN/progress.md`, `research_delta.json` | Short Reporter summary and structured changes extracted from that handoff. |
 | `results/outline.md`, `results/research_report.md` | Explicit research-outline and report task outputs. |
 | `results/paper_outline.md`, `results/paper/main.tex`, `main.pdf` | Independent paper-writing outputs; PDF exists only after a successful build. |
 

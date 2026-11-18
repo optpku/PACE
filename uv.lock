@@ -15,6 +15,9 @@ wheels = [
 name = "pace-proof-agent"
 version = "0.1.0"
 source = { editable = "." }
+dependencies = [
+    { name = "pypdf" },
+]
 
 [package.optional-dependencies]
 math = [
@@ -25,9 +28,19 @@ math = [
 [package.metadata]
 requires-dist = [
     { name = "mpmath", marker = "extra == 'math'", specifier = ">=1.3" },
+    { name = "pypdf", specifier = ">=5" },
     { name = "sympy", marker = "extra == 'math'", specifier = ">=1.12" },
 ]
 provides-extras = ["math"]
+
+[[package]]
+name = "pypdf"
+version = "7.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/60/d3/367aa9baefaededd3321cde46bbcb9f008bb51cef3a6b745608352a99534/pypdf-7.1.0.tar.gz", hash = "sha256:ca3fa902369e98a6d2cb7b56396de902b72ef9bb3c1e8706c1bfc7d8bd0cf0d7", size = 7215190, upload-time = "2026-11-13T12:23:18.629Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ed/4c/d19f91b743c8579b67e3d8b001e095745dec5bb13a9b4b9eadc235a85d9e/pypdf-7.1.0-py3-none-any.whl", hash = "sha256:47cca6b24bdcf4c4d65b5f7b8b972535c61710a061261e737688777cfd9a7bfb", size = 418698, upload-time = "2026-11-13T12:23:16.777Z" },
+]
 
 [[package]]
 name = "sympy"

@@ -181,10 +181,19 @@ class SmiPhaseRunner:
             refs = _refs(value)
             if refs:
                 normalized[str(kind).strip().upper()] = refs
+        from pace.contracts.research.memory import enabled, reporter_owned, binding as memory_binding, check_binding, prepare_delta, delivery_instruction
+        from pace.runtime.research_context import task_context, load_index
+        outer_output = stage_ref(round_index, workdir=root) + '/research.md'
+        frozen = task_context(root, outer_output) if enabled(root) else {}
+        if frozen and binding.phase in {'SEED_SCOUT', 'FRONTIER_EXPLORER', 'RAW_SEED_CRITIC_RESEARCH'}:
+            normalized['RESEARCH_CONTEXT'] = (stage_ref(round_index, workdir=root) + '/assignment/route_context.json',)
         selected = select_inputs(binding.phase, normalized, root)
         archive_inputs = normalized
         normalized = selected
         if binding.required_inputs != ("PROBE_TASK",):
+            if frozen:
+                archive_inputs = {**archive_inputs, 'TASK_ARCHIVE': (
+                    *frozen['required_refs'], *frozen['archive_refs'], frozen['route_context']['ref'])}
             for kind, refs in tuple(normalized.items()):
                 normalized[kind] = tuple(
                     dict.fromkeys((*refs, *linked_review_refs(root, refs)))
@@ -193,18 +202,26 @@ class SmiPhaseRunner:
                 kind: tuple(dict.fromkeys((*refs, *linked_review_refs(root, refs))))
                 for kind, refs in archive_inputs.items()
             }
-        _write_json(
-            target_dir / "input_selection.json",
-            {
-                "selected": normalized,
-                "archive": archive_inputs,
-                "policy": "declared role dependencies; no byte truncation",
-            },
-        )
+        selection_path = target_dir / 'input_selection.json'
+        selection = {'selected': normalized, 'archive': archive_inputs,
+                     'policy': 'declared role dependencies; no byte truncation'}
+        if frozen:
+            if selection_path.is_file():
+                saved = json.loads(selection_path.read_text())
+                for row in saved.get('bindings', []): check_binding(root, row)
+                normalized = {k: tuple(v) for k, v in saved['selected'].items()}
+                archive_inputs = {k: tuple(v) for k, v in saved['archive'].items()}
+            else:
+                selection['bindings'] = [memory_binding(root, ref) for ref in dict.fromkeys(
+                    ref for values in (normalized if binding.required_inputs == ('PROBE_TASK',) else archive_inputs).values()
+                    for ref in values) if (root / ref).is_file()]
+                _write_json(selection_path, selection)
+        else:
+            _write_json(selection_path, selection)
         supplied = tuple((ref for refs in normalized.values() for ref in refs))
 
         def receipt_errors(payload):
-            return validate_receipt(
+            errors = validate_receipt(
                 root,
                 target_dir,
                 binding.phase,
@@ -214,6 +231,18 @@ class SmiPhaseRunner:
                 routing_context=routing,
             )
 
+            if frozen and not reporter_owned(root) and binding.phase == 'FRONTIER_EXPLORER':
+                try:
+                    from pace.contracts.research.memory import read_json
+                    obligations = dict(load_index(root)['obligations'])
+                    obligations.update({row['id']: row for row in read_json(root, frozen['route_context']['ref'])['obligations']})
+                    delta = prepare_delta(root, _relative_ref(target_dir / 'research_delta.json', root), obligations)
+                    if delta['branch_id'] != frozen['branch_id'] or not set(delta['obligation_ids']) <= set(frozen['obligation_ids']):
+                        raise ValueError('Explorer delta changed assigned identities')
+                except (ValueError, OSError, KeyError, TypeError) as exc:
+                    errors.append({'reason_code': 'research_delta_invalid', 'json_pointer': '/research_delta_ref', 'message': str(exc)})
+            return errors
+
         accepted_result = None
 
         def accept_receipt(payload):
@@ -221,6 +250,8 @@ class SmiPhaseRunner:
             if accepted_result is not None:
                 return accepted_result
             committed_payload = dict(payload)
+            if frozen and not reporter_owned(root) and binding.phase == "FRONTIER_EXPLORER":
+                committed_payload["research_delta_ref"] = _relative_ref(target_dir / "research_delta.json", root)
             committed_payload.update(host_receipt_fields(
                 root, target_dir, binding.phase, payload.get("action"), routing_context=routing
             ))
@@ -388,6 +419,7 @@ class SmiPhaseRunner:
                             "review.md",
                             "change.md",
                             "patch.json",
+                            *( () if reporter_owned(root) else ("research_delta.json",) ),
                         )
                     ],
                     "phase": binding.phase,
@@ -465,6 +497,8 @@ class SmiPhaseRunner:
             archive_access = binding.required_inputs != ("PROBE_TASK",)
             if archive_access:
                 allowed = (*allowed, archive_ref)
+            archives = tuple(dict.fromkeys(ref for values in archive_inputs.values() for ref in values
+                                          if ref not in allowed and _is_file_ref(root, ref))) if archive_access else ()
             guidance = []
             inputs = []
             for ref in allowed:
@@ -513,6 +547,11 @@ class SmiPhaseRunner:
                     f"Standalone finding draft directory: `{stage_ref(round_index, workdir=workdir)}/findings`. Only write a draft when this phase already establishes its complete argument; use a phase-specific filename and leave earlier drafts unchanged.",
                 )
             )
+            if frozen and not reporter_owned(root) and binding.phase == 'FRONTIER_EXPLORER':
+                instruction = delivery_instruction(root, outer_output, 'smi')
+                instruction = instruction.replace(str(Path(outer_output).parent / 'research_delta.json'), _relative_ref(target_dir / 'research_delta.json', root))
+                instruction = instruction.replace(outer_output, _relative_ref(target_dir / 'change.md', root))
+                final_prompt += instruction
             (target_dir / "final_prompt.md").write_text(final_prompt, encoding="utf-8")
         except Exception as exc:
             publish_progress(root, **progress_context, status="failed")
@@ -543,6 +582,7 @@ class SmiPhaseRunner:
                 role=role,
                 host_metadata={
                     "agent_id": binding.role.lower(),
+                    "archive_refs": archives,
                     "target_contract_id": str(target_contract_id),
                     "round_index": round_index,
                     "task_id": progress_context["task_id"],
@@ -560,6 +600,7 @@ class SmiPhaseRunner:
                             "review.md",
                             "change.md",
                             "patch.json",
+                            *( () if reporter_owned(root) else ("research_delta.json",) ),
                         )
                     ],
                     "phase": binding.phase,
@@ -671,6 +712,7 @@ class SmiPhaseRunner:
                 validator=correction_errors,
                 host_metadata={
                     "agent_id": binding.role.lower(),
+                    "archive_refs": archives,
                     "task_id": progress_context["task_id"],
                     "parent_task_id": progress_context["parent_task_id"],
                     "stage_ref": stage_ref(round_index, workdir=root),
@@ -680,6 +722,7 @@ class SmiPhaseRunner:
                     "output_ref": _relative_ref(output_path, root),
                     "receipt_correction_owner": "SMI_PHASE",
                     "receipt_correction": True,
+                    "output_refs": [], "output_dirs": [],
                     "parent_call_id": result.host["call_id"],
                     "representation_correction_of": result.host["call_id"],
                     "receipt_corrections": 1,

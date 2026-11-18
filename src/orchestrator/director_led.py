@@ -28,6 +28,8 @@ from pace.contracts.research.director_protocol import (
     DirectorProtocolError,
     parse_director_decision,
     specialist_spec,
+    validate_director_reference_bindings,
+    validate_director_stop,
 )
 from pace.contracts.proof.binding import resolve_verification
 from pace.orchestrator.director_led_adapters import (
@@ -114,6 +116,10 @@ DIRECTOR_LED_PHASES = frozenset(
     }
 )
 
+
+from pace.contracts.research.memory import enabled as research_memory_enabled, binding, check_binding
+from pace.runtime.research_context import freeze_context, validate_context
+from pace.runtime.output.memory import commit_research_memory, initialize_research_memory
 
 class DirectorLedEngineError(RuntimeError):
     """Raised when the Host cannot continue a Director-led round."""
@@ -459,6 +465,7 @@ class DirectorLedEngine:
         round_root: str | None = None,
         verifier: VerifierHandler | None = None,
         on_round_committed: Callable[..., Any] | None = None,
+        reporter: Callable[[str], Any] | None = None,
     ) -> None:
         self.workdir = Path(workdir)
         self.workdir.mkdir(parents=True, exist_ok=True)
@@ -508,6 +515,7 @@ class DirectorLedEngine:
         self.verifier = verifier
         self.parent_task_id = ""
         self.on_round_committed = on_round_committed
+        self.reporter = reporter
         unknown = set(self.specialists).difference(
             DISPATCHABLE_AGENT_IDS
         )
@@ -560,6 +568,9 @@ class DirectorLedEngine:
                 "Director-led state already exists; use resume=True for continuation"
             )
         self._persist_state(state)
+        if self.commit_progress and research_memory_enabled(self.workdir):
+            initialize_research_memory(self.workdir)
+            commit_research_memory(self.workdir, state.completed_result_refs)
 
         if state.phase in {"STOPPED", "FINALIZE", "FAILED"}:
             return self._result(state)
@@ -620,6 +631,8 @@ class DirectorLedEngine:
     def _publish_committed_round(self, state: DirectorLedState, *, trigger_id: str) -> None:
         """Update the display-only report after a committed Host boundary."""
 
+        if self.commit_progress:
+            commit_research_memory(self.workdir, state.completed_result_refs)
         if self.on_round_committed is None or int(state.round_index or 0) < 1:
             return
         try:
@@ -913,12 +926,14 @@ class DirectorLedEngine:
                     "director_context.json",
                     "director_decision.json",
                     "assignment/task.json",
+                    "assignment/context.json",
+                    "assignment/route_context.json",
                     "progress_snapshot.json",
                     "diagnostics.json",
                 }
                 unexpected = sorted(
                     entry for entry in entries if entry not in allowed_entries
-                    and entry != "README.md" and not entry.startswith("calls/")
+                    and entry != "README.md" and not entry.startswith(("calls/", "assignment/snapshot/"))
                 )
                 if unexpected:
                     raise DirectorLedEngineError(
@@ -968,6 +983,8 @@ class DirectorLedEngine:
         }
         context_ref = self._round_ref(round_index, "director_context.json")
         directive_ref = self._round_ref(round_index, "director_decision.json")
+        proof_states_remaining = state.max_proof_states - state.proof_states_used
+        research_rounds_remaining = None if self.max_rounds is None else self.max_rounds - state.round_index
         try:
             # Context, decision, and assignment are one Host-owned dispatch
             # transaction.  A write failure must become a committed round
@@ -989,10 +1006,8 @@ class DirectorLedEngine:
                         "target_contract_id": context["target_contract_id"],
                         "input_refs": self._director_input_refs(state),
                         "completed_result_refs": state.completed_result_refs,
-                        "proof_states_remaining": state.max_proof_states - state.proof_states_used,
-                        "research_rounds_remaining": (
-                            self.max_rounds - state.round_index if self.max_rounds is not None else None
-                        ),
+                        "proof_states_remaining": proof_states_remaining,
+                        "research_rounds_remaining": research_rounds_remaining,
                         "control_context": str(control_context or ""),
                         "context": context,
                     },
@@ -1000,8 +1015,9 @@ class DirectorLedEngine:
                 decision = _coerce_decision(
                     raw_decision,
                 )
-            from pace.contracts.research.director_protocol import validate_director_reference_bindings
             validate_director_reference_bindings(decision, self.workdir)
+            validate_director_stop(decision, proof_states_remaining=proof_states_remaining,
+                                   research_rounds_remaining=research_rounds_remaining)
         except Exception as exc:
             return self._fail_round(state, round_index, "DIRECTOR", exc)
 
@@ -1021,7 +1037,7 @@ class DirectorLedEngine:
             _write_json(
                 self.workdir / directive_ref,
                 {
-                    "schema_version": DIRECTOR_PROTOCOL_SCHEMA_VERSION,
+                    "schema_version": "research_director_decision/v3" if decision.next_step_kind else DIRECTOR_PROTOCOL_SCHEMA_VERSION,
                     "round_index": round_index,
                     **decision.to_json(),
                 },
@@ -1049,6 +1065,7 @@ class DirectorLedEngine:
                         "input_refs": list(self._assignment_input_refs(decision, round_index)),
                         "output_ref": output_ref,
                         "director_decision_ref": directive_ref,
+                        **self._context_binding(round_index),
                     },
                 )
             else:
@@ -1131,7 +1148,7 @@ class DirectorLedEngine:
         """Bind execution inputs without changing the Director's ticket."""
 
         progress_ref = self._progress_snapshot_ref(round_index)
-        return _unique_strings((
+        refs = _unique_strings((
             work_ref(self.workdir, "input/request.md"),
             work_ref(self.workdir, "input/problem.md"),
             work_ref(self.workdir, "input/target_contract.json"),
@@ -1141,6 +1158,16 @@ class DirectorLedEngine:
             *((progress_ref,) if (self.workdir / progress_ref).is_file() else ()),
             *(ref for ref in decision.input_refs if ref != "memory/verified_progress.json"),
         ))
+
+        if research_memory_enabled(self.workdir):
+            context = freeze_context(self.workdir, self._round_ref(round_index, "assignment/task.json"), decision, refs)
+            return (*context["required_refs"], self._round_ref(round_index, "assignment/context.json"),
+                    context["route_context"]["ref"])
+        return refs
+
+    def _context_binding(self, round_index):
+        if not research_memory_enabled(self.workdir): return {}
+        return {"context_binding": binding(self.workdir, self._round_ref(round_index, "assignment/context.json"))}
 
     def _proof_state_cost(self, decision: DirectorDecision, state: DirectorLedState) -> int:
         if decision.action is not DirectorAction.DISPATCH:
@@ -1238,6 +1265,8 @@ class DirectorLedEngine:
                 expected_output_ref=self._default_output_ref(decision.agent_id, round_index),
                 expected_input_refs=self._assignment_input_refs(decision, round_index),
             )
+            if research_memory_enabled(self.workdir):
+                check_binding(self.workdir, assignment["context_binding"])
             # The model-owned ticket stays unchanged on disk. Composer,
             # specialist and verifier use the frozen Host assignment inputs.
             decision = replace(decision, input_refs=tuple(assignment["input_refs"]))
@@ -1338,6 +1367,10 @@ class DirectorLedEngine:
             result_ref = self._round_ref(round_index, "agent_result.json")
             if smi_owned_prompt_graph:
                 recovered, specialist_value = False, None
+                if recovering and (self.workdir / result_ref).is_file():
+                    saved = json.loads((self.workdir / result_ref).read_text())
+                    if saved.get('status') == 'SUCCEEDED':
+                        recovered, specialist_value = True, saved
             else:
                 recovered, specialist_value = self._recover_pending_specialist_value(
                     result_ref=result_ref,
@@ -1361,6 +1394,7 @@ class DirectorLedEngine:
                         "prompt_ref": prompt_ref,
                         "composer_manifest_ref": manifest_ref,
                         "output_ref": output_ref,
+                        "on_accept": lambda result: _write_json(self.workdir / result_ref, result),
                     },
                 )
             result_record, stable_ref = _coerce_specialist_result(
@@ -1406,6 +1440,11 @@ class DirectorLedEngine:
             # Commit only a valid Host-bound handoff. Survey acquisition can
             # then resume from it without repeating the model call.
             _write_json(self.workdir / result_ref, result_record)
+            from pace.contracts.research.memory import reporter_owned
+            if succeeded and decision.agent_id in {'research', 'prover', 'smi'} and reporter_owned(self.workdir):
+                if self.reporter is None:
+                    raise DirectorLedEngineError('Reporter is required by the saved execution policy')
+                self.reporter(result_ref)
             if decision.agent_id == "survey" and succeeded and explicit_ref:
                 from pace.runtime.output.sources import process_survey_sources
 
@@ -1450,7 +1489,9 @@ class DirectorLedEngine:
                         ref for ref in stable_refs if ref not in state.completed_result_refs
                     )),
                 )
+            self._persist_state(state)
             if self.commit_progress and specialist_succeeded:
+                commit_research_memory(self.workdir, (result_ref,))
                 commit_memory_notes(self.workdir, result_refs=(result_ref,))
             self._persist_state(state)
             publish_progress(self.workdir, task_id=f'round-{round_index:04d}', parent_task_id=self.parent_task_id, stage=decision.agent_id, status='completed' if specialist_succeeded else 'failed', round_index=round_index)
@@ -1514,11 +1555,21 @@ class DirectorLedEngine:
 
         output_path = self.workdir / output_ref
         directory = output_path.parent
+        if (directory / "author_delivery.json").is_file():
+            return False, None
+        sources = directory / 'sources'
+        # Host-downloaded immutable versions are reusable context, not an
+        # uncommitted mathematical draft. Keep their paths stable on resume.
+        source_drafts = ([p for p in sources.iterdir() if p.name != 'web_cache']
+                         if (sources / 'web_cache').is_dir() and not (sources / 'web_cache').is_symlink()
+                         else [sources])
         uncommitted = [
             path for path in (
                 output_path,
+                *source_drafts,
                 *(directory / name for name in (
-                    "findings", "memory_note.md", "sources", "source_manifest.json",
+                    "findings", "memory_note.md", "source_manifest.json",
+                    "research_delta.json", "route_relations.json", "revision.json",
                 )),
             )
             if path.exists() or path.is_symlink()
@@ -1532,14 +1583,16 @@ class DirectorLedEngine:
             attempt.mkdir()
             moved_refs = {}
             for path in uncommitted:
+                destination = attempt / path.relative_to(directory)
+                destination.parent.mkdir(parents=True, exist_ok=True)
                 files = path.rglob("*") if path.is_dir() else (path,)
                 for file in files:
                     if file.is_file():
                         moved_refs[file.relative_to(self.workdir).as_posix()] = (
-                            attempt / path.name / file.relative_to(path)
-                            if path.is_dir() else attempt / path.name
+                            destination / file.relative_to(path)
+                            if path.is_dir() else destination
                         ).relative_to(self.workdir).as_posix()
-                path.replace(attempt / path.name)
+                path.replace(destination)
             # A call can finish immediately before agent_result is committed.
             # Its original delivery must keep referring to that attempt.
             for record_path in directory.glob("calls/*/record.json"):
@@ -2184,7 +2237,12 @@ def _coerce_persisted_decision(
 
     if not isinstance(value, Mapping):
         raise DirectorProtocolError("persisted director decision must be a JSON object")
-    expected_fields = set(DIRECTOR_FIELDS) | {"schema_version", "round_index"}
+    from pace.contracts.research.director_protocol import MEMORY_DIRECTOR_FIELDS, MEMORY_DIRECTOR_SCHEMA_VERSION
+    version = value.get("schema_version")
+    fields = set(DIRECTOR_FIELDS) | (MEMORY_DIRECTOR_FIELDS if version == MEMORY_DIRECTOR_SCHEMA_VERSION else set())
+    if "stop_reason" in value:
+        fields.add("stop_reason")
+    expected_fields = fields | {"schema_version", "round_index"}
     actual_fields = set(value)
     if actual_fields != expected_fields:
         missing = sorted(expected_fields.difference(actual_fields))
@@ -2198,7 +2256,7 @@ def _coerce_persisted_decision(
             "persisted director decision envelope is closed"
             + (" (" + "; ".join(details) + ")" if details else "")
         )
-    if value.get("schema_version") != DIRECTOR_PROTOCOL_SCHEMA_VERSION:
+    if version not in {DIRECTOR_PROTOCOL_SCHEMA_VERSION, MEMORY_DIRECTOR_SCHEMA_VERSION}:
         raise DirectorProtocolError(
             "persisted director decision has an unsupported schema_version"
         )
@@ -2209,7 +2267,7 @@ def _coerce_persisted_decision(
         raise DirectorProtocolError(
             "persisted director decision belongs to a different round"
         )
-    payload = {field: value[field] for field in DIRECTOR_FIELDS}
+    payload = {field: value[field] for field in fields}
     return parse_director_decision(payload)
 
 
@@ -2248,7 +2306,7 @@ def _validate_assignment(
     }
     actual_fields = set(value)
     if not fields.issubset(actual_fields) or actual_fields - fields - {
-        "assembly_source"
+        "assembly_source", "context_binding"
     }:
         missing = sorted(fields.difference(actual_fields))
         extra = sorted(actual_fields.difference(fields))

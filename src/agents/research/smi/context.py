@@ -51,7 +51,7 @@ def objection_key(root, ref):
 
 # Roles receive their own predecessor classes; blind probes remain statement-only.
 INPUT_CLASSES = {
-    "SEED_SCOUT": {"TARGET_ANCHOR", "WORK_ITEM", "SOURCE", "SEED", "REPAIR_BRIEF"},
+    "SEED_SCOUT": {"RESEARCH_CONTEXT", "TARGET_ANCHOR", "WORK_ITEM", "SOURCE", "SEED", "REPAIR_BRIEF"},
     "RAW_SEED_CRITIC_MATH": {
         "TARGET_ANCHOR",
         "WORK_ITEM",
@@ -60,6 +60,7 @@ INPUT_CLASSES = {
         "REPAIR_BRIEF",
     },
     "RAW_SEED_CRITIC_RESEARCH": {
+        "RESEARCH_CONTEXT",
         "TARGET_ANCHOR",
         "WORK_ITEM",
         "SEED",
@@ -67,6 +68,7 @@ INPUT_CLASSES = {
         "REPAIR_BRIEF",
     },
     "FRONTIER_EXPLORER": {
+        "RESEARCH_CONTEXT",
         "TARGET_ANCHOR",
         "WORK_ITEM",
         "REVIEWED_SEED",

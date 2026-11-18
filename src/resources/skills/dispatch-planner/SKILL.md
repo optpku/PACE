@@ -25,3 +25,20 @@ reference and the evidence motivating the change. Use REWRITE_ROUTE when the
 main approach is invalidated or the impact cannot be kept local. Ask the Planner
 to determine the mathematical changes and their downstream effects. Do not
 prescribe the replacement lemmas, dependencies or proof order.
+
+
+## Versioned task continuity
+
+For each load-bearing obligation, preserve its stable identity, exact scope,
+parent objective, and intended consumer. Mark whether it is required by the
+original target or is a sufficient condition of this particular route.
+
+Keep a proved result separate from its proposed application. Record the missing
+application argument and the conditions that must hold at the consumer. Neither
+a completed task nor a checked premise alone closes that application.
+
+Use the supplied frozen route as the revision base. Update only affected
+obligations and consumers. Keep detailed proofs in their original manuscripts;
+the route states the dependencies, unresolved implications, and next bounded
+work item. A route rewrite requires a concrete reason that local revision is
+insufficient. Never rename an unchanged gap as a newly solved route node.

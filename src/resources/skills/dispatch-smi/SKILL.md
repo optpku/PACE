@@ -60,3 +60,21 @@ the identical attempt again without addressing its recorded obstacle.
 Check whether completed local arguments should be drafted for independent
 finding verification even when the overall exploration is incomplete. A correct
 conditional lemma may remain useful while its application conditions are open.
+
+
+## Versioned task continuity
+
+Preserve the accepted question version when only the method changes. Read the
+relevant prior attempt and its exact obstacle before trying the same mechanism.
+State what differs in the present attempt: assumptions, parameters, evidence,
+method, or the relation being tested. Keep the parent objective and the missing
+connection to that objective visible.
+
+A local task is legitimate when its contribution and missing downstream bridge
+are explicit. Do not repeatedly enlarge its scope merely because it does not
+solve the full target. If the present inputs yield no informative continuation,
+save the scoped obstacle and return control rather than repeating the same test.
+
+A failure of this argument is not a refutation of the question. A negative
+result applies only to the claim, mechanism, and conditions actually checked.
+Keep mathematical changes separate from control-field or formatting repairs.

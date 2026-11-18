@@ -8,6 +8,7 @@ import pytest
 
 from pace import cli
 from pace.runtime.llm import TransportSuccess
+from pace.runtime.chat_api import WorkspaceTools
 from pace.runtime.output.calls import attempt_directory
 from pace.runtime.output.events import read_updates
 from test_terminal_result import ResearchTransport
@@ -24,10 +25,11 @@ class WritingTransport(ResearchTransport):
         output = root / re.search(r"## Deliverable\nWrite `([^`]+)`", prompt)[1]
         output.parent.mkdir(parents=True, exist_ok=True)
         if call_name != self.failed_action:
-            output.write_text(
+            WorkspaceTools(root, ledger_context).execute('write_file', {
+                'path': output.relative_to(root).as_posix(), 'content':
                 r"\documentclass{article}\begin{document}An open target.\end{document}"
                 if output.suffix == ".tex" else "# Writing result\n\nThe original target remains open.\n"
-            )
+            })
         folder = attempt_directory(root, ledger_context["call_ref"], 1)
         (folder / "response.txt").write_text("The writing task returned.")
         return TransportSuccess(

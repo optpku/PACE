@@ -1,10 +1,10 @@
 # Find and analyze literature for SMI
 
-Use supplied sources and retrieve additional sources when Web Search is enabled
-and they help the current phase examine its assigned seed or candidate. Save
-acquired text or extracts in the assigned output directory with exact URLs and
-locators. For a blind probe, search independently from its supplied statement;
-do not inspect hidden workspace sources, mechanisms, reviews or history.
+Use already acquired sources relevant to the assigned seed or candidate. Only
+Survey retrieves external sources; report a specific missing source to the
+Director. Retain exact URLs and locators when citing acquired text. Blind probes
+use only their self-contained task, without source retrieval or hidden workspace
+sources, mechanisms, reviews or history.
 
 ## Compare the exact statements
 

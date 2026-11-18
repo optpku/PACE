@@ -175,3 +175,26 @@ For a coherent improvement, request a complete replacement manuscript for the
 existing R entry; preserve the useful earlier cases and exact work-source
 citations. Supporting checks and final report assembly need no new identifier.
 Consult the thematic overview, current catalog and immutable manuscript archive.
+
+
+## Versioned task continuity
+
+Read the current target obligations, proposed applications, and relevant attempt
+records before choosing the next task. Distinguish a new checked local result
+from a checked implication that advances an obligation of the original target.
+Keep the remaining connection to the original target explicit.
+
+Continue an existing route when its dependencies remain valid. Completion of a
+planned node does not by itself require a Planner call. Request replanning only
+when committed evidence changes the route's assumptions, dependencies, or
+feasibility, or when no usable route exists. Cite the specific change.
+
+Before requesting a new mechanism, check whether an existing result can be
+applied to the current obligation. An application proposed in a research review
+still requires the designated independent mathematical check; do not treat that
+review as proof authority or send another author merely to repeat the review.
+
+When reassessment is due, identify a concrete change, a discriminating test, or
+an alternative route. A new task name or another local lemma is not evidence
+that the bottleneck has moved. Do not stop the whole study merely because this
+route needs reassessment, and do not discard checked results.
