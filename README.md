@@ -210,25 +210,39 @@ The core's reader layout keeps each public `work/turnNNN/roundN/` directory limi
 
 Reports and papers preserve the original hypotheses, proof scope and open gaps. Read [writing instructions](docs/user-guide.md#write-a-report-or-paper) for the two writing paths and [recorded result summaries](docs/user-guide.md#summarize-recorded-results) for batch inspection. Mathematical acceptance is separate from writing completion and Web delivery.
 
-## License and citation
+## License
 
-[Apache License 2.0](LICENSE). Inherited license notices are preserved in [NOTICE](NOTICE) and [LICENSES](LICENSES). Software citation metadata is maintained in [CITATION.cff](CITATION.cff).
+PACE is released under the [Apache License 2.0](LICENSE). Inherited license notices are preserved in [NOTICE](NOTICE) and [LICENSES](LICENSES).
 
-If you use PACE in your research, please cite:
+## Contact and Citation
 
-Shu Miao, Feiming Wang, Wentao Long, Chenyi Li, Kun Yuan, and Zaiwen Wen. [*PACE: Research Proving Agent for Adaptive Conjecture Exploration*](https://arxiv.org/abs/2610.33690). arXiv:2610.33690, 2026.
+We hope PACE is useful in your work. If you find a bug or have feedback, please feel free to email one of the authors listed below.
+
+- Feiming Wang — <wangfeiming@mail.nankai.edu.cn>
+- Wentao Long — <23307130521@m.fudan.edu.cn>
+- Chenyi Li — <lichenyi@stu.pku.edu.cn>
+- Kun Yuan — <kunyuan@pku.edu.cn>
+- Zaiwen Wen — <wenzw@pku.edu.cn>
+
+If you use PACE in your research, please cite the paper below.
+
+Shu Miao, Feiming Wang, Wentao Long, Chenyi Li, Kun Yuan, and Zaiwen Wen. *PACE: Research Proving Agent for Adaptive Conjecture Exploration*. 2026. [arXiv:2610.33690](https://arxiv.org/abs/2610.33690)
 
 ```bibtex
 @misc{miao2026paceresearchprovingagent,
-  title={PACE: Research Proving Agent for Adaptive Conjecture Exploration},
-  author={Shu Miao and Feiming Wang and Wentao Long and Chenyi Li and Kun Yuan and Zaiwen Wen},
-  year={2026},
-  eprint={2610.33690},
-  archivePrefix={arXiv},
-  primaryClass={cs.AI},
-  url={https://arxiv.org/abs/2610.33690},
+  title         = {{PACE}: Research Proving Agent for Adaptive Conjecture Exploration},
+  author        = {Shu Miao and Feiming Wang and Wentao Long and Chenyi Li and
+                   Kun Yuan and Zaiwen Wen},
+  year          = {2026},
+  eprint        = {2610.33690},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.AI},
+  doi           = {10.48550/arXiv.2610.33690},
+  url           = {https://arxiv.org/abs/2610.33690},
 }
 ```
+
+Software citation metadata is available in [CITATION.cff](CITATION.cff).
 
 ## Acknowledgements
 

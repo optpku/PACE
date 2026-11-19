@@ -192,25 +192,39 @@ PACE 保存数学原稿、断点与运行记录，外部 Web 应用负责研究�
 
 `resume` 接续未完成环节；`continue` 才开启下一 turn。研究结束不会自动写长报告，也不会自动开启下一 turn。
 
-## 许可与引用
+## 许可证
 
-采用 [Apache License 2.0](LICENSE)。继承代码的许可声明保留于 [NOTICE](NOTICE) 和 [LICENSES](LICENSES)。软件引用信息维护于 [CITATION.cff](CITATION.cff)。
+PACE 采用 [Apache License 2.0](LICENSE)。继承代码的许可声明保留于 [NOTICE](NOTICE) 和 [LICENSES](LICENSES)。
 
-如果你在研究中使用 PACE，请引用以下论文：
+## 联系与引用
 
-Shu Miao, Feiming Wang, Wentao Long, Chenyi Li, Kun Yuan, and Zaiwen Wen. [*PACE: Research Proving Agent for Adaptive Conjecture Exploration*](https://arxiv.org/abs/2610.33690). arXiv:2610.33690, 2026.
+希望 PACE 能为你的研究提供帮助。如果遇到程序错误或有任何建议，欢迎发邮件联系下列作者。
+
+- Feiming Wang — <wangfeiming@mail.nankai.edu.cn>
+- Wentao Long — <23307130521@m.fudan.edu.cn>
+- Chenyi Li — <lichenyi@stu.pku.edu.cn>
+- Kun Yuan — <kunyuan@pku.edu.cn>
+- Zaiwen Wen — <wenzw@pku.edu.cn>
+
+如果你在研究中使用 PACE，请引用以下论文。
+
+Shu Miao, Feiming Wang, Wentao Long, Chenyi Li, Kun Yuan, and Zaiwen Wen. *PACE: Research Proving Agent for Adaptive Conjecture Exploration*. 2026. [arXiv:2610.33690](https://arxiv.org/abs/2610.33690)
 
 ```bibtex
 @misc{miao2026paceresearchprovingagent,
-  title={PACE: Research Proving Agent for Adaptive Conjecture Exploration},
-  author={Shu Miao and Feiming Wang and Wentao Long and Chenyi Li and Kun Yuan and Zaiwen Wen},
-  year={2026},
-  eprint={2610.33690},
-  archivePrefix={arXiv},
-  primaryClass={cs.AI},
-  url={https://arxiv.org/abs/2610.33690},
+  title         = {{PACE}: Research Proving Agent for Adaptive Conjecture Exploration},
+  author        = {Shu Miao and Feiming Wang and Wentao Long and Chenyi Li and
+                   Kun Yuan and Zaiwen Wen},
+  year          = {2026},
+  eprint        = {2610.33690},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.AI},
+  doi           = {10.48550/arXiv.2610.33690},
+  url           = {https://arxiv.org/abs/2610.33690},
 }
 ```
+
+软件引用信息见 [CITATION.cff](CITATION.cff)。
 
 ## 致谢
 
