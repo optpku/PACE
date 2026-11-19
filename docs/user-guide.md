@@ -25,7 +25,7 @@ pace run \
   --web-search-mode on
 ```
 
-Replace the model and effort with values supported by your provider. This creates `outputs/even-square/` and starts `turn001`. `proof` handles a fixed statement with one initial Survey followed by direct proving. It runs at most five successive proof loops by default: the first writes a complete proof and later loops revise it using independent review feedback. Verification success ends the turn early; there is no candidate pool. Repairs and resume reuse the Survey. `research` uses dynamic Director scheduling with Planner, Research and SMI as needed. Omit `--mode` to let the first target-location call select: only tasks suited to direct proving choose proof; mechanism exploration or uncertainty chooses research. Explicit mode choices override selection. Both modes use independent Auditor/Kernel checks; see [mode and budget settings](configuration.md#command-line-settings).
+Replace the model and effort with values supported by your provider. This creates `outputs/even-square/` and starts `turn001`. `proof` handles a fixed statement with one initial Survey followed by direct proving. It runs at most five successive proof loops by default: the first writes a complete proof and later loops revise it using independent review feedback. Verification success ends the turn early; there is no candidate pool. Repairs and resume reuse the Survey. `research` uses dynamic Director scheduling with Planner, Research and RCI as needed. Omit `--mode` to let the first target-location call select: only tasks suited to direct proving choose proof; mechanism exploration or uncertainty chooses research. Explicit mode choices override selection. Both modes use independent Auditor/Kernel checks; see [mode and budget settings](configuration.md#command-line-settings).
 
 For your own open conjecture, save the problem as `conjecture.md` and start a research-mode run:
 
@@ -59,7 +59,7 @@ Read `work/turnNNN/final_report.json` for the recorded mathematical result and e
 PACE records mathematical originals and runtime events. The Web application generates the user-facing brief, thematic results overview, activity cards, reader copies and downloads. These presentation documents are not required inputs for core execution or recovery. Explicit report and paper tasks are described below.
 
 The core stores `orientation/`, `round1/`, `round2/` and `finalization/` directly
-under each `work/turnNNN/`. SMI candidates are direct children of `smi/attempt_NNN/`;
+under each `work/turnNNN/`. RCI candidates are direct children of `rci/attempt_NNN/`;
 each phase writes its files directly in a named directory, such as
 `candidate_01/seed_scout/seed.md`. Distinct phase iterations use sibling names
 such as `frontier_explorer/` and `frontier_explorer_02/`. Internal attempts remain
@@ -98,6 +98,8 @@ pace resume --run-dir outputs/even-square \
 ```
 
 `resume` continues the selected saved task. It preserves the target, mode, resource snapshot, proof-loop limit and committed outputs. `--resource-variant`, `--max-proof-states` and `--mode` are not resume options. Completed mathematical work is reused without another model call. If a writing task is selected, recovery continues that writing task without restarting research.
+
+Resume turns created before the RCI rename with the PACE installation saved for that run. The checkpoint and resource snapshot refer to the role IDs and paths from that version.
 
 A service failure retains its concrete diagnostic and stops subsequent model dispatches in that Host session. Correct the service or environment before resuming. A new literal question uses `continue` or a new problem ID, preserving the committed original.
 
@@ -159,7 +161,7 @@ python scripts/summarize_results.py --runs-dir outputs --output exports/summary
 
 The destination must be a new directory outside the source directories. This command reads the current turn of each immediate child problem directory and writes factual `summary.json` and `README.md` without model calls or source changes. Preserve the original workspace for recovery. Reader-view exports, file-link conversion and download packaging belong to the external Web application.
 
-An SMI assignment states the fixed question, the one gap to address and its return condition. Continuing an unchanged question enters exploration directly. A bounded attempt can return `HANDOFF` with its original work and unresolved gap; this is distinct from a mathematical rejection.
+An RCI assignment states the fixed question, the one gap to address and its return condition. Continuing an unchanged question enters exploration directly. A bounded attempt can return `HANDOFF` with its original work and unresolved gap; this is distinct from a mathematical rejection.
 
 
 ## Research memory and task context

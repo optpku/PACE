@@ -31,7 +31,7 @@ acceptance with their responsible roles.
 
 No catalog IDs or per-source target bindings are required. Keep any bridge
 dependencies globally acyclic. In research mode, leave mechanism composition
-to SMI and work-item framing to Framer. In proof mode, hand the focused source
+to RCI and work-item framing to Framer. In proof mode, hand the focused source
 report directly to Prover. Complete the assigned source report in this call.
 
 Use external retrieval only when the Host's current retrieval settings enable

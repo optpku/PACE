@@ -70,7 +70,7 @@ where neither the specified certificate nor any nonconstant finite cycle exists.
 When `--mode` is omitted, the first target-location call selects `proof` only for tasks suited to direct proving; tasks requiring mechanism exploration, or uncertainty about suitability, select `research`. You can set either mode explicitly. Research follows the loop below; proof runs one initial Survey and up to five successive proof-and-review loops, stopping once verified.
 
 1. **Plan and gather sources.** The Director selects objectives and chooses between local exploration and deeper investigation; the Planner develops the mathematical route. Survey gathers literature and can optionally use [ReasAtlas](https://atlas.reaslab.io) for mathematical source retrieval through a separately supplied client and Skill; see [retrieval configuration](docs/configuration.md#reasatlas-source-retrieval).
-2. **Refine conjectures and their supporting arguments.** The conjecture-refinement process, SMI, develops candidate statements and mechanisms: intermediate claims intended to establish them. It checks whether the claims are justified without circular reasoning and whether they cover the full candidate. Proof attempts and counterexample searches distinguish an unsupported argument from a false statement, guiding repair, revision, or decomposition within the original request.
+2. **Refine conjectures and their supporting arguments.** Refined Conjecture Investigation (RCI) develops candidate statements and the intermediate claims intended to establish them. It checks the justification for those claims, tests for circular reasoning, and checks whether they cover the full candidate. Proof attempts and counterexample searches distinguish an unsupported argument from a false statement, guiding repair, revision, or decomposition within the original request.
 3. **Construct and review proofs.** The Prover assembles the relevant arguments. Auditor and Kernel independently review the candidate proof against the original target using model-based natural-language verification.
 4. **Retain evidence for the next task.** Versioned memory records results separately from their uses, preserving assumptions, scope, sources, dependencies, and review findings. Changes to a candidate or condition trigger renewed review of affected evidence; established results retain their original conditions. Reuse requires checking those conditions and the argument connecting the old conclusion to its new use. Missing steps and failed routes guide the next objective, with checked premises, exploratory material, and unresolved obligations kept distinct in task-specific context.
 5. **Report and continue.** Checked findings update progress as the research proceeds. Explicit writing tasks produce a research-report outline and report, or an independent paper outline and LaTeX/PDF paper from saved evidence. The Web application owns user updates, reader briefs and downloads. [Resume](docs/user-guide.md#resume-an-interrupted-turn) continues unfinished stages while reusing completed work; [continue](docs/user-guide.md#continue-with-a-new-question) starts a new turn with prior findings.
@@ -174,7 +174,7 @@ pace problems --output outputs
 ```
 
 Research runs accept `--max-rounds N` to cap outer dispatch rounds per user turn,
-including planning, source research and SMI exploration. Every parallel task takes
+including planning, source research and RCI exploration. Every parallel task takes
 one slot; batches are limited to the remaining slots. The last dispatched task and
 pending verification finish before research closes. Reaching the limit produces a
 completed run with an OPEN mathematical status unless a full candidate has passed
@@ -182,8 +182,8 @@ verification. Explicit writing tasks can then report the existing results and ga
 Resume retains the saved limit and used rounds; continue starts a new turn with its
 own setting. This does not cap the model calls inside one round.
 
-In Research mode, Research and SMI each consume one proof-state credit per
-dispatch, including partial or failed attempts. SMI subphases and recovery share
+In Research mode, Research and RCI each consume one proof-state credit per
+dispatch, including partial or failed attempts. RCI subphases and recovery share
 that reservation. Prover assembly, repair and verification consume no proof-state
 credits and can use existing evidence after the balance reaches zero. All roles
 remain subject to the research-round, call and time budgets.
@@ -196,7 +196,7 @@ New research turns freeze task inputs and route versions. After each completed R
 
 PACE saves mathematical originals, checkpoints and factual runtime records. The external Web application renders user updates, thematic reader briefs, activity cards and download packages from these records.
 
-The core's reader layout keeps each public `work/turnNNN/roundN/` directory limited to its `README.md` index and numbered agent pages. Supporting manuscripts, SMI phase files, execution receipts and memory drafts stay in the hidden run directory; links in the reader pages open those originals. Execution and recovery continue to use the original files.
+The core's reader layout keeps each public `work/turnNNN/roundN/` directory limited to its `README.md` index and numbered agent pages. Supporting manuscripts, RCI phase files, execution receipts and memory drafts stay in the hidden run directory; links in the reader pages open those originals. Execution and recovery continue to use the original files.
 
 | Output | What it provides |
 |---|---|

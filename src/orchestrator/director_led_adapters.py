@@ -85,9 +85,9 @@ def build_default_specialist_handlers(
     root = Path(workdir)
     handlers: dict[str, Callable[..., dict[str, Any]]] = {}
     for agent_id in sorted(DISPATCHABLE_AGENT_IDS):
-        if agent_id == "smi":
-            from pace.orchestrator.smi_adapter import build_smi_handler
-            handlers[agent_id] = build_smi_handler(llm=llm, workdir=root)
+        if agent_id == "rci":
+            from pace.orchestrator.rci_adapter import build_rci_handler
+            handlers[agent_id] = build_rci_handler(llm=llm, workdir=root)
             continue
         handlers[agent_id] = _handler_for(
             llm=llm,
@@ -110,7 +110,7 @@ def build_specialist_prompt_assembly(
 
     from pace.runtime.research_context import task_context, route_base
     from pace.contracts.research.memory import delivery_instruction, reporter_owned
-    separate_reporter = reporter_owned(workdir) and decision.agent_id in {'research', 'prover', 'smi'}
+    separate_reporter = reporter_owned(workdir) and decision.agent_id in {'research', 'prover', 'rci'}
     frozen = task_context(workdir, output_ref)
     inputs = tuple(decision.input_refs)
     dependency_task = ""
@@ -137,7 +137,7 @@ def build_specialist_prompt_assembly(
         )
         revision_task += " Write only revision.json; the Host materializes the assigned complete route. "
 
-    method_refs = (skill_index_ref(workdir),) if decision.agent_id != "smi" else ()
+    method_refs = (skill_index_ref(workdir),) if decision.agent_id != "rci" else ()
 
     role_prompt_ref = (
         work_ref(workdir, "resources/prompts/roles/research_framing.md")
@@ -321,7 +321,7 @@ def run_default_specialist(
     if reporter_owned(root):
         metadata['output_refs'] = [r for r in metadata['output_refs']
                                    if Path(r).name != 'research_delta.json'
-                                   and (Path(r).name != 'memory_note.md' or normalized_agent not in {'research', 'prover', 'smi'})]
+                                   and (Path(r).name != 'memory_note.md' or normalized_agent not in {'research', 'prover', 'rci'})]
     if normalized_agent == "survey":
         metadata["output_dirs"].append(str((destination.parent / "sources").relative_to(root)))
     author_delivery = destination.with_name("author_delivery.json")

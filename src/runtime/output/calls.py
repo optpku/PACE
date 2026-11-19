@@ -28,7 +28,7 @@ def begin_call(
     owner = str(
         meta.get("stage_ref") or stage_ref(int(meta.get("round_index", 0) or 0), workdir=workdir)
     )
-    # Bind nested SMI/verification calls to their outer assignment without exposing private logs.
+    # Bind nested RCI/verification calls to their outer assignment without exposing private logs.
     context_path = Path(workdir) / owner / 'assignment/context.json'
     if not context_path.is_file():
         context_path = Path(workdir) / stage_ref(int(meta.get('round_index', 0) or 0), workdir=workdir) / 'assignment/context.json'

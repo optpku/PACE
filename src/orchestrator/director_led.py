@@ -1,7 +1,7 @@
 """Host-owned production loop for Director-led mathematical research.
 
 A Director schedules bounded specialist work. Prompt Composer prepares ordinary
-mathematical tasks, while SMI owns its internal phase prompts. The Host executes
+mathematical tasks, while RCI owns its internal phase prompts. The Host executes
 those assignments and persists their artifacts and exact continuation state.
 Mathematical agents own reasoning; Auditor and Kernel own independent verdicts.
 History and method guides remain search context for subsequent rounds.
@@ -440,7 +440,7 @@ class DirectorLedEngine:
     ``composer`` receives validated decisions for roles that use the
     top-level Prompt Composer and must return a
     :class:`PromptComposerResult`; Survey/Research use their static role
-    prompts directly and SMI owns its internal phase prompt graph.
+    prompts directly and RCI owns its internal phase prompt graph.
     ``specialists`` maps protocol agent IDs to handlers.  A handler receives
     ``prompt``, ``decision``, ``context`` and the dispatch fields as keyword
     arguments.
@@ -1172,7 +1172,7 @@ class DirectorLedEngine:
     def _proof_state_cost(self, decision: DirectorDecision, state: DirectorLedState) -> int:
         if decision.action is not DirectorAction.DISPATCH:
             return 0
-        return 1 if decision.agent_id in {"research", "smi"} else 0
+        return 1 if decision.agent_id in {"research", "rci"} else 0
 
     def _check_task_budget(self, tasks: tuple[DirectorDecision, ...], state: DirectorLedState) -> None:
         cost = sum(self._proof_state_cost(task, state) for task in tasks)
@@ -1284,16 +1284,16 @@ class DirectorLedEngine:
                     if ref == self._progress_snapshot_ref(round_index)), ""),
             }
             publish_progress(self.workdir, task_id=f'round-{round_index:04d}', parent_task_id=self.parent_task_id, stage=decision.agent_id, status='started', round_index=round_index)
-            smi_owned_prompt_graph = decision.agent_id == "smi"
+            rci_owned_prompt_graph = decision.agent_id == "rci"
             manifest_ref = ""
             prompt_ref = ""
             final_prompt = ""
             input_refs = tuple(decision.input_refs)
             composer_checkpoint_committed = False
-            if smi_owned_prompt_graph:
+            if rci_owned_prompt_graph:
                 if state.last_composer_manifest_ref or state.pending_prompt_ref:
                     raise DirectorLedEngineError(
-                        "SMI dispatch must not carry a top-level Composer checkpoint"
+                        "RCI dispatch must not carry a top-level Composer checkpoint"
                     )
             else:
                 expected_manifest_ref = self._round_ref(
@@ -1356,7 +1356,7 @@ class DirectorLedEngine:
                 )
                 final_prompt = composer_record.final_prompt
                 # Commit prompt bytes before invoking an ordinary specialist.
-                # SMI instead owns an append-only internal phase graph and
+                # RCI instead owns an append-only internal phase graph and
                 # recovers from its committed assignment and outcome.
                 state = self._replace_state(
                     state,
@@ -1365,7 +1365,7 @@ class DirectorLedEngine:
                 )
                 self._persist_state(state)
             result_ref = self._round_ref(round_index, "agent_result.json")
-            if smi_owned_prompt_graph:
+            if rci_owned_prompt_graph:
                 recovered, specialist_value = False, None
                 if recovering and (self.workdir / result_ref).is_file():
                     saved = json.loads((self.workdir / result_ref).read_text())
@@ -1441,7 +1441,7 @@ class DirectorLedEngine:
             # then resume from it without repeating the model call.
             _write_json(self.workdir / result_ref, result_record)
             from pace.contracts.research.memory import reporter_owned
-            if succeeded and decision.agent_id in {'research', 'prover', 'smi'} and reporter_owned(self.workdir):
+            if succeeded and decision.agent_id in {'research', 'prover', 'rci'} and reporter_owned(self.workdir):
                 if self.reporter is None:
                     raise DirectorLedEngineError('Reporter is required by the saved execution policy')
                 self.reporter(result_ref)
@@ -1696,8 +1696,8 @@ class DirectorLedEngine:
             )
         # Add discovery after composition so it reaches the actual specialist,
         # even when the Composer condenses its inputs. Committed prompts above
-        # are restored byte-for-byte; SMI owns its phase-specific resources.
-        if decision.agent_id != "smi":
+        # are restored byte-for-byte; RCI owns its phase-specific resources.
+        if decision.agent_id != "rci":
             composer_record = PromptComposerResult(
                 final_prompt=append_skill_catalog(
                     composer_record.final_prompt,
@@ -1707,8 +1707,8 @@ class DirectorLedEngine:
             )
         # Add discovery after composition so it reaches the actual specialist,
         # even when the Composer condenses its inputs. Committed prompts above
-        # are restored byte-for-byte; SMI owns its phase-specific resources.
-        if decision.agent_id != "smi":
+        # are restored byte-for-byte; RCI owns its phase-specific resources.
+        if decision.agent_id != "rci":
             composer_record = PromptComposerResult(
                 final_prompt=append_skill_catalog(
                     composer_record.final_prompt, workdir=self.workdir,
@@ -2042,7 +2042,7 @@ class DirectorLedEngine:
             "framer": "research_brief.json",
             "planner": "planner_deliverable.md",
             "survey": "survey_deliverable.md",
-            "smi": "smi_deliverable.md",
+            "rci": "rci_deliverable.md",
             "research": "research_deliverable.md",
             "prover": "candidate_proof.md",
         }

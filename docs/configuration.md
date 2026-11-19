@@ -20,13 +20,13 @@
 | `--output` | `outputs` | Root for new problem workspaces. |
 | `--json` / `--profile` | off | Machine event output / timing records. |
 
-In research mode, each Research or SMI dispatch consumes one proof state when reserved, including partial or mathematically failed attempts. SMI subphases and recovery share that single reservation. Prover assembly and repair, other roles, fixed Auditor/Kernel checks and reporting consume no proof-state credits. At zero credits, Prover can still use existing evidence; new Research or SMI work cannot start. All roles remain subject to the research-round, call and time limits. The cap does not limit total calls, tokens, time, or cost. Only research mode uses the validated difficulty and dependency levels to allocate the budget; an explicit cap can reduce it. Proof mode writes a short brief and uses its saved loop limit, with no research-budget assessment. Survey uses the same configured timeout as other roles. Director calls use low reasoning effort except when the configured effort is `none`. Only Survey may retrieve external sources when enabled. Roles preserve the exact source URLs and locators; retrieved material does not change the literal target or verification authority. Each Codex invocation pins search to live or disabled, rather than inheriting Codex defaults. Switching search off does not make model inference offline. A timed-out model call is stopped without automatic transport replay. After resolving the cause, `resume` retries the saved task with its existing budget and preserved partial artifacts. Operational failures pause before further model-based reporting; optional assessment content errors may use the default budget, while assessment transport failures remain resumable initialization steps.
+In research mode, each Research or RCI dispatch consumes one proof state when reserved, including partial or mathematically failed attempts. RCI subphases and recovery share that single reservation. Prover assembly and repair, other roles, fixed Auditor/Kernel checks and reporting consume no proof-state credits. At zero credits, Prover can still use existing evidence; new Research or RCI work cannot start. All roles remain subject to the research-round, call and time limits. The cap does not limit total calls, tokens, time, or cost. Only research mode uses the validated difficulty and dependency levels to allocate the budget; an explicit cap can reduce it. Proof mode writes a short brief and uses its saved loop limit, with no research-budget assessment. Survey uses the same configured timeout as other roles. Director calls use low reasoning effort except when the configured effort is `none`. Only Survey may retrieve external sources when enabled. Roles preserve the exact source URLs and locators; retrieved material does not change the literal target or verification authority. Each Codex invocation pins search to live or disabled, rather than inheriting Codex defaults. Switching search off does not make model inference offline. A timed-out model call is stopped without automatic transport replay. After resolving the cause, `resume` retries the saved task with its existing budget and preserved partial artifacts. Operational failures pause before further model-based reporting; optional assessment content errors may use the default budget, while assessment transport failures remain resumable initialization steps.
 
 Mode selection is committed with target extraction before budget allocation. Invalid routing receipts or service failures pause initialization without starting Survey, research or terminal writing. An uncertain but valid recommendation selects research. Batch `pipeline.mode` may be omitted or null; only explicit values emit `--mode`. Omitting batch `pipeline.web_search_mode` defaults to `on`, matching the CLI; set `off` to disable external retrieval.
 
 `resume` accepts execution settings but restores the saved workflow/resource snapshot and budget. See `pace resume --help` for its exact options.
 
-Continued SMI work requires an exact existing question file from the dispatch's
+Continued RCI work requires an exact existing question file from the dispatch's
 input list. The Director may correct this reference once before dispatch; the
 correction cannot change the action, inputs or mathematical task. Invalid
 references remain diagnostics rather than reaching a specialist as file paths.
@@ -45,7 +45,7 @@ These are project guidance choices, not an availability or performance claim:
 
 `weak` supplies more detailed role prompts. It is a resource bundle name, not an automatic measurement of a model's ability. Both variants use one [shared method library](../src/resources/skills/README.md), including the same mathematical checks and examples. Each run snapshots its selected prompts and the shared Skills under the turn's `resources/` directory. Both prompt variants and the full library ship in the wheel; resume keeps the saved snapshot.
 
-Director and general research roles receive a compact Skill index and read the relevant entry and supporting material for their task. SMI loads methods for its specific phase; statement-only probes do not receive the general index or investigation history. Manuscript roles load the writing guides, while Auditor/Kernel retain independent verification prompts. Skills guide the mathematical work and do not grant a PASS.
+Director and general research roles receive a compact Skill index and read the relevant entry and supporting material for their task. RCI loads methods for its specific phase; statement-only probes do not receive the general index or investigation history. Manuscript roles load the writing guides, while Auditor/Kernel retain independent verification prompts. Skills guide the mathematical work and do not grant a PASS.
 
 ## Authentication and custom providers
 
@@ -73,7 +73,7 @@ correction. This is an encoding correction, independent of network retries.
 
 If Codex reports a code-mode tool-host negotiation timeout and produces no
 usable receipt, PACE retries it within the existing transport retry limit.
-A valid receipt remains usable and retains the tool-host warning. SMI checks
+A valid receipt remains usable and retains the tool-host warning. RCI checks
 each phase's routing fields and required artifacts before committing its
 checkpoint. A single receipt correction may fix missing control fields while
 preserving valid decisions and original mathematical files.
@@ -155,9 +155,9 @@ PACE isolates per-call Codex configuration while reusing authentication. Persona
 
 Research, proof and writing have their own saved tasks. Runtime events contain factual identities, status and output references. The Web application reads these records to create user updates and reports; a presentation failure does not change the mathematical verdict or repeat completed work.
 
-SMI checks the existing call/time budget before every new subphase and reserves at most 64 distinct new phase slots per dispatch. Recovery reuses committed phases. The Host records CREATE or REVISE and assigned output paths for seed work. Continuing an existing question enters Explorer directly; a changed mathematical statement requires an explicit new question.
+RCI checks the existing call/time budget before every new subphase and reserves at most 64 distinct new phase slots per dispatch. Recovery reuses committed phases. The Host records CREATE or REVISE and assigned output paths for seed work. Continuing an existing question enters Explorer directly; a changed mathematical statement requires an explicit new question.
 
-SMI receipts carry only routing fields and artifact references. Review/change Markdown holds mathematical content. One receipt correction can fix missing controls without creating missing mathematics. An Explorer HANDOFF preserves useful work and its first unresolved gap for Director scheduling; it does not refute the candidate.
+RCI receipts carry only routing fields and artifact references. Review/change Markdown holds mathematical content. One receipt correction can fix missing controls without creating missing mathematics. An Explorer HANDOFF preserves useful work and its first unresolved gap for Director scheduling; it does not refute the candidate.
 
 Scope-review reuse compares the actual question, target, review rules, recorded dependencies and objections. New or changed relevant evidence triggers a fresh review. Reuse is search context and does not authorize a final proof verdict.
 

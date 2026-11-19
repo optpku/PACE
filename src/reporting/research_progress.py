@@ -98,7 +98,7 @@ def run_research_reporter(*, llm, workdir: Path, result_ref: str) -> dict | None
     if not reporter_owned(root):
         return None
     result = read_json(root, result_ref)
-    if result.get('status') != 'SUCCEEDED' or result['agent_id'] not in {'research', 'prover', 'smi'}:
+    if result.get('status') != 'SUCCEEDED' or result['agent_id'] not in {'research', 'prover', 'rci'}:
         return None
     folder = Path(result_ref).parent
     receipt_ref = str(folder / 'reporter_result.json')
@@ -114,7 +114,7 @@ def run_research_reporter(*, llm, workdir: Path, result_ref: str) -> dict | None
         originals = list(dict.fromkeys(r for r in originals if (root / r).is_file()
                                       and Path(r).is_relative_to(folder)))
         required = originals
-        if result['agent_id'] == 'smi':
+        if result['agent_id'] == 'rci':
             required = [r for r in originals if r == result['deliverable_ref']
                         or Path(r).name in {'change.md', 'outcome.json'} or 'findings' in Path(r).parts]
         refs = list(dict.fromkeys([result_ref, *required, *context['required_refs'], context['route_context']['ref']]))

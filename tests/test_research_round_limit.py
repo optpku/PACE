@@ -298,12 +298,12 @@ def credit_task(ws, agent):
     task = {"action": "DISPATCH", "agent_id": agent,
             "prompt_brief": "Investigate the fixed target using the existing mathematical evidence.",
             "input_refs": [ws.work_ref("input/problem.md")]}
-    if agent == "smi":
+    if agent == "rci":
         task["research_operation"] = "NEW_PROBLEM"
     return task
 
 
-@pytest.mark.parametrize("agent", ["research", "smi"])
+@pytest.mark.parametrize("agent", ["research", "rci"])
 def test_paid_dispatch_stops_at_credit_limit_without_operational_failure(research_workspace, agent):
     ws = research_workspace
     calls = []
@@ -325,7 +325,7 @@ def test_paid_dispatch_stops_at_credit_limit_without_operational_failure(researc
 
 
 @pytest.mark.parametrize("credits", [1, 2])
-def test_parallel_research_and_smi_reserve_only_available_credits(research_workspace, credits):
+def test_parallel_research_and_rci_reserve_only_available_credits(research_workspace, credits):
     ws = research_workspace
     calls = []
 
@@ -337,13 +337,13 @@ def test_parallel_research_and_smi_reserve_only_available_credits(research_works
 
     task = credit_task(ws, "research")
     engine = DirectorLedEngine(workdir=ws.root,
-        director=lambda **_: {**task, "parallel_tasks": [credit_task(ws, "smi")]},
+        director=lambda **_: {**task, "parallel_tasks": [credit_task(ws, "rci")]},
         composer=lambda **_: PromptComposerResult(final_prompt="Investigate the exact target.", call_id="composer"),
-        specialists={agent: specialist for agent in ("research", "smi")}, target_contract_id="TARGET",
+        specialists={agent: specialist for agent in ("research", "rci")}, target_contract_id="TARGET",
         max_proof_states=credits, max_rounds=2)
     result = engine.run()
     assert result.state.proof_states_used == credits
-    assert sorted(calls) == (["research"] if credits == 1 else ["research", "smi"])
+    assert sorted(calls) == (["research"] if credits == 1 else ["rci", "research"])
     assert result.phase == "FINALIZE"
 
 
@@ -360,11 +360,11 @@ def test_parallel_free_task_can_use_the_last_round_at_zero_credits(research_work
     def director(**kwargs):
         if kwargs["round_index"] == 1:
             return credit_task(ws, "research")
-        return {**credit_task(ws, "smi"), "parallel_tasks": [credit_task(ws, "survey")]}
+        return {**credit_task(ws, "rci"), "parallel_tasks": [credit_task(ws, "survey")]}
 
     engine = DirectorLedEngine(workdir=ws.root, director=director,
         composer=lambda **_: PromptComposerResult(final_prompt="Use the existing evidence.", call_id="composer"),
-        specialists={agent: specialist for agent in ("research", "smi", "survey")},
+        specialists={agent: specialist for agent in ("research", "rci", "survey")},
         target_contract_id="TARGET", max_proof_states=1, max_rounds=2)
     result = engine.run()
     assert calls == ["research", "survey"]
@@ -373,7 +373,7 @@ def test_parallel_free_task_can_use_the_last_round_at_zero_credits(research_work
     assert result.phase == "FINALIZE"
 
 
-@pytest.mark.parametrize("agent", ["research", "smi"])
+@pytest.mark.parametrize("agent", ["research", "rci"])
 def test_paid_dispatch_resume_reuses_its_reserved_credit(research_workspace, agent):
     ws = research_workspace
     attempts = []

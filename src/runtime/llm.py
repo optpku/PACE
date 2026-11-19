@@ -1539,9 +1539,9 @@ def _build_file_driven_cli_instruction(
     # workspace navigation below would invite reading reports and prior proofs,
     # even though the phase prompt explicitly excludes that evidence.
     if role.upper() in {
-        "SMI_BLIND_PROVER_PROBE",
-        "SMI_REFUTE_PROVER_PROBE",
-        "SMI_FRONTIER_REFUTE_PROBE",
+        "RCI_BLIND_PROVER_PROBE",
+        "RCI_REFUTE_PROVER_PROBE",
+        "RCI_FRONTIER_REFUTE_PROBE",
     }:
         base += (
             f"Read `{prompt_file}` for your statement-only probe task. "

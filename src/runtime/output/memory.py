@@ -220,13 +220,13 @@ def validate_research_delivery(root: Path, result: dict, assignment_ref: str, *,
         payload['route'] = prepare_route(root, ref, obligations)
         payload['route_ref'] = ref
     if reporter_owned(root):
-        if author_only or result['agent_id'] not in {'research', 'prover', 'smi'}:
+        if author_only or result['agent_id'] not in {'research', 'prover', 'rci'}:
             return payload
         from pace.reporting.research_progress import restore_reporter_delivery
         restore_reporter_delivery(root, str(folder / 'agent_result.json'))
         payload['reporter_ref'] = str(folder / 'reporter_result.json')
     delta_ref = str(folder / 'research_delta.json')
-    if (root / delta_ref).is_file() or result['agent_id'] in {'research', 'prover', 'smi'}:
+    if (root / delta_ref).is_file() or result['agent_id'] in {'research', 'prover', 'rci'}:
         payload['delta'] = prepare_delta(root, delta_ref, obligations)
         delta = payload['delta']
         if delta['branch_id'] != context['branch_id'] or not set(delta['obligation_ids']) <= set(context['obligation_ids']):

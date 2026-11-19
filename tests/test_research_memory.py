@@ -35,7 +35,7 @@ def task(agent='research', **kw):
     return parse_director_decision({'action':'DISPATCH','agent_id':agent,'prompt_brief':'Investigate the fixed gap.',
         'input_refs':[], 'obligation_ids':['target'],'branch_id':'b-target','archive_refs':[],
         'next_step_kind':'INITIAL_PLAN' if agent=='planner' else 'CONTINUE','change_refs':[],
-        **({'research_operation':'NEW_PROBLEM'} if agent=='smi' else {}), **kw})
+        **({'research_operation':'NEW_PROBLEM'} if agent=='rci' else {}), **kw})
 
 
 def deliver(ws, number, *, application=False, agent='research'):

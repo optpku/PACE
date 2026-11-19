@@ -139,7 +139,7 @@ class WorkspaceTools:
         self.role = str(context.get('role', '')).upper()
         self.declared_only = context.get('read_scope') == 'declared'
         self.blind = self.role in {
-            'SMI_BLIND_PROVER_PROBE', 'SMI_REFUTE_PROVER_PROBE', 'SMI_FRONTIER_REFUTE_PROBE'}
+            'RCI_BLIND_PROVER_PROBE', 'RCI_REFUTE_PROVER_PROBE', 'RCI_FRONTIER_REFUTE_PROBE'}
         self.archives = set() if self.blind else set(filter(None, context.get('archive_refs', ())))
         if not self.blind and not self.declared_only:
             # Public finding links must reach their exact manuscripts and reviews,

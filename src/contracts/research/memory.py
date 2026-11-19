@@ -348,7 +348,7 @@ def delivery_instruction(root: Path, output_ref: str, agent_id: str) -> str:
             'changing a definition creates a new version. Do not recreate the root target or silently change its kind. '
             'Explain dependencies and the next bounded task; leave detailed proofs at their original locations. '
             'An empty obligations list is valid when no new structural relations are needed.\n')
-    if agent_id not in {'research', 'prover', 'smi'}: return common
+    if agent_id not in {'research', 'prover', 'rci'}: return common
     if reporter_owned(root):
         return common + ('A separate Reporter records research_delta.json from your completed originals. '
                          'Do not write a delta, progress summary, or duplicate memory note. '

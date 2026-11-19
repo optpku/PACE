@@ -19,7 +19,7 @@ def use_reporter(ws):
                   {'research_memory_version': 1, 'research_delta_owner': 'reporter'})
 
 
-@pytest.mark.parametrize('agent', ['research', 'prover', 'smi'])
+@pytest.mark.parametrize('agent', ['research', 'prover', 'rci'])
 def test_reporter_replay_never_calls_author_or_reporter_again(ws, agent, monkeypatch):
     use_reporter(ws)
     ref = deliver(ws, 1, agent=agent)
@@ -183,7 +183,7 @@ def test_rci_outer_handoff_and_parallel_reporter_recover_without_author(ws, para
     use_reporter(ws)
     author_calls = []; reporter_calls = []; interrupted = False
     llm = ProofPublicationTransport('NONE')
-    first = task('smi').to_json()
+    first = task('rci').to_json()
     if parallel: first['parallel_tasks'] = [{k:v for k,v in task('research').to_json().items() if k != 'parallel_tasks'}]
     def author(**kw):
         author_calls.append(kw['agent_id'])
@@ -198,7 +198,7 @@ def test_rci_outer_handoff_and_parallel_reporter_recover_without_author(ws, para
         return run_research_reporter(llm=llm, workdir=ws.root, result_ref=ref)
     engine = DirectorLedEngine(workdir=ws.root, director=lambda **_: first,
         composer=lambda **_: PromptComposerResult(final_prompt='Work on the original question.', call_id='composer'),
-        specialists={'smi':author,'research':author}, max_rounds=2 if parallel else 1, max_proof_states=2,
+        specialists={'rci':author,'research':author}, max_rounds=2 if parallel else 1, max_proof_states=2,
         reporter=reporter, target_contract_id='TARGET')
     result = engine.run()
     assert result.phase == 'FAILED'
@@ -208,7 +208,7 @@ def test_rci_outer_handoff_and_parallel_reporter_recover_without_author(ws, para
     engine.director = lambda **_: pytest.fail('Do not redispatch the reserved task')
     result = engine.resume()
     assert result.phase == 'FINALIZE'
-    assert author_calls.count('smi') == 1
+    assert author_calls.count('rci') == 1
     assert author_calls.count('research') == (1 if parallel else 0)
     assert len(llm.calls) == (2 if parallel else 1)
     assert len(load_index(ws.root)['attempts']) == (2 if parallel else 1)

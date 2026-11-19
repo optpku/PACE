@@ -23,7 +23,7 @@ NEXT_STEP_KINDS = {"INITIAL_PLAN", "CONTINUE", "APPLY_EXISTING", "REPLAN", "REAS
 DIRECTOR_ACTIONS = frozenset({"DISPATCH", "STOP"})
 DIRECTOR_STOP_REASONS = frozenset({"BUDGET_EXHAUSTED", "NO_ACTIONABLE_TASK"})
 DISPATCHABLE_AGENT_IDS = frozenset(
-    {"framer", "planner", "survey", "smi", "research", "prover"}
+    {"framer", "planner", "survey", "rci", "research", "prover"}
 )
 DIRECTOR_REQUIRED_FIELDS = frozenset({"action"})
 DIRECTOR_FIELDS = DIRECTOR_REQUIRED_FIELDS | {
@@ -66,7 +66,7 @@ SPECIALIST_REGISTRY: Mapping[str, SpecialistSpec] = {
     "framer": SpecialistSpec("framer", "DIRECTOR_LED_FRAMER"),
     "planner": SpecialistSpec("planner", "PLANNER"),
     "survey": SpecialistSpec("survey", "SURVEY"),
-    "smi": SpecialistSpec("smi", "SMI"),
+    "rci": SpecialistSpec("rci", "RCI"),
     "research": SpecialistSpec("research", "RESEARCH"),
     "prover": SpecialistSpec("prover", "WHOLE_PROVER"),
 }
@@ -301,17 +301,17 @@ def validate_director_decision(decision: DirectorDecision) -> None:
         raise DirectorProtocolError("a batch can have at most one Planner")
     if decision.action is DirectorAction.DISPATCH:
         specialist_spec(decision.agent_id)
-    if decision.agent_id == "smi" and decision.action is DirectorAction.DISPATCH:
+    if decision.agent_id == "rci" and decision.action is DirectorAction.DISPATCH:
         if decision.research_operation not in {"NEW_PROBLEM", "CONTINUE_PROBLEM"}:
-            raise DirectorProtocolError("SMI requires an explicit research operation", field="research_operation")
+            raise DirectorProtocolError("RCI requires an explicit research operation", field="research_operation")
         if (
             decision.research_operation == "CONTINUE_PROBLEM"
             and not decision.research_problem_ref
         ):
-            raise DirectorProtocolError("continued SMI requires research_problem_ref", field="research_problem_ref")
+            raise DirectorProtocolError("continued RCI requires research_problem_ref", field="research_problem_ref")
     elif decision.research_operation or decision.research_problem_ref:
         raise DirectorProtocolError(
-            "research operation fields are only for SMI; "
+            "research operation fields are only for RCI; "
             "omit or clear both research_operation and research_problem_ref for other agents",
             field="research_operation" if decision.research_operation else "research_problem_ref",
         )

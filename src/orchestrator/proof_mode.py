@@ -49,7 +49,7 @@ def initialize_proof_state(ws, *, max_loops, resource_variant):
 
 
 def run_proof(pipeline, ws, problem):
-    """Resume only the committed phase; no Director or SMI is constructed."""
+    """Resume only the committed phase; no Director or RCI is constructed."""
     ref = ws.work_ref("state/proof_state.json")
     state = json.loads(ws.path(ref).read_text())
 

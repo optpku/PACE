@@ -38,7 +38,7 @@ _SPECIALIST_DESCRIPTIONS = {
     "framer": "frame an open request into bounded work items",
     "planner": "own the canonical route and its dependencies",
     "survey": "acquire sources and report source gaps",
-    "smi": (
+    "rci": (
         "deeply explore conjectures and mechanisms with a slower "
         "multi-stage investigation"
     ),
@@ -142,7 +142,7 @@ def run_global_director(
     survey_remaining = max(0, 4 - survey_calls)
     final_prompt += (
         f"\nSurvey calls remaining: {survey_remaining}/4 (including initial Survey and failed calls). "
-        "Do not repeat unchanged acquisition. When no calls remain, dispatch SMI/Research/Planner/Prover "
+        "Do not repeat unchanged acquisition. When no calls remain, dispatch RCI/Research/Planner/Prover "
         "using the latest Survey gap report and acquired source files; missing literature alone "
         "is not a reason to STOP. With one call left, place Survey in the primary task, not a companion."
     )
@@ -152,7 +152,7 @@ def run_global_director(
         "\n\n## Current Host budget and STOP contract\n"
         f"Remaining shared proof states: {proof_states}\n"
         f"Remaining research rounds (including the next dispatch): {rounds}\n"
-        "Research and SMI dispatches each spend one proof state; all specialist dispatches "
+        "Research and RCI dispatches each spend one proof state; all specialist dispatches "
         "count toward a separate round cap when set. No separate cap does not mean zero rounds. "
         "These live counters take precedence over historical artifacts and general role guidance. "
         "A limit of one user turn does not limit dispatches within that turn. "
@@ -251,7 +251,7 @@ def run_global_director(
                 "action", "agent_id", "prompt_brief", "research_operation", "research_problem_ref", "parallel_tasks",
                 "obligation_ids", "branch_id", "next_step_kind", "change_refs", "stop_reason"
             )
-            if before.get("agent_id") in DISPATCHABLE_AGENT_IDS - {"smi"}:
+            if before.get("agent_id") in DISPATCHABLE_AGENT_IDS - {"rci"}:
                 # These fields have no scheduling meaning for this selected role.
                 # Removing both must not freeze the second one merely because
                 # validation reported the first inapplicable field.
@@ -293,8 +293,8 @@ def run_global_director(
         "control fields identified below. Preserve the bounded task and all valid scheduling choices. "
         "INITIAL_PLAN and REPLAN are only legal for Planner. Other dispatched roles use CONTINUE, "
         "APPLY_EXISTING or REASSESS as appropriate; never an empty next_step_kind. "
-        "For SMI, explicitly choose NEW_PROBLEM or CONTINUE_PROBLEM from the actual task. "
-        "For any non-SMI task, omit or clear both research_operation and research_problem_ref; "
+        "For RCI, explicitly choose NEW_PROBLEM or CONTINUE_PROBLEM from the actual task. "
+        "For any non-RCI task, omit or clear both research_operation and research_problem_ref; "
         "removing these unused fields does not change its scheduling choice. "
         "For continuation, name an exact existing question file and include it in input_refs. "
         "Reading suggestions may be completed to identify that file. Do not formulate a new "

@@ -35,7 +35,7 @@ leave its applicability open instead of calling the target solved.
 Research can try fresh local representations within its bounded
 assignment. If finding the representation itself requires deeper comparison of
 substantial alternatives or a new mechanism, return the attempts and remaining
-obstacle to Director with a reasoned SMI recommendation. A precise assigned
+obstacle to Director with a reasoned RCI recommendation. A precise assigned
 relation does not exclude this deeper research.
 
 **Handoff:** give the transformation, preservation/recovery derivation,

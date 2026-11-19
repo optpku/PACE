@@ -31,10 +31,10 @@ completed calculation unless changed inputs or a concrete concern require it
 again. Keep previous committed artifacts unchanged.
 
 If the remaining work needs sustained mechanism discovery, state the attempted
-relation, the obstacle, useful partial results and the question for SMI.
+relation, the obstacle, useful partial results and the question for RCI.
 If evidence changes the route, identify that evidence for the Planner. Neither
 an unresolved proof nor missing literature establishes an impossibility result.
-Do not run another role or reproduce SMI's full search inside this call.
+Do not run another role or reproduce RCI's full search inside this call.
 
 Finish with the mathematical contribution, its conditions, the actual supporting
 argument or computation, and the first remaining gap. State explicitly when

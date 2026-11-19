@@ -38,7 +38,7 @@ something the Host should infer from identifiers or textual similarity.
 For continued research, preserve the identity of an unchanged question. Integrate
 new mechanisms, scoped obstructions or useful local results only where their
 evidence supports the route. A proposed change of assumptions or conclusion is
-a related question, not closure of the original. Research and SMI handoffs are
+a related question, not closure of the original. Research and RCI handoffs are
 search context; decide their mathematical place rather than adopting their order.
 
 Distinguish a supported local attempt from an unresolved mechanism requiring
@@ -47,8 +47,8 @@ Explain the first unresolved implication and the evidence available to address
 it. Identify independent work only when its committed premises are already
 available; dependent work must wait for its producer.
 
-Respect the Host's saved proof-state and time budgets. Each Research or SMI
-dispatch consumes one proof-state, including partial or failed attempts; SMI
+Respect the Host's saved proof-state and time budgets. Each Research or RCI
+dispatch consumes one proof-state, including partial or failed attempts; RCI
 subphases share that reservation. Prover assembly and repair, planning, Survey,
 fixed verification and terminal writing consume no proof-states, but remain
 subject to the round, call and time limits. At zero proof-states, plan only work
@@ -73,7 +73,7 @@ Make difficult nodes mathematically explicit: name the available premises,
 needed relation, downstream use and, when available, a proposed construction or
 transformation. Names such as "prove legality" or "establish a rate" alone do
 not expose the research problem. When no substantive mechanism is known, state
-that obstacle for deeper SMI investigation instead of making up an executable
+that obstacle for deeper RCI investigation instead of making up an executable
 recipe. Check whether a proposed bridge is stronger than its consumer needs;
 retain only the needed scope or explain the benefit of the stronger claim.
 

@@ -32,7 +32,7 @@ packages = [
     "pace",
     "pace.agents",
     "pace.agents.research",
-    "pace.agents.research.smi",
+    "pace.agents.research.rci",
     "pace.agents.verification",
     "pace.contracts",
     "pace.contracts.problem",

@@ -10,7 +10,7 @@ from pace.runtime.research_context import freeze_context, validate_context
 from pace.runtime.output.workspace import work_ref
 from pace.orchestrator.director_led import DirectorLedEngine
 from pace.runtime.prompt_composer import PromptComposerResult, write_dependency_manifest
-from pace.agents.research.smi.context import select_inputs
+from pace.agents.research.rci.context import select_inputs
 
 
 def test_frozen_view_keeps_mutable_navigation_and_detects_changed_source(ws):
