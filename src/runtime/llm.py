@@ -17,7 +17,6 @@ from typing import Any, Protocol, TextIO, Union
 
 from pace.runtime.output.calls import (
     attempt_directory,
-    begin_call,
     call_directory,
     finish_call,
 )
@@ -211,8 +210,6 @@ class CodexCallError(RuntimeError):
 
 
 class LLM(Protocol):
-    def complete(self, prompt: str, *, workdir: Path, call_name: str) -> str: ...
-
     def complete_unstructured_result(
         self,
         prompt: str,
@@ -241,67 +238,6 @@ class CodexLLM:
     web_search: bool = False
     timeout_seconds: int | None = None
     max_retries: int = MAX_TRANSPORT_RETRIES
-
-    def complete(self, prompt: str, *, workdir: Path, call_name: str) -> str:
-        root = Path(workdir)
-        initialize_events(root)
-        call_id = "SC-UNSTRUCTURED-" + uuid.uuid4().hex
-        call_ref = begin_call(
-            root,
-            call_id=call_id,
-            role="unstructured_model_call",
-            stage=call_name,
-            prompt=prompt,
-        )
-        append_event(
-            root,
-            "SEMANTIC_CALL_STARTED",
-            call_id=call_id,
-            call_name=call_name,
-            role="unstructured_model_call",
-            stage=call_name,
-        )
-        result = self.complete_unstructured_result(
-            prompt,
-            workdir=root,
-            call_name=call_name,
-            ledger_context={
-                "call_id": call_id,
-                "call_ref": call_ref,
-                "role": "unstructured_model_call",
-                "stage": call_name,
-                "input_refs": (),
-            },
-        )
-        append_event(
-            root,
-            "SEMANTIC_CALL_FAILED"
-            if isinstance(result, TransportFailure)
-            else "SEMANTIC_CALL_SUCCEEDED",
-            call_id=call_id,
-            call_name=call_name,
-            role="unstructured_model_call",
-            stage=call_name,
-            invocation_id=result.invocation_id,
-            failure_id=str(getattr(result, "failure_id", "") or ""),
-            root_failure_id=str(getattr(result, "root_failure_id", "") or ""),
-            error_code=str(getattr(result, "error_code", "") or ""),
-            retry_class=str(getattr(result, "retry_class", "NONE") or "NONE"),
-            suppressed=bool(getattr(result, "suppressed", False)),
-        )
-        finish_call(
-            root,
-            call_ref,
-            status="INTERFACE_FAILED"
-            if isinstance(result, TransportFailure)
-            else "SUCCEEDED",
-            response_ref=(result.artifact_dir / "response.txt")
-            .relative_to(root)
-            .as_posix(),
-            invocation_ids=(result.invocation_id,),
-        )
-        write_call_summary(root)
-        return self._unwrap(result, workdir=workdir)
 
     def complete_unstructured_result(
         self,
@@ -762,13 +698,6 @@ class CodexLLM:
             return result
         raise AssertionError("transport retry loop terminated without a result")
 
-    @staticmethod
-    def _unwrap(result: TransportResult, *, workdir: Path) -> str:
-        if isinstance(result, TransportSuccess):
-            return result.text
-        raise CodexCallError.from_result(result, workdir=workdir)
-
-
 def _record_call_interruption(
     root: Path,
     context: dict[str, Any],
@@ -882,12 +811,15 @@ def build_llm(
     timeout_seconds: int | None = None,
 ) -> LLM:
     if provider == "chat-completions":
-        from pace.runtime.chat_api import ChatCompletionsLLM
+        from .chat_api import ChatCompletionsLLM
         base_url = os.environ.get("PACE_API_BASE_URL", "").strip()
         if not base_url or not os.environ.get("PACE_API_KEY"):
             raise ValueError("chat-completions requires PACE_API_BASE_URL and PACE_API_KEY")
+        max_retries = int(os.environ.get("PACE_CHAT_MAX_RETRIES", ChatCompletionsLLM.max_retries))
+        if not 0 <= max_retries <= 20:
+            raise ValueError("PACE_CHAT_MAX_RETRIES must be between 0 and 20")
         return ChatCompletionsLLM(model=model, reasoning_effort=reasoning_effort, web_search=web_search,
-                                  timeout_seconds=timeout_seconds, base_url=base_url)
+                                  timeout_seconds=timeout_seconds, base_url=base_url, max_retries=max_retries)
     if provider in {"newapi", "llmmelon"} and not (
         os.getenv("NL_PROOF_CODEX_AUTH_MODE") == "api_key"
         and os.getenv("NL_PROOF_CODEX_BASE_URL")
@@ -927,7 +859,9 @@ def reduce_codex_event_timeline(text: str) -> CodexEventTimeline:
         event_type = str(row.get("type") or "")
         if event_type in {"turn.completed", "thread.completed", "response.completed"}:
             terminal_events.append((index, "SUCCESS", row))
-            raw_usage = row.get("usage") if isinstance(row.get("usage"), dict) else {}
+            raw_usage = row.get("usage")
+            if not isinstance(raw_usage, dict):
+                raw_usage = {}
             usage["input_tokens"] += int(raw_usage.get("input_tokens") or 0)
             usage["output_tokens"] += int(raw_usage.get("output_tokens") or 0)
         elif event_type in {"turn.failed", "thread.failed", "response.failed"}:
@@ -1178,8 +1112,8 @@ def decide_transport_outcome(
 def _assistant_message_from_event(row: dict[str, Any]) -> str | None:
     event_type = str(row.get("type") or "")
     if event_type == "item.completed":
-        item = row.get("item") if isinstance(row.get("item"), dict) else {}
-        if str(item.get("type") or "") in {"agent_message", "assistant_message"}:
+        item = row.get("item")
+        if isinstance(item, dict) and str(item.get("type") or "") in {"agent_message", "assistant_message"}:
             return str(item.get("text") or item.get("content") or "").strip()
     if event_type in {"agent_message", "assistant_message", "message.completed"}:
         role = str(row.get("role") or "assistant")

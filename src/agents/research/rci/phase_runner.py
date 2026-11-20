@@ -140,6 +140,8 @@ class RciPhaseRunner:
         routing = dict(routing_context or {})
         if binding.phase == "SEED_SCOUT" and routing.get("seed_operation") not in {"CREATE", "REVISE"}:
             raise ValueError("Seed Scout requires a Host-assigned CREATE or REVISE operation")
+        if binding.phase == "MECHANISM_CRITIC" and not str(routing.get("mechanism_id") or "").strip():
+            raise ValueError("Mechanism Critic requires a Host-assigned mechanism_id")
         requested_actions = tuple(allowed_actions)
         actions = requested_actions or PHASE_ACTIONS.get(binding.phase, ())
         receipt_schema = open_object()

@@ -25,7 +25,7 @@ from pace.orchestrator.recovery import (
     load_director_checkpoint,
     load_operational_checkpoint,
 )
-from pace.reporting.writing import active_writing_request, writing_complete
+from pace.reporting.writing import active_writing_request, pending_writing_request
 from pace.runtime.output.workspace import RunWorkspace, work_ref
 from pace.runtime.processes import terminate_process_tree
 from pace.runtime.output.setup import load_setup
@@ -116,30 +116,10 @@ def _load_suite_profile(path: Path) -> SuiteProfile:
     )
 
 
-def _suite_profile_from_argv(argv: list[str]) -> SuiteProfile:
-    bootstrap = argparse.ArgumentParser(add_help=False)
-    bootstrap.add_argument("--suite-profile", type=Path, required=True)
-    args, _ = bootstrap.parse_known_args(argv)
-    return _load_suite_profile(args.suite_profile)
-
-
-def _parser(profile: SuiteProfile) -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=profile.description)
-    parser.add_argument(
-        "--suite-profile",
-        type=Path,
-        default=profile.file,
-        help=argparse.SUPPRESS,
-    )
-    parser.add_argument(
-        "--config",
-        type=Path,
-        default=(
-            profile.root / "config.local.json"
-            if (profile.root / "config.local.json").is_file()
-            else profile.root / "config.example.json"
-        ),
-    )
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Run PACE on a suite of mathematical problems.")
+    parser.add_argument("--suite-profile", type=Path, required=True, help="suite definition JSON")
+    parser.add_argument("--config", type=Path, help="defaults to config.local.json or config.example.json next to the suite")
     parser.add_argument(
         "--check",
         action="store_true",
@@ -153,14 +133,7 @@ def _parser(profile: SuiteProfile) -> argparse.ArgumentParser:
     parser.add_argument(
         "--ids",
         default="",
-        help=(
-            "comma-separated problem IDs"
-            + (
-                f", for example {','.join(profile.example_ids)}"
-                if profile.example_ids
-                else ""
-            )
-        ),
+        help="comma-separated problem IDs from the selected suite",
     )
     parser.add_argument(
         "--limit",
@@ -474,8 +447,8 @@ def _is_resumable_run(run_dir: Path | None) -> bool:
         return False
     try:
         workspace = RunWorkspace.open_existing(run_dir)
-        if active_writing_request(run_dir):
-            return not writing_complete(run_dir)
+        if pending_writing_request(run_dir):
+            return True
         setup = load_setup(run_dir)
         if setup is not None and setup["phase"] != "READY":
             return True
@@ -491,7 +464,8 @@ def _is_resumable_run(run_dir: Path | None) -> bool:
                         or delivery_pause(run_dir) or pending_finding_checks(run_dir))
         state = load_director_checkpoint(workspace)
         if terminal:
-            return bool(load_operational_checkpoint(run_dir, state)
+            return bool(terminal.get("operational_reason_code") in {"finding_verification_incomplete", "finding_publication_incomplete"}
+                        or load_operational_checkpoint(run_dir, state)
                         or delivery_pause(run_dir) or pending_finding_checks(run_dir))
     except (RecoveryError, OSError, UnicodeError, ValueError):
         return False
@@ -831,7 +805,8 @@ def _result_from_run(
     run_dir = _problem_workspace(output_dir, problem_id)
     terminal = _terminal_record(run_dir)
     run_status = str((terminal or {}).get("run_status") or "").lower()
-    if run_dir is not None and not writing_complete(run_dir):
+    writing_done = run_dir is not None and not pending_writing_request(run_dir)
+    if run_dir is not None and not writing_done:
         status = "writing_incomplete"
     elif returncode != 0:
         status = "process_failed"
@@ -847,7 +822,7 @@ def _result_from_run(
         "result": str((terminal or {}).get("result") or ""),
         "run_status": run_status,
         "writing_action": active_writing_request(run_dir).get("action", "") if run_dir else "",
-        "writing_complete": writing_complete(run_dir) if run_dir else False,
+        "writing_complete": writing_done,
         "run_dir": str(run_dir) if run_dir else "",
         "final_report": str(run_dir / work_ref(run_dir, "final_report.json"))
         if terminal and run_dir
@@ -1027,15 +1002,14 @@ def _run_postmortem(
 
 
 def main(argv: list[str] | None = None) -> int:
-    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    args = _parser().parse_args(argv)
     try:
-        profile = _suite_profile_from_argv(raw_argv)
-    except (TypeError, ValueError) as exc:
-        print(f"configuration error: {exc}", file=sys.stderr)
-        return 2
-    args = _parser(profile).parse_args(raw_argv)
-    config_file = args.config.expanduser().resolve()
-    try:
+        profile = _load_suite_profile(args.suite_profile)
+        config_file = args.config
+        if config_file is None:
+            local = profile.root / "config.local.json"
+            config_file = local if local.is_file() else profile.root / "config.example.json"
+        config_file = config_file.expanduser().resolve()
         config = _read_object(config_file)
         dataset, codex, pipeline, batch, problem_dir = _validate_config(
             config_file,

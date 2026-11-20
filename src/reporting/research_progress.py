@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+from typing import Any
 
 from pace.contracts.research.memory import (
     OUTCOMES, binding, check_binding, digest, prepare_delta_payload, read_json, reporter_owned,
@@ -20,7 +22,7 @@ def reporter_schema(request=None):
     text = {'type': 'string'}
     refs = {'type': 'array', 'items': text}
     def reference(allowed, *, optional=False):
-        field = {'type': 'string', 'description':
+        field: dict[str, Any] = {'type': 'string', 'description':
                  'One exact workspace-relative file path. No section numbers, Markdown, commentary or multiple paths.'}
         if request is not None and (allowed or optional):
             field['enum'] = list(dict.fromkeys([*allowed, *([''] if optional else [])]))
@@ -88,8 +90,16 @@ def restore_reporter_delivery(root: Path, result_ref: str) -> dict:
         raise ValueError('Reporter receipt changed after acceptance')
     for row in saved['bindings']:
         check_binding(root, row)
-    _write_json_atomic(root / folder / 'research_delta.json', saved['payload']['delta'])
-    _write_text_atomic(root / folder / 'progress.md', '# Research progress\n\n' + saved['payload']['summary'].strip() + '\n')
+    projections = {
+        'research_delta.json': json.dumps(saved['payload']['delta'], ensure_ascii=False, indent=2) + '\n',
+        'progress.md': '# Research progress\n\n' + saved['payload']['summary'].strip() + '\n',
+    }
+    for name, content in projections.items():
+        path = root / folder / name
+        if path.is_symlink():
+            raise ValueError(f'unsafe Reporter projection: {path.relative_to(root)}')
+        if not path.is_file() or path.read_bytes() != content.replace('\n', os.linesep).encode('utf-8'):
+            _write_text_atomic(path, content)
     return saved
 
 
@@ -141,10 +151,11 @@ def run_research_reporter(*, llm, workdir: Path, result_ref: str) -> dict | None
         errors = validate_semantic_payload(payload, schema)
         if original_payload:
             expected = _without_references(original_payload)
-            if isinstance(expected, dict) and isinstance(expected.get('delta'), dict):
-                expected['delta'].update(branch_id=request['branch_id'], obligation_ids=request['obligation_ids'])
+            delta = expected.get('delta') if isinstance(expected, dict) else None
+            if isinstance(delta, dict):
+                delta.update(branch_id=request['branch_id'], obligation_ids=request['obligation_ids'])
                 if request.get('execution_mode') == 'proof':
-                    expected['delta']['applications'] = []
+                    delta['applications'] = []
             if _without_references(payload) != expected:
                 errors.append({'reason_code': 'reporter_repair_changed_content', 'json_pointer': '/',
                     'message': 'Restore the original summary, outcome and application identities; repair references only.'})

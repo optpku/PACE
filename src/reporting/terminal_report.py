@@ -37,26 +37,6 @@ class FinalReportEnvelope:
             )
 
     @classmethod
-    def from_finalization(
-        cls,
-        report: dict[str, Any],
-        *,
-        result: str,
-    ) -> FinalReportEnvelope:
-        """Project the report already validated and published by finalization."""
-
-        run_status = str(report.get("run_status") or "completed")
-        terminal_result = str(result or "")
-        cls._validate_terminal_values(run_status, terminal_result)
-        refs = report.get("artifact_refs")
-        return cls(
-            report,
-            run_status,
-            terminal_result,
-            refs if isinstance(refs, dict) else {},
-        )
-
-    @classmethod
     def validate(cls, report: dict[str, Any]) -> FinalReportEnvelope:
         if report.get("schema_version") != FINAL_REPORT_SCHEMA_VERSION:
             raise FinalReportEnvelopeError(
@@ -100,27 +80,3 @@ class FinalReportEnvelope:
             paper_source_file=resolve_artifact("paper_source"),
             paper_pdf_file=resolve_artifact("paper_pdf"),
         )
-
-
-MAX_RESULT_BYTES = 10_485_760
-
-
-def validate_terminal_artifact(workdir: Path, report: dict) -> FinalReportEnvelope:
-    """Read only the artifact explicitly referenced by the terminal authority."""
-    terminal = FinalReportEnvelope.validate(report)
-    key = "proof" if terminal.result == "PASS" else "candidate"
-    ref = terminal.artifact_refs.get(key)
-    if not ref:
-        if terminal.result == "PASS":
-            raise ValueError("terminal proof reference is missing")
-        return terminal
-    root = Path(workdir).resolve()
-    path = (root / ref).resolve()
-    if not path.is_relative_to(root) or not path.is_file():
-        raise ValueError("terminal artifact is unavailable")
-    if path.stat().st_size > MAX_RESULT_BYTES:
-        raise ValueError("terminal artifact is too large")
-    body = path.read_text(encoding="utf-8").strip()
-    if not body:
-        raise ValueError("terminal artifact is empty")
-    return terminal

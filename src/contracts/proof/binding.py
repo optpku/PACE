@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +18,7 @@ from pace.contracts.problem.target import (
     validate_target_contract,
 )
 from pace.contracts.verification.decision import decide_final_result
-from pace.runtime.output.workspace import work_ref
+from pace.runtime.output.workspace import path_has_symlink_component, work_ref
 
 MISSING_AUTHORITY_ARTIFACT = "MISSING_AUTHORITY_ARTIFACT"
 MALFORMED_AUTHORITY_ARTIFACT = "MALFORMED_AUTHORITY_ARTIFACT"
@@ -58,14 +59,14 @@ def load_active_target(root: Path) -> dict[str, Any]:
 
     root_path = Path(root).resolve()
     target_path = root_path / work_ref(root, 'input/target_contract.json')
-    if _path_has_symlink_component(root_path, target_path):
+    if path_has_symlink_component(root_path, target_path):
         raise ProofBindingError(
             "canonical target contract must not contain a symlink",
             code=REF_MISMATCH,
         )
     value = _read_object(target_path, "canonical target contract")
     problem_path = root_path / work_ref(root, 'input/problem.md')
-    if _path_has_symlink_component(root_path, problem_path):
+    if path_has_symlink_component(root_path, problem_path):
         raise ProofBindingError(
             "canonical problem statement must not contain a symlink",
             code=REF_MISMATCH,
@@ -303,7 +304,7 @@ def read_verification_report(root: Path, reference: str) -> dict[str, Any]:
 
 def resolve_verification(
     root: Path,
-    receipt: dict[str, Any],
+    receipt: Mapping[str, Any],
     *,
     target_contract_id: str,
     candidate_ref: str,
@@ -422,7 +423,7 @@ def _resolve_relative_path(root: Path, reference: str, field: str) -> Path:
             code=REF_MISMATCH,
         )
     lexical = root_path / path
-    if _path_has_symlink_component(root_path, lexical):
+    if path_has_symlink_component(root_path, lexical):
         raise ProofBindingError(
             f"{field} must not contain a symlink",
             code=REF_MISMATCH,
@@ -436,26 +437,6 @@ def _resolve_relative_path(root: Path, reference: str, field: str) -> Path:
             code=REF_MISMATCH,
         ) from exc
     return resolved
-
-
-def _path_has_symlink_component(root: Path, path: Path) -> bool:
-    """Return whether a relative artifact path uses a lexical symlink."""
-
-    root_path = Path(root)
-    candidate = Path(path)
-    try:
-        relative = candidate.relative_to(root_path)
-    except ValueError:
-        return True
-    current = root_path
-    for part in relative.parts:
-        current = current / part
-        try:
-            if current.is_symlink():
-                return True
-        except OSError:
-            return True
-    return False
 
 
 def _read_object(path: Path, label: str) -> dict[str, Any]:

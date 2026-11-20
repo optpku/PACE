@@ -119,7 +119,7 @@ def _validate_finding_receipt(payload):
     return diagnostics
 
 
-def _validate_finding_publication(payload):
+def _validate_finding_publication(payload: dict[str, Any]) -> list[dict[str, Any]]:
     if payload.get("stage_status") != "PASS":
         return []
     decision = payload.get("publication")

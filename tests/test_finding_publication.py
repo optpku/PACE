@@ -106,6 +106,7 @@ def test_research_finalization_obeys_the_kernel_publication_action(tmp_path, act
               "mathematical_status": "VERIFIED", "director_state": {"round_index": 2},
               "artifact_refs": {"proof": proof, "verification": receipt, "kernel": kernel}}
     _publish_report(ws, report)
+    assert report["publication_status"] == ("NO_PUBLICATION" if action == "NONE" else "PUBLISHED")
     assert report["result"] == "PASS"
     assert "report" not in report["artifact_refs"]
     assert not (ws.root / "work/turn001/outcome.md").exists()
@@ -188,6 +189,7 @@ def test_public_cli_keeps_publication_separate_from_pass_and_updates_on_continue
                      "--output", str(tmp_path), "--json"]) == 0
     root = tmp_path / "proof"
     report = json.loads((root / "work/turn001/final_report.json").read_text())
+    assert report["publication_status"] == ("NO_PUBLICATION" if action == "NONE" else "PUBLISHED")
     assert report["result"] == "PASS"
     assert len(report["artifact_refs"]["findings"]) == (1 if action == "CREATE" else 0)
     if action == "NONE":

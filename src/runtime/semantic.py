@@ -32,7 +32,7 @@ class SemanticCallSpec:
     fatal_scope: str = "RUN"
     normalizer: Callable[[dict[str, Any]], dict[str, Any]] | None = None
     validator: Callable[[dict[str, Any]], list[dict[str, Any]]] | None = None
-    on_accept: Callable[[dict[str, Any]], None] | None = None
+    on_accept: Callable[[dict[str, Any]], object] | None = None
 
 
 @dataclass(frozen=True)
@@ -399,8 +399,8 @@ def _semantic_call_once(
         workdir=root,
         call_name=call_name,
         output_schema=spec.semantic_schema,
-        input_refs=allowed_inputs,
         ledger_context={
+            "input_refs": allowed_inputs,
             "call_id": call_id,
             "call_ref": call_ref,
             "role": spec.role,

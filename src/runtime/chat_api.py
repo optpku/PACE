@@ -1,25 +1,99 @@
 """Chat Completions transport with workspace-scoped file tools."""
 from __future__ import annotations
 
+import http.client
 import json
 import hashlib
 from contextvars import ContextVar
 import os
-import re
 import time
-import urllib.error
 import urllib.request
 import uuid
 from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
+from typing import NotRequired, TypedDict
 
-from pace.runtime.llm import CodexLLM, TransportSuccess, TransportFailure, RETRY_NON_TRANSIENT, RETRY_TRANSIENT
+from pace.runtime.chat_http import HTTPAttempt, HTTPAttemptError, RoleDeadline, network_failure, remaining_seconds
+from .llm import (
+    CodexLLM, TransportSuccess, TransportFailure, RETRY_NON_TRANSIENT, RETRY_TRANSIENT, _retry_delay_seconds,
+)
 from pace.runtime.output.calls import attempt_directory
 from pace.runtime.output.events import append_event, record_transport_attempt_started, record_transport_attempt_finished
 from pace.runtime.output.workspace import _write_json_atomic, _write_text_atomic, is_call_path, path_has_symlink_component, work_ref
 from pace.runtime.output.sources import fetch_source, read_source, search_source
 
-_request_context = ContextVar('pace_chat_request_context', default=None)
+class _RequestContext(TypedDict):
+    root: Path
+    call_id: str
+    invocation_id: str
+    deadline: float | None
+    probe_before_completion: NotRequired[bool]
+
+
+_request_context: ContextVar[_RequestContext | None] = ContextVar('pace_chat_request_context', default=None)
+_FAILURES_BEFORE_PROBE = 3
+_PROBE_MESSAGE = {'role': 'user', 'content': 'Reply with OK.'}
+
+
+def _record_http(event, event_key, **fields):
+    runtime = _request_context.get()
+    if runtime:
+        append_event(runtime['root'], event, call_id=runtime['call_id'],
+                     invocation_id=runtime['invocation_id'],
+                     idempotency_key=f'{event}:{event_key}', **fields)
+
+
+class _RequestFailure(RuntimeError):
+    def __init__(self, message, diagnostics):
+        super().__init__(message)
+        self.provider_error = diagnostics
+
+
+def _send_http(request, key, deadline, request_id, number, *, probe=False):
+    attempt_id = uuid.uuid4().hex
+    kind = 'probe' if probe else 'completion'
+    metadata = {'request_id': request_id, 'http_attempt_id': attempt_id,
+                'attempt': number, 'request_kind': kind, 'request_bytes': len(request.data)}
+    _record_http('CHAT_REQUEST_STARTED', attempt_id, **metadata)
+    started = time.monotonic()
+    attempt = HTTPAttempt(deadline, started + 30 if probe else None)
+    failure = None
+    response = None
+    body = ''
+    try:
+        response = attempt.run(request, key)
+        choices = response.get('choices') if isinstance(response, dict) else None
+        if (not isinstance(choices, list) or not choices or not isinstance(choices[0], dict)
+                or not isinstance(choices[0].get('message'), dict)):
+            raise HTTPAttemptError('Chat Completions response has no first message', False)
+        if probe:
+            content = choices[0]['message'].get('content')
+            if not isinstance(content, str) or not content.strip():
+                raise HTTPAttemptError('short recovery probe did not return a completion', False)
+    except HTTPAttemptError as exc:
+        body = exc.body
+        failure = (str(exc), type(exc).__name__, exc.transient)
+    except (OSError, ValueError, http.client.HTTPException) as exc:
+        error_type, transient = network_failure(exc)
+        failure = (f'Chat Completions failed during {attempt.phase} ({error_type})', error_type, transient)
+    # A socket timeout at the end of the overall allowance is a role deadline.
+    failure_phase = attempt.phase
+    try:
+        remaining_seconds(deadline)
+    except RoleDeadline as exc:
+        failure = (str(exc), type(exc).__name__, True)
+        failure_phase = 'role_deadline'
+    diagnostics = {**metadata, 'status': attempt.status, 'server_request_id': attempt.request_id,
+                   'elapsed_seconds': time.monotonic() - started}
+    if failure:
+        message, error_type, transient = failure
+        diagnostics.update(failure_stage=failure_phase, transport_stage=attempt.phase,
+                           error_type=error_type, transient=transient)
+        _record_http('CHAT_REQUEST_FAILURE', attempt_id, **diagnostics)
+        raise _RequestFailure(message, {**diagnostics, 'body': body}) from None
+    assert response is not None
+    _record_http('CHAT_REQUEST_SUCCEEDED', attempt_id, **diagnostics)
+    return response
 
 
 def _same_navigation_snapshot(root, ref, path, saved_text):
@@ -114,6 +188,13 @@ def _resume_messages(root, directory, context, capabilities, initial):
             append_event(root, 'CHAT_CONVERSATION_RESUMED', call_id=context['call_id'],
                          prior_call_id=record['call_id'], chat_ref=chat.relative_to(root).as_posix(),
                          completed_tool_calls=sum(m['role'] == 'tool' for m in messages))
+            error_path = chat.with_name('provider_error.json')
+            runtime = _request_context.get()
+            if runtime is not None and error_path.is_file():
+                diagnostics = json.loads(error_path.read_text())
+                runtime['probe_before_completion'] = (
+                    diagnostics.get('transient') is True or diagnostics.get('recovery_probe_failed') is True
+                )
             _write_json_atomic(directory / 'chat.json', messages)
             return messages
     return initial
@@ -271,57 +352,56 @@ class ChatCompletionsLLM(CodexLLM):
     def _request(self, messages, tools):
         key = os.environ.get(self.api_key_env, '')
         if not key: raise ValueError(f'{self.api_key_env} is required')
-        payload = {'model': self.model, 'messages': messages, 'tools': tools, 'stream': False}
-        if self.reasoning_effort != 'none': payload['reasoning_effort'] = self.reasoning_effort
-        request = urllib.request.Request(self.base_url.rstrip('/') + '/chat/completions',
-            data=json.dumps(payload, ensure_ascii=False).encode(),
-            headers={'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json'})
-        # Retry only this network request. Already executed tools are not replayed.
-        for retry in range(self.max_retries + 1):
-            runtime = _request_context.get()
-            timeout = self.timeout_seconds
-            if runtime and runtime['deadline'] is not None:
-                timeout = runtime['deadline'] - time.monotonic()
-                if timeout <= 0:
-                    raise TimeoutError('logical model-call time limit reached; conversation saved for resume')
-            started = time.monotonic()
+        base_payload = {'model': self.model, 'stream': False}
+        if self.reasoning_effort != 'none':
+            base_payload['reasoning_effort'] = self.reasoning_effort
+
+        def make_request(request_messages, request_tools):
+            payload = {**base_payload, 'messages': request_messages}
+            if request_tools:
+                payload['tools'] = request_tools
+            return urllib.request.Request(self.base_url.rstrip('/') + '/chat/completions',
+                data=json.dumps(payload, ensure_ascii=False).encode(),
+                headers={'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json'})
+
+        request = make_request(messages, tools)
+        runtime = _request_context.get()
+        deadline = runtime['deadline'] if runtime else (
+            time.monotonic() + self.timeout_seconds if self.timeout_seconds else None)
+        request_id = uuid.uuid4().hex
+        failures = 0
+        probe_first = runtime and runtime.pop('probe_before_completion', False)
+        retry = 0
+        while True:
+            remaining_seconds(deadline)
+            if probe_first or failures == _FAILURES_BEFORE_PROBE:
+                try:
+                    _send_http(make_request([_PROBE_MESSAGE], []), key, deadline, request_id, retry + 1, probe=True)
+                except _RequestFailure as exc:
+                    exc.provider_error.update(attempts=retry, recovery_probe_failed=True)
+                    raise _RequestFailure(
+                        f'{exc}; short recovery probe failed, conversation saved for resume',
+                        exc.provider_error,
+                    ) from None
+                probe_first = False
+                failures = 0
             try:
-                with urllib.request.urlopen(request, timeout=timeout) as response:
-                    return json.load(response)
-            except urllib.error.HTTPError as exc:
-                transient = exc.code in {408, 429, 500, 502, 503, 504}
-                if runtime:
-                    append_event(runtime['root'], 'CHAT_REQUEST_FAILURE', call_id=runtime['call_id'],
-                                 attempt=retry + 1, status=exc.code, transient=transient,
-                                 elapsed_seconds=time.monotonic() - started,
-                                 will_retry=transient and retry < self.max_retries)
-                if retry == self.max_retries or exc.code not in {408, 429, 500, 502, 503, 504}:
-                    try:
-                        body = exc.read().decode('utf-8', errors='replace').replace(key, '[REDACTED]')
-                    except OSError:
-                        body = 'Error response body could not be read.'
-                    body = re.sub(r'(?i)Bearer\s+[^\s"\\]+', 'Bearer [REDACTED]', body)
-                    failure = RuntimeError(f'Chat Completions returned HTTP {exc.code}')
-                    failure.provider_error = {'status':exc.code, 'body':body,
-                        'request_id':exc.headers.get('x-request-id', '') if exc.headers else '',
-                        'attempts': retry + 1, 'transient': transient, 'retry_budget_exhausted': transient}
-                    raise failure from None
-                exc.close()
-            except (urllib.error.URLError, TimeoutError) as exc:
-                if runtime:
-                    append_event(runtime['root'], 'CHAT_REQUEST_FAILURE', call_id=runtime['call_id'],
-                                 attempt=retry + 1, error_type=type(exc).__name__, transient=True,
-                                 elapsed_seconds=time.monotonic() - started,
-                                 will_retry=retry < self.max_retries)
-                if retry == self.max_retries:
-                    failure = RuntimeError(f'Chat Completions network request failed after {retry + 1} attempts')
-                    failure.provider_error = {'transient': True, 'attempts': retry + 1,
-                                              'retry_budget_exhausted': True}
-                    raise failure from None
-            delay = min(2 ** retry, 8)
-            if runtime and runtime['deadline'] is not None:
-                delay = min(delay, max(0, runtime['deadline'] - time.monotonic()))
-            time.sleep(delay)
+                return _send_http(request, key, deadline, request_id, retry + 1)
+            except _RequestFailure as exc:
+                details = exc.provider_error
+                if not details['transient'] or details['failure_stage'] == 'role_deadline' or retry >= self.max_retries:
+                    details.update(attempts=retry + 1,
+                                   retry_budget_exhausted=details['transient'] and retry == self.max_retries)
+                    raise
+                failures += 1
+                delay = _retry_delay_seconds(retry + 1)
+                if deadline is not None:
+                    delay = min(delay, max(0, deadline - time.monotonic()))
+                _record_http('CHAT_REQUEST_BACKOFF', details['http_attempt_id'],
+                             request_id=request_id, http_attempt_id=details['http_attempt_id'],
+                             delay_seconds=delay)
+                time.sleep(delay)
+                retry += 1
 
     def _complete_transport_owned(self, prompt, *, workdir, call_name, output_schema, ledger_context):
         root = Path(workdir).resolve()
@@ -363,15 +443,15 @@ class ChatCompletionsLLM(CodexLLM):
                                              *ledger_context.get('protected_input_refs', ())), directory)
         protection.arm()
         requests = 0
-        token = _request_context.set({'root': root, 'call_id': ledger_context['call_id'],
-                                     'deadline': started + self.timeout_seconds if self.timeout_seconds else None})
+        deadline = started + self.timeout_seconds if self.timeout_seconds else None
+        token = _request_context.set({'root': root, 'call_id': ledger_context['call_id'], 'invocation_id': invocation,
+                                     'deadline': deadline})
         try:
             messages = _resume_messages(root, directory, ledger_context, capabilities, messages)
             while True:
                 from pace.runtime.sessions import model_failure
                 if model_failure(root) is not None: raise RuntimeError('another role recorded a terminal model failure')
-                if self.timeout_seconds and time.monotonic() - started > self.timeout_seconds:
-                    raise TimeoutError('logical model-call time limit reached')
+                remaining_seconds(deadline)
                 # A crash may occur after the assistant response or after any
                 # one tool. Consume only tool calls without saved replies.
                 last_assistant = next((i for i in range(len(messages) - 1, 1, -1)
@@ -381,6 +461,8 @@ class ChatCompletionsLLM(CodexLLM):
                 pending = [c for c in message.get('tool_calls') or [] if c['id'] not in answered]
                 terminal = bool(message) and last_assistant == len(messages) - 1 and not message.get('tool_calls')
                 if not pending and not terminal:
+                    if requests == 0 and not (directory / 'chat.json').is_file():
+                        _write_json_atomic(directory / 'chat.json', messages)
                     response = self._request(messages, tool_specs)
                     requests += 1
                     choice = response['choices'][0]
@@ -418,14 +500,17 @@ class ChatCompletionsLLM(CodexLLM):
                     messages.append({'role': 'tool', 'tool_call_id': call['id'], 'content': json.dumps(value, ensure_ascii=False)})
                     _write_json_atomic(directory / 'chat.json', messages)
         except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
+            if isinstance(exc, RoleDeadline):
+                _record_http('CHAT_REQUEST_DEADLINE', invocation, failure_stage='role_deadline',
+                             elapsed_seconds=time.monotonic() - started)
             key = os.environ.get(self.api_key_env, '')
             error = str(exc).replace(key, '[REDACTED]') if key else str(exc)
             _write_text_atomic(directory / 'stderr.txt', error)
-            if getattr(exc, 'provider_error', None):
+            if isinstance(exc, _RequestFailure):
                 _write_json_atomic(directory / 'provider_error.json', exc.provider_error)
             result = TransportFailure(invocation_id=invocation, call_name=call_name,
                 error_code='CHAT_API_ERROR', retry_class=(RETRY_TRANSIENT
-                    if isinstance(exc, TimeoutError) or getattr(exc, 'provider_error', {}).get('transient')
+                    if isinstance(exc, TimeoutError) or (isinstance(exc, _RequestFailure) and exc.provider_error.get('transient'))
                     else RETRY_NON_TRANSIENT), retryable=False,
                 exit_code=None, terminal_event_type='chat.failed', attempt_count=1,
                 diagnostics=({'message': error},), artifact_dir=directory)

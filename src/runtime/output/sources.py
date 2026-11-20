@@ -100,7 +100,7 @@ def _source_view(path, view='text', source_info=None):
 
 
 def read_source(path, *, start_line=1, end_line=None, start_page=None, end_page=None,
-                start_char=None, end_char=None, max_chars=DEFAULT_READ_CHARS, view='text', source_info=None):
+                start_char=None, end_char=None, max_chars: int | None = DEFAULT_READ_CHARS, view='text', source_info=None):
     """Page a content-aware view. Every character remains reachable by cursor."""
     text, meta = _source_view(path, view, source_info)
     if max_chars is not None and (type(max_chars) is not int or max_chars < 1):
@@ -206,8 +206,8 @@ class _HTMLText(HTMLParser):
             self.scripts.append(self.script)
         elif tag == 'style':
             self.skip.append(tag)
-        elif tag == 'math' and attrs.get('alttext'):
-            self.parts.append('\\(' + attrs['alttext'] + '\\)')
+        elif tag == 'math' and (alttext := attrs.get('alttext')):
+            self.parts.append('\\(' + alttext + '\\)')
             self.skip.append(tag)
         elif tag == 'math':
             self.raw_math = True
@@ -252,7 +252,7 @@ class _HTMLText(HTMLParser):
 
 def fetch_source(root, cache, url, *, start_line=1, end_line=None,
                  start_page=None, end_page=None, start_char=None, end_char=None,
-                 max_chars=DEFAULT_READ_CHARS, view='text', full_text=False, timeout=None):
+                 max_chars: int | None = DEFAULT_READ_CHARS, view='text', full_text=False, timeout=None):
     """Download once, retain exact bytes, and return a navigable reading view.
 
     Pagination controls the response only, never whether the source is retained.
@@ -424,10 +424,10 @@ def _source_urls(item):
     arxiv = re.search(r"https?://(?:www\.)?arxiv\.org/(?:abs|pdf|e-print|src)/([^?#]+)", canonical)
     if arxiv:
         paper_id = arxiv[1].rstrip("/").removesuffix(".pdf")
-        urls.extend((f"https://arxiv.org/e-print/{paper_id}", f"https://arxiv.org/pdf/{paper_id}"))
-    urls.append(canonical)
-    if arxiv:
-        urls.append(f"https://arxiv.org/abs/{paper_id}")
+        urls.extend((f"https://arxiv.org/e-print/{paper_id}", f"https://arxiv.org/pdf/{paper_id}",
+                     canonical, f"https://arxiv.org/abs/{paper_id}"))
+    else:
+        urls.append(canonical)
     return list(dict.fromkeys(filter(None, urls)))
 
 

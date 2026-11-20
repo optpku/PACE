@@ -7,7 +7,7 @@ import pytest
 from pace.runtime.chat_api import ChatCompletionsLLM, WorkspaceTools
 from pace.runtime.output.calls import begin_call
 from pace.runtime.output.workspace import RunWorkspace
-from pace.runtime.llm import TransportSuccess
+from pace.runtime.llm import RETRY_TRANSIENT, TransportSuccess
 
 
 def test_native_transport_writes_only_assigned_artifact(tmp_path,monkeypatch):
@@ -245,21 +245,30 @@ def test_network_retries_only_failed_request_without_replaying_tools(ws, monkeyp
     payloads = []
     writes = []
     sleeps = []
-    def urlopen(request, **kwargs):
+    sent = []
+    def open_request(opener, request, **kwargs):
         payloads.append(json.loads(request.data))
-        if len(payloads) == 1:
+        if payloads[-1]['messages'] == [{'role':'user', 'content':'Reply with OK.'}]:
+            assert 'tools' not in payloads[-1]
+            response = {'choices':[{'message':{'role':'assistant','content':'OK'}}]}
+        elif not sent:
             response = NativeFixture.tool('write_file', {'path':output, 'content':'Saved once.'})
-        elif len(payloads) <= 6:
+            sent.append(request.data)
+        elif len(sent) <= 5:
+            sent.append(request.data)
             raise urllib.error.URLError(TimeoutError('temporary connection timeout'))
         else:
+            sent.append(request.data)
             response = {'choices':[{'message':{'role':'assistant','content':'Done.'}, 'finish_reason':'stop'}]}
-        return io.BytesIO(json.dumps(response).encode())
+        stream = io.BytesIO(json.dumps(response).encode())
+        stream.status, stream.headers = 200, {'x-request-id':'fixture-request-id'}
+        return stream
     execute = WorkspaceTools.execute
     def execute_once(self, name, args):
         if name == 'write_file': writes.append(args['path'])
         return execute(self, name, args)
     monkeypatch.setenv('PACE_API_KEY', 'test-only-not-a-secret')
-    monkeypatch.setattr('urllib.request.urlopen', urlopen)
+    monkeypatch.setattr('urllib.request.OpenerDirector.open', open_request)
     monkeypatch.setattr('pace.runtime.chat_api.time.sleep', sleeps.append)
     monkeypatch.setattr(WorkspaceTools, 'execute', execute_once)
     llm = ChatCompletionsLLM(model='fixture', base_url='https://example.invalid/v1')
@@ -269,24 +278,118 @@ def test_network_retries_only_failed_request_without_replaying_tools(ws, monkeyp
         ledger_context={'call_id':'retry', 'call_ref':call, 'role':'RESEARCH', 'output_refs':[output]})
     assert isinstance(result, TransportSuccess)
     assert len(sleeps) == 5 and writes == [output]
-    assert all(payload == payloads[1] for payload in payloads[2:])
+    assert len(payloads) == 8 and all(payload == sent[1] for payload in sent[2:])
+    from pace.runtime.output.events import read_events
+    events = read_events(ws.root)
+    failures = [row for row in events if row['event_kind'] == 'CHAT_REQUEST_FAILURE']
+    assert [row['attempt'] for row in failures] == [1, 2, 3, 4, 5]
+    assert len({row['http_attempt_id'] for row in failures}) == 5
+    assert len({row['request_id'] for row in failures}) == 1
+    assert any(row.get('server_request_id') == 'fixture-request-id'
+               and row.get('request_kind') == 'probe' for row in events)
     assert json.loads((result.artifact_dir/'chat.json').read_text())[-2]['role'] == 'tool'
 
 
-@pytest.mark.parametrize('status,attempts', [(None,9), (503,9), (401,1), (403,1)])
+@pytest.mark.parametrize('status,attempts', [(None,4), (503,4), (401,1), (403,1)])
 def test_request_retry_limit_and_permanent_http_errors(monkeypatch, status, attempts):
     import urllib.error
     calls = []
-    def urlopen(request, **kwargs):
+    def open_request(opener, request, **kwargs):
         calls.append(request)
         if status is None: raise TimeoutError('network timeout')
         raise urllib.error.HTTPError(request.full_url, status, 'test', {}, None)
     monkeypatch.setenv('PACE_API_KEY', 'test-only-not-a-secret')
-    monkeypatch.setattr('urllib.request.urlopen', urlopen)
+    monkeypatch.setattr('urllib.request.OpenerDirector.open', open_request)
     monkeypatch.setattr('pace.runtime.chat_api.time.sleep', lambda _:None)
     llm = ChatCompletionsLLM(model='fixture', base_url='https://example.invalid/v1')
     with pytest.raises(RuntimeError): llm._request([], [])
     assert len(calls) == attempts
+    if attempts == 4:
+        assert json.loads(calls[-1].data)['messages'] == [{'role':'user', 'content':'Reply with OK.'}]
+
+
+def test_resume_probes_before_replaying_failed_http_request(ws, monkeypatch):
+    calls = []
+    def unavailable(opener, request, **kwargs):
+        calls.append(json.loads(request.data))
+        raise ConnectionResetError()
+    monkeypatch.setenv('PACE_API_KEY', 'test-only-not-a-secret')
+    monkeypatch.setattr('urllib.request.OpenerDirector.open', unavailable)
+    monkeypatch.setattr('pace.runtime.chat_api.time.sleep', lambda _:None)
+    llm = ChatCompletionsLLM(model='fixture', base_url='https://example.invalid/v1')
+    for run in ('first', 'next'):
+        result = _checkpoint_call(ws, llm, run, 'Fixed task.')
+        assert json.loads((result.artifact_dir/'provider_error.json').read_text())['recovery_probe_failed']
+    assert len(calls) == 5 and calls[3] == calls[4]
+    assert calls[3]['messages'] == [{'role':'user', 'content':'Reply with OK.'}]
+
+
+def test_http_attempt_classifies_real_wire_failures(ws, monkeypatch):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from threading import Thread
+    from pace.runtime.output.events import read_events
+
+    payloads = []
+    answer = b'{"choices":[{"message":{"role":"assistant","content":"Done."}}]}'
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            payloads.append(self.rfile.read(int(self.headers['Content-Length'])))
+            if len(payloads) == 1:
+                return  # Close the connection before sending any response headers.
+            self.send_response(200)
+            self.send_header('Content-Length', str(len(answer)))
+            self.send_header('X-Request-Id', f'server-{len(payloads)}')
+            self.end_headers()
+            self.wfile.write(answer[:10] if len(payloads) == 2 else answer)
+
+        def log_message(self, *args):
+            pass
+
+    monkeypatch.setenv('PACE_API_KEY', 'test-only-not-a-secret')
+    monkeypatch.setattr('pace.runtime.chat_api.time.sleep', lambda _:None)
+    with ThreadingHTTPServer(('127.0.0.1', 0), Handler) as server:
+        thread = Thread(target=server.serve_forever)
+        thread.start()
+        try:
+            llm = ChatCompletionsLLM(model='fixture', base_url=f'http://127.0.0.1:{server.server_port}/v1')
+            ref = begin_call(ws.root, call_id='wire', role='RESEARCH', stage='wire', prompt='Fixed task.')
+            result = llm.complete_unstructured_result('Fixed task.', workdir=ws.root, call_name='wire',
+                ledger_context={'call_id':'wire', 'call_ref':ref, 'role':'RESEARCH'})
+        finally:
+            server.shutdown()
+            thread.join()
+    assert isinstance(result, TransportSuccess)
+    assert len(payloads) == 3 and payloads[0] == payloads[1] == payloads[2]
+    failures = [row for row in read_events(ws.root) if row['event_kind'] == 'CHAT_REQUEST_FAILURE']
+    assert [(row['failure_stage'], row['status'], row['server_request_id']) for row in failures] == [
+        ('wait_first_byte', None, ''), ('read_response', 200, 'server-2'),
+    ]
+
+
+@pytest.mark.parametrize('expired,stage', [(False, 'connect'), (True, 'role_deadline')])
+def test_http_connect_failure_distinguishes_role_deadline(ws, monkeypatch, expired, stage):
+    import http.client
+    from pace.runtime.output.events import read_events
+    tick = 0
+
+    def clock():
+        return tick
+
+    def connect(self):
+        nonlocal tick
+        tick = 11 if expired else 1
+        raise TimeoutError()
+
+    monkeypatch.setenv('PACE_API_KEY', 'test-only-not-a-secret')
+    monkeypatch.setattr('pace.runtime.chat_http.time.monotonic', clock)
+    monkeypatch.setattr(http.client.HTTPConnection, 'connect', connect)
+    llm = ChatCompletionsLLM(model='fixture', base_url='http://127.0.0.1:1/v1',
+                             timeout_seconds=10, max_retries=0)
+    result = _checkpoint_call(ws, llm, 'deadline', 'Fixed task.')
+    failure, = [row for row in read_events(ws.root) if row['event_kind'] == 'CHAT_REQUEST_FAILURE']
+    assert failure['failure_stage'] == stage and failure['transport_stage'] == 'connect'
+    assert failure['elapsed_seconds'] == tick and result.retry_class == RETRY_TRANSIENT
 
 
 @pytest.mark.parametrize('agent', ['research', 'prover', 'planner'])
@@ -560,3 +663,25 @@ def test_search_directory_returns_actionable_error_without_exposing_files(ws):
     with pytest.raises(ValueError,match='use list_files'):
         tools.execute('search_file',{'path':ws.work_ref('input'),'query':'secret'})
     assert tools.execute('list_files',{'path':ws.work_ref('input')})['files']==[ws.work_ref('input/problem.md')]
+
+
+@pytest.mark.parametrize("reply", [[], {"choices": []}, {"choices": [{"message": None}]}])
+def test_malformed_completion_is_recorded_as_an_interface_failure(ws, monkeypatch, reply):
+    from pace.runtime.chat_http import HTTPAttempt
+    from pace.runtime.llm import TransportFailure
+
+    monkeypatch.setenv("PACE_API_KEY", "test-only")
+    requests = []
+
+    def malformed_response(attempt, request, key):
+        requests.append(request)
+        attempt.phase = "decode_response"
+        return reply
+
+    monkeypatch.setattr(HTTPAttempt, "run", malformed_response)
+    result = _checkpoint_call(ws, ChatCompletionsLLM(model="fixture", base_url="https://example.invalid"),
+                              "malformed", "Check the current task.")
+    assert isinstance(result, TransportFailure)
+    detail = json.loads((result.artifact_dir / "provider_error.json").read_text())
+    assert detail["failure_stage"] == "decode_response"
+    assert detail["transient"] is False and len(requests) == 1

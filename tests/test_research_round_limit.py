@@ -60,6 +60,9 @@ def test_cli_stops_uncharged_research_and_saves_limits_per_turn(tmp_path, monkey
     assert state["round_index"] == 2
     assert state["proof_states_used"] == 0
     assert not (root / "work/turn001/round3").exists()
+    view = json.loads((root / "work/turn001/round2/director_context.json").read_text())["decision_inputs"]
+    assert view["latest_survey"] in view["required_refs"]
+    assert view["latest_survey"] in transport.round_prompts[1] and view["survey_remaining"] == 3
     assert len(transport.round_prompts) == 2
     assert "Remaining research rounds (including the next dispatch): 2" in transport.round_prompts[0]
     final = (root / "work/turn001/final_report.json").read_bytes()
@@ -78,6 +81,23 @@ def test_cli_stops_uncharged_research_and_saves_limits_per_turn(tmp_path, monkey
         assert state["round_index"] == limit
 
 
+def test_call_budget_exhausted_after_orientation_before_first_director(tmp_path, monkeypatch):
+    transport = RoundLimitTransport()
+    monkeypatch.setattr("pace.orchestrator.pipeline.build_llm", lambda **_: transport)
+    problem = tmp_path / "problem.md"
+    problem.write_text("Prove 2+2=4.\n")
+    assert cli.main(["run", "--problem", str(problem), "--problem-id", "setup-budget",
+                     "--output", str(tmp_path), "--max-calls", "1", "--json"]) == 0
+    root = tmp_path / "setup-budget"
+    report = json.loads((root / "work/turn001/final_report.json").read_text())
+    assert report["director_state"]["round_index"] == 0
+    assert report["run_status"] == "completed" and report["mathematical_status"] == "OPEN"
+    assert report["director_state"]["stop_reason"] == "TOTAL_CALL_BUDGET_EXHAUSTED"
+    calls = list(transport.calls)
+    assert cli.main(["resume", "--run-dir", str(root), "--json"]) == 0
+    assert not transport.round_prompts and transport.calls == calls
+
+
 def test_last_round_candidate_is_verified_before_round_limit(tmp_path, monkeypatch, capsys):
     transport = RoundLimitTransport("prover")
     monkeypatch.setattr("pace.orchestrator.pipeline.build_llm", lambda **settings: transport)
@@ -92,6 +112,59 @@ def test_last_round_candidate_is_verified_before_round_limit(tmp_path, monkeypat
     assert report["director_state"]["round_index"] == 1
     assert report["director_state"]["proof_states_used"] == 0
     assert len(transport.round_prompts) == 1
+
+
+def test_resume_publishes_verified_progress_after_parent_checkpoint(tmp_path, monkeypatch):
+    transport = RoundLimitTransport("prover")
+    monkeypatch.setattr("pace.orchestrator.pipeline.build_llm", lambda **_: transport)
+    problem = tmp_path / "problem.md"
+    problem.write_text("Prove 2+2=4.\n")
+    root = tmp_path / "handoff"
+
+    def interrupt(*args, **kwargs):
+        raise KeyboardInterrupt
+    with monkeypatch.context() as scoped:
+        scoped.setattr("pace.orchestrator.director_led.commit_verified_progress", interrupt)
+        assert cli.main(["run", "--problem", str(problem), "--problem-id", "handoff",
+                         "--output", str(tmp_path), "--max-rounds", "1", "--json"]) == 130
+    state = json.loads((root / "work/turn001/state/director_state.json").read_text())
+    assert state["phase"] == "FINALIZE" and state["terminal_result"] == "PASS"
+    assert (root / state["last_verification_ref"]).is_file()
+    progress = root / "memory/verified_progress.json"
+    assert not json.loads(progress.read_text()).get("last_verification_ref")
+    calls = list(transport.calls)
+    assert cli.main(["resume", "--run-dir", str(root), "--json"]) == 0
+    assert json.loads(progress.read_text())["last_proof_ref"] == state["candidate_ref"]
+    assert json.loads((root / "work/turn001/final_report.json").read_text())["result"] == "PASS"
+    assert transport.calls == calls
+    assert cli.main(["resume", "--run-dir", str(root), "--json"]) == 0
+    assert transport.calls == calls
+
+
+def test_failed_binding_after_kernel_pass_preserves_only_local_diagnostics(tmp_path, monkeypatch):
+    transport = RoundLimitTransport("prover")
+    monkeypatch.setattr("pace.orchestrator.pipeline.build_llm", lambda **_: transport)
+    problem = tmp_path / "problem.md"
+    problem.write_text("Prove 2+2=4.\n")
+    root = tmp_path / "binding"
+    def fail_binding(*args, **kwargs):
+        raise ValueError("interrupted binding commit")
+    with monkeypatch.context() as scoped:
+        scoped.setattr("pace.orchestrator.director_verifier.resolve_verification_binding", fail_binding)
+        cli.main(["run", "--problem", str(problem), "--problem-id", "binding",
+                  "--output", str(tmp_path), "--max-rounds", "1", "--json"])
+    turn = root / "work/turn001"
+    state = json.loads((turn / "state/director_state.json").read_text())
+    assert state["phase"] == "FAILED" and (root / state["diagnostics_ref"]).is_file()
+    verifier = turn / "round1/verification"
+    assert json.loads((verifier / "math_verifier_kernel.json").read_text())["stage_status"] == "PASS"
+    assert not (verifier / "verified_progress.json").exists()
+    progress = json.loads((root / "memory/verified_progress.json").read_text())
+    assert not progress["verified_relations"] and not progress.get("last_proof_ref")
+    calls = list(transport.calls)
+    assert cli.main(["resume", "--run-dir", str(root), "--json"]) == 0
+    assert json.loads((turn / "final_report.json").read_text())["result"] == "PASS"
+    assert transport.calls == calls
 
 
 @pytest.mark.parametrize("interrupted", [False, True])
@@ -139,9 +212,14 @@ def test_whole_candidate_root_is_not_reviewed_again_but_other_argument_is(
                                                       ledger_context=ledger_context, **kwargs)
 
     app_calls = []
+    draft_calls = []
+    review_phases = []
     def verify_application(**kwargs):
+        state_path = kwargs["workdir"] / work_ref(kwargs["workdir"], "state/director_state.json")
+        review_phases.append(json.loads(state_path.read_text())["phase"])
         request = kwargs.get("application_request")
         if request is None:
+            draft_calls.append(kwargs["draft_ref"])
             assert kwargs["draft_ref"].endswith("/alternate.md")
             return StructuredSemanticResult({"stage_status": "MATH_FAIL", "reuse_authorized": False,
                                              "publication": {"action": "NONE"}}, {})
@@ -174,6 +252,7 @@ def test_whole_candidate_root_is_not_reviewed_again_but_other_argument_is(
     whole = next(app for app in index["applications"].values() if app["argument_ref"].endswith("/candidate_proof.md"))
     assert whole["status"] == "REVIEWED_AS_WHOLE"
     assert (root / whole["whole_verification_ref"]).is_file()
+    assert review_phases == ["FINALIZE"] and not draft_calls
     assert len(app_calls) == 1 and not pending_finding_checks(root)
     assert transport.calls.count("director_led_prover_01") == 1
     assert transport.calls.count("research_reporter_round1") == 1
@@ -452,3 +531,52 @@ def write_delta(root, output):
             'branch_id': value['branch_id'], 'change_ref': output.relative_to(root).as_posix(),
             'applications': [], 'attempt': {'outcome': 'NOT_ESTABLISHED', 'obstacle_ref': '',
                 'reopen_condition_ref': output.relative_to(root).as_posix()}}))
+
+
+def test_resume_without_verifier_returns_committed_failure(research_workspace):
+    ws = research_workspace
+    authors = []
+
+    def prover(**task):
+        authors.append(task["output_ref"])
+        ws.write_text(authors[-1], "The candidate proof.")
+        return {"agent_id": "prover", "status": "SUCCEEDED", "deliverable_ref": authors[-1]}
+
+    def interrupt(**kwargs):
+        raise KeyboardInterrupt
+
+    engine = DirectorLedEngine(workdir=ws.root, director=lambda **_: credit_task(ws, "prover"),
+        composer=lambda **_: PromptComposerResult(final_prompt="Prove the fixed target.", call_id="composer"),
+        specialists={"prover": prover}, target_contract_id="TARGET", verifier=interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        engine.run()
+    engine.verifier = None
+    result = engine.resume()
+    assert result.state.phase == "FAILED" and len(authors) == 1
+    assert ws.path(result.state.diagnostics_ref).is_file()
+
+
+def test_resume_retries_final_publication_without_rechecking_proof(tmp_path, monkeypatch):
+    transport = RoundLimitTransport("prover")
+    transport.publication = {"action": "CREATE"}
+    monkeypatch.setattr("pace.orchestrator.pipeline.build_llm", lambda **_: transport)
+    source = tmp_path / "problem.md"
+    source.write_text("Prove 2+2=4.\n")
+    root = tmp_path / "publish"
+    report_path = root / "work/turn001/final_report.json"
+
+    def fail_publication(*args, **kwargs):
+        raise OSError("interrupted final publication")
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr("pace.orchestrator.director_led_finalization.publish_finding", fail_publication)
+        assert cli.main(["run", "--problem", str(source), "--problem-id", root.name,
+                         "--output", str(tmp_path), "--max-rounds", "1", "--json"]) == 2
+    report = json.loads(report_path.read_text())
+    assert (report["result"], report["publication_status"]) == ("PASS", "INCOMPLETE")
+    assert report["operational_reason_code"] == "finding_publication_incomplete"
+    calls = list(transport.calls)
+    assert cli.main(["resume", "--run-dir", str(root), "--json"]) == 0
+    report = json.loads(report_path.read_text())
+    assert (report["result"], report["publication_status"]) == ("PASS", "PUBLISHED")
+    assert transport.calls == calls and len(report["artifact_refs"]["findings"]) == 1

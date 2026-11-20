@@ -87,3 +87,43 @@ def test_cli_keeps_writing_progress_out_of_orientation(tmp_path, monkeypatch, fa
     assert all(not event["terminal"] for event in updates)
     assert updates[-1]["status"] == ("failed" if failed_action else "completed")
     assert final_report.read_bytes() == original
+
+
+@pytest.mark.parametrize("mode", ["proof", "research"])
+def test_completed_outline_yields_to_interrupted_math(tmp_path, monkeypatch, mode):
+    from test_research_round_limit import RoundLimitTransport
+
+    from test_finding_publication import ProofPublicationTransport
+
+    class InterruptedVerifier(RoundLimitTransport):
+        interrupted = False
+
+        def complete_structured_result(self, prompt, *, call_name, **kwargs):
+            if "proof_contract_auditor" in call_name and not self.interrupted:
+                self.interrupted = True
+                raise KeyboardInterrupt
+            if mode == "proof":
+                return ProofPublicationTransport.complete_structured_result(
+                    self, prompt, call_name=call_name, **kwargs)
+            return super().complete_structured_result(prompt, call_name=call_name, **kwargs)
+
+    transport = InterruptedVerifier("prover")
+    monkeypatch.setattr("pace.orchestrator.pipeline.build_llm", lambda **_: transport)
+    source = tmp_path / "problem.md"
+    source.write_text("Prove 2+2=4.\n")
+    root = tmp_path / "example"
+    assert cli.main(["run", "--problem", str(source), "--problem-id", root.name,
+                     "--output", str(tmp_path), "--mode", mode, "--json"]) == 130
+    turn = root / "work/turn001"
+    state = turn / "state" / ("proof_state.json" if mode == "proof" else "director_state.json")
+    assert json.loads(state.read_text())["phase"] == "VERIFY"
+    with monkeypatch.context() as scoped:
+        writer = WritingTransport()
+        scoped.setattr("pace.orchestrator.pipeline.build_llm", lambda **_: writer)
+        assert cli.main(["outline", "--run-dir", str(root), "--message", str(source), "--json"]) == 0
+    before = list(transport.calls)
+    outline = (root / "results/outline.md").read_bytes()
+    assert cli.main(["resume", "--run-dir", str(root), "--json"]) == 0
+    assert json.loads((turn / "final_report.json").read_text())["result"] == "PASS"
+    assert set(before).isdisjoint(transport.calls[len(before):])
+    assert (root / "results/outline.md").read_bytes() == outline

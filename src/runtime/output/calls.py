@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
 from pace.runtime.output.workspace import work_ref
 
-from .workspace import _write_json_atomic, _write_text_atomic, artifact_attempt, stage_ref
+from .workspace import _write_json_atomic, _write_text_atomic, stage_ref
 
 
 def begin_call(
@@ -75,41 +74,6 @@ def call_directory(workdir: Path, record_ref: str) -> Path:
     return (Path(workdir) / record_ref).parent
 
 
-def select_reader_attempts(
-    workdir: Path, records: Iterable[dict[str, Any]], *, publication_refs: Iterable[str] = (),
-) -> tuple[dict[str, dict[str, Any]], dict[Path, Path]]:
-    """Select committed call attempts; mathematical iterations keep their own task IDs."""
-    root = Path(workdir)
-    records = tuple(records)
-    attempt_tasks = {(row["stage_ref"], row["agent_id"], row["task_id"])
-                     for row in records if row["task_id"] and row["deliverable_ref"]
-                     and artifact_attempt(root / row["deliverable_ref"]) is not None}
-
-    def key(row):
-        task = row["task_id"]
-        name = re.sub(r"-attempt-\d+$", "", task)
-        name = "/".join(part for part in Path(name).parts if not re.fullmatch(r"attempt[-_]\d+", part))
-        return ((row["stage_ref"], row["agent_id"], name)
-                if name != task or (row["stage_ref"], row["agent_id"], task) in attempt_tasks
-                else row["call_id"])
-
-    chosen = {}
-    for row in records:
-        identity = key(row)
-        previous = chosen.get(identity)
-        if previous is None or row["status"] == "SUCCEEDED" or previous["status"] != "SUCCEEDED":
-            chosen[identity] = row
-    aliases = {row["call_id"]: chosen[key(row)] for row in records}
-    attempts = {}
-    refs = [row["deliverable_ref"] for row in records
-            if aliases[row["call_id"]] is row and row["status"] == "SUCCEEDED" and row["deliverable_ref"]]
-    for ref in (*refs, *publication_refs):
-        attempt = artifact_attempt(root / ref)
-        if attempt is not None:
-            attempts[attempt.parent] = attempt
-    return aliases, attempts
-
-
 def attempt_directory(workdir: Path, record_ref: str, attempt_index: int) -> Path:
     directory = (
         call_directory(workdir, record_ref) / "attempts" / f"{attempt_index:04d}"
@@ -141,71 +105,6 @@ def finish_call(
     if terminal_metadata is not None:
         record["terminal_metadata"] = dict(terminal_metadata)
     _write_json_atomic(path, record)
-
-
-def _delivery_input_bytes(root: Path, ref: str) -> bytes:
-    path = root / ref
-    content = path.read_bytes()
-    if ref.endswith("/final_report.json") and ref == work_ref(root, "final_report.json"):
-        # Delivery progress may change while the mathematical verdict stays
-        # fixed. It must not invalidate a completed writing task on resume.
-        report = json.loads(content)
-        content = json.dumps(
-            {key: report.get(key) for key in (
-                "problem_id", "result", "answer_mode", "terminal_kind",
-                "execution_mode", "target_contract_id", "target_contract_unavailable",
-                "proof_binding", "reason_code", "termination_owner",
-            )}, sort_keys=True, ensure_ascii=False,
-        ).encode("utf-8")
-    return content
-
-
-def delivery_commit_metadata(root: Path, *, inputs, outputs, result) -> dict:
-    """Bind one terminal editorial task to its actual inputs and output bytes."""
-    outputs = tuple(dict.fromkeys(outputs))
-    folder = Path(outputs[0]).parent / "committed_files"
-    metadata = {"delivery_result": result}
-    for kind, refs in (("inputs", inputs), ("outputs", outputs)):
-        snapshots = {}
-        for index, ref in enumerate(dict.fromkeys(refs)):
-            if kind == "inputs" and not (root / ref).is_file():
-                continue
-            snapshot = folder / kind / f"{index:04d}"
-            (root / snapshot).parent.mkdir(parents=True, exist_ok=True)
-            content = (_delivery_input_bytes(root, ref) if kind == "inputs"
-                       else (root / ref).read_bytes())
-            (root / snapshot).write_bytes(content)
-            snapshots[ref] = snapshot.as_posix()
-        metadata[f"delivery_{kind}"] = snapshots
-    return metadata
-
-
-def checkpoint_artifact_call(root: Path, attempt: str, call_ref: str) -> None:
-    _write_json_atomic(root / attempt / "artifact_call.json", {"call_ref": call_ref})
-
-
-def completed_delivery_call(root: Path, attempt: str) -> dict | None:
-    """Read an explicitly checkpointed owner commit, never infer from a draft.
-
-    This is local terminal-delivery recovery, not a mathematical proof cache.
-    """
-    if not attempt:
-        return None
-    checkpoint = root / attempt / "artifact_call.json"
-    if not checkpoint.is_file():
-        return None
-    record = json.loads((root / json.loads(checkpoint.read_text())["call_ref"]).read_text())
-    metadata = record.get("terminal_metadata", {})
-    if record["status"] != "SUCCEEDED" or not metadata.get("delivery_outputs"):
-        return None
-    for ref, snapshot in metadata["delivery_inputs"].items():
-        if not (root / ref).is_file() or _delivery_input_bytes(root, ref) != (root / snapshot).read_bytes():
-            raise ValueError(f"Completed delivery input changed: {ref}; preserve the old task")
-    for ref, snapshot in metadata["delivery_outputs"].items():
-        if (not (root / ref).is_file()
-                or (root / ref).read_bytes() != (root / snapshot).read_bytes()):
-            raise ValueError(f"Completed delivery output changed: {ref}; preserve the old task")
-    return metadata
 
 
 def update_agent_call_deliverable(

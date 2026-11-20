@@ -23,7 +23,7 @@ REVIEW_PHASES = frozenset(
 )
 
 
-def host_receipt_fields(root, directory, phase, action, *, routing_context=None):
+def host_receipt_fields(root, directory, phase, action, *, routing_context):
     """Bind deterministic delivery paths and the assigned mechanism identity."""
     files = {}
     if phase in REVIEW_PHASES:
@@ -48,12 +48,12 @@ def host_receipt_fields(root, directory, phase, action, *, routing_context=None)
     if phase == "SEED_SCOUT":
         fields["seed_operation"] = routing_context["seed_operation"]
     if phase == "MECHANISM_CRITIC":
-        fields["mechanism_id"] = (routing_context or {})["mechanism_id"]
+        fields["mechanism_id"] = routing_context["mechanism_id"]
     return fields
 
 
 def validate_receipt(
-    root, directory, phase, payload, *, seed_base="", inputs=(), routing_context=None
+    root, directory, phase, payload, *, routing_context, seed_base="", inputs=()
 ):
     """Check Host-consumed routing and files; retain additional model context."""
     fixed = host_receipt_fields(

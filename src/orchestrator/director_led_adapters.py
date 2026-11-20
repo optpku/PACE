@@ -24,7 +24,7 @@ from pace.contracts.research.director_protocol import (
 )
 
 from pace.runtime.output.results import FINDINGS_INDEX_REF
-from pace.runtime.output.workspace import is_call_path, work_ref
+from pace.runtime.output.workspace import is_call_path, path_has_symlink_component, work_ref
 from pace.runtime.prompt_composer import compose_prompt
 from pace.runtime.prompt_policy import PromptAssembly, build_prompt_assembly
 from pace.runtime.prompts import skill_index_ref
@@ -137,7 +137,8 @@ def build_specialist_prompt_assembly(
         )
         revision_task += " Write only revision.json; the Host materializes the assigned complete route. "
 
-    method_refs = (skill_index_ref(workdir),) if decision.agent_id != "rci" else ()
+    catalog = skill_index_ref(workdir) if decision.agent_id != "rci" else None
+    method_refs = (catalog,) if catalog else ()
 
     role_prompt_ref = (
         work_ref(workdir, "resources/prompts/roles/research_framing.md")
@@ -418,7 +419,7 @@ def run_default_specialist(
             metadata=metadata,
         )
 
-    from pace.contracts.research.memory import enabled, delivery_instruction
+    from pace.contracts.research.memory import enabled, delivery_instruction, repair_route_references
     from pace.runtime.output.memory import validate_research_delivery
     if enabled(root):
         if not author_delivery.is_file():
@@ -427,7 +428,6 @@ def run_default_specialist(
         assignment_ref = str(destination.parent.relative_to(root) / 'assignment/task.json')
         try:
             if normalized_agent == 'planner':
-                from pace.contracts.research.memory import repair_route_references
                 repair_route_references(root, str(destination.parent.relative_to(root) / 'route_relations.json'))
             validate_research_delivery(root, result_stub, assignment_ref, author_only=True)
         except (ValueError, OSError, KeyError, TypeError) as exc:
@@ -644,10 +644,10 @@ def _atomic_write_text(
 
     root_path = Path(root)
     target = Path(path)
-    if _path_has_symlink_component(root_path, target):
+    if path_has_symlink_component(root_path, target):
         raise ValueError(f"{label} must not contain a symlink")
     target.parent.mkdir(parents=True, exist_ok=True)
-    if _path_has_symlink_component(root_path, target):
+    if path_has_symlink_component(root_path, target):
         raise ValueError(f"{label} must not contain a symlink")
     descriptor, temporary = tempfile.mkstemp(
         dir=target.parent,
@@ -680,7 +680,7 @@ def _safe_output_path(root: Path, output_ref: str) -> Path:
         raise ValueError("specialist output ref must be a relative path under the run workspace")
     root_path = Path(root)
     lexical = root_path / raw
-    if _path_has_symlink_component(root_path, lexical):
+    if path_has_symlink_component(root_path, lexical):
         raise ValueError("specialist output ref must not contain a symlink")
     destination = lexical.resolve()
     try:
@@ -688,26 +688,6 @@ def _safe_output_path(root: Path, output_ref: str) -> Path:
     except (OSError, RuntimeError, ValueError) as exc:
         raise ValueError("specialist output ref escapes the run workspace") from exc
     return destination
-
-
-def _path_has_symlink_component(root: Path, path: Path) -> bool:
-    """Return whether an output path uses a lexical symlink component."""
-
-    root_path = Path(root)
-    candidate = Path(path)
-    try:
-        relative = candidate.relative_to(root_path)
-    except ValueError:
-        return True
-    current = root_path
-    for part in relative.parts:
-        current = current / part
-        try:
-            if current.is_symlink():
-                return True
-        except OSError:
-            return True
-    return False
 
 
 def _unique_strings(values: Iterable[Any]) -> tuple[str, ...]:

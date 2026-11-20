@@ -93,14 +93,17 @@ The batch runner sets these from its JSON config. For ordinary CLI use, shell va
 
 Native request and stream recovery allow 8 and 20 retries respectively. Outer transient retries are capped at two; `NL_PROOF_CLI_MAX_RETRIES` can lower that cap and excludes the initial attempt. Retry warnings do not cancel a running call. If retries are exhausted, PACE preserves the checkpoint and partial outputs. Correct authentication or configuration errors before using [resume](user-guide.md#resume-an-interrupted-turn) in the same problem directory.
 
-The `chat-completions` provider retries a failed network request up to 8 times
-(9 attempts including the initial request), using the configured timeout.
-This also covers HTTP 408, 429,
-500, 502, 503 and 504. Authentication
-and other non-transient HTTP errors stop immediately. Retries keep the current
-conversation and completed tool results; they do not restart the role or replay
-file writes. Repeated timeouts can therefore take longer before a call stops.
-The Codex CLI retry settings above do not change this provider's request retries.
+The `chat-completions` provider defaults to eight retries per request.
+`PACE_CHAT_MAX_RETRIES` accepts 0–20 retries, excluding the initial request.
+Transient transport failures and HTTP 408, 429, 500, 502, 503 and 504 use
+exponential backoff with jitter within the role's time limit. After three
+consecutive failures, a short request checks the same endpoint and model
+before PACE resends the full request. A failed probe pauses the role and
+preserves its conversation and tool results for `resume`.
+Authentication and other permanent errors stop immediately.
+
+Each HTTP attempt records its own ID, elapsed time, failure stage, and
+the server request ID when available in the turn's `events.jsonl`.
 
 Ctrl-C stops the owned model/tool processes, preserves partial output and marks the call as interrupted; the CLI exits with code `130`. Parallel workers in that run are cancelled together; completed workers and reserved proof states are retained for `resume`. Other runs continue independently. Operational failures exit with code `2`. A normally completed research run exits with code `0`, even when the mathematical target remains unresolved. `--profile` records timing in the current turn's event log; a timing-write failure does not replace the task's result or interruption. Use `resume` in the same problem directory to continue saved work.
 
@@ -112,7 +115,7 @@ remains resumable. An early stop for lack of an actionable task must state why.
 
 ## Writing tasks
 
-The core exposes `outline`, `report`, `paper-outline` and `paper` over saved research evidence. Report and paper branches are independent. Each request saves the complete writing requirements, resource snapshot and selected outline version. `resume` continues the selected writing task; writing status and PDF build status are separate from the mathematical `result`.
+The core exposes `outline`, `report`, `paper-outline` and `paper` over saved research evidence. Report and paper branches are independent. Each request saves the complete writing requirements, resource snapshot and selected outline version. `resume` continues the selected unfinished writing task, then a subsequent resume uses the mathematical checkpoint; writing status and PDF build status are separate from the mathematical `result`.
 
 The Web application controls user-facing updates, reading copies and download packaging. Core completion does not depend on a generated reader brief.
 

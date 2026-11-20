@@ -90,7 +90,11 @@ def _verify_candidate(
         state_dir = _state_dir(root, context, result_ref, round_index)
         # The canonical target is always loaded from the run root.  A
         # Director/context projection may identify it, but cannot replace it.
-        _safe_output_path(root, work_ref(root, 'input/target_contract.json'), "target_contract_ref")
+        target_ref = work_ref(root, "input/target_contract.json")
+        problem_ref = work_ref(root, "input/problem.md")
+        for key, canonical in (("target_contract_ref", target_ref), ("problem_ref", problem_ref)):
+            if _artifact_ref(context.get(key), default=canonical) != canonical:
+                raise DirectorVerifierError(f"{key} must reference the canonical {canonical}")
         target = load_active_target(root)
         projected_target = context.get("target_contract")
         if isinstance(projected_target, Mapping) and _string(
@@ -99,7 +103,6 @@ def _verify_candidate(
             raise DirectorVerifierError(
                 "Director context target_contract differs from canonical target"
             )
-        problem_ref, problem_text = _load_problem(root, context)
         target_id = _string(target.get("contract_id"))
         if not target_id:
             raise DirectorVerifierError("canonical target contract has no contract_id")
@@ -197,9 +200,7 @@ def _verify_candidate(
         # source input remains optional search context; no source is invented.
         artifact_refs = {
             "problem_file": problem_ref,
-            "target_contract_file": _existing_ref(
-                root, context, "target_contract_ref", work_ref(root, 'input/target_contract.json')
-            ),
+            "target_contract_file": target_ref,
             "problem_brief_file": _existing_ref(
                 root, context, "problem_brief_ref", work_ref(root, 'input/problem_brief.md')
             ),
@@ -228,10 +229,8 @@ def _verify_candidate(
 
         verification_context = VerificationContext(
             proof_md=proof_text,
-            problem_text=problem_text,
-            source_cards={},
+            canonical_target=target,
             proof_id=proof_id,
-            target_contract_id=target_id,
             proof_search_state={
                 "verified_progress": verified_progress,
                 "survey_evidence_delta": _as_dict(context.get("survey_evidence_delta")),
@@ -303,6 +302,11 @@ def _verify_candidate(
     resolved = resolve_verification(
         root, receipt, target_contract_id=target_id, candidate_ref=proof_ref,
     )
+    if resolved["status"] == "VERIFIER_ERROR":
+        # Keep the diagnostic and role receipts for recovery. Mathematical
+        # progress requires the completed binding, even when Kernel returned PASS.
+        receipt["repair_context_ref"] = _write_repair_context(root, verification_ref, report)
+        return receipt
     receipt["verified_progress_ref"] = stage_verified_progress(
         root, output_ref=f"{state_dir}/verified_progress.json",
         binding={
@@ -421,23 +425,6 @@ def _read_proof(root: Path, proof_ref: str) -> str:
     if not value.strip():
         raise DirectorVerifierError("Prover deliverable is empty")
     return value
-
-
-def _load_problem(root: Path, context: Mapping[str, Any]) -> tuple[str, str]:
-    ref = _artifact_ref(context.get("problem_ref"), default=work_ref(root, 'input/problem.md'))
-    if ref != work_ref(root, 'input/problem.md'):
-        raise DirectorVerifierError(
-            "problem_ref must be the canonical problem.md artifact"
-        )
-    _ensure_relative_ref(ref, "problem_ref")
-    path = _resolve_file(root, ref, "problem_ref")
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError) as exc:
-        raise DirectorVerifierError("cannot read canonical problem statement") from exc
-    if not text.strip():
-        raise DirectorVerifierError("canonical problem statement is empty")
-    return ref, text
 
 
 def _load_optional_object(

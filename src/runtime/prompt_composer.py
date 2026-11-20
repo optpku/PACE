@@ -163,24 +163,6 @@ def _format_budget(value: Any) -> str:
         return str(value)
 
 
-def _input_guidance(paths: Iterable[str], assembly: PromptAssembly, root: Path) -> str:
-    """Label suggested reading paths; the role can discover further context."""
-
-    groups = {
-        label: {(root / ref).resolve() for ref in refs}
-        for label, refs in (
-            ("required", assembly.required_refs),
-            ("contract guide", assembly.contract_guide_refs),
-            ("artifact guide", assembly.artifact_guide_refs),
-        )
-    }
-    lines = []
-    for ref in paths:
-        labels = [label for label, refs in groups.items() if (root / ref).resolve() in refs]
-        lines.append(f"- `{ref}` — {', '.join(labels) or 'on-demand context'}")
-    return "\n".join(lines) or "- (none)"
-
-
 __all__ = [
     "PromptComposerError",
     "PromptComposerResult",

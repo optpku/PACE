@@ -13,11 +13,11 @@ from pace.orchestrator.recovery import RecoveryError, resume_existing_run
 from pace.reporting.postmortem import postmortem_rescan
 from pace.reporting.research_report import RESEARCH_OUTLINE_REF
 from pace.reporting.theory_paper import PAPER_OUTLINE_REF, paper_artifacts, paper_build_status
-from pace.reporting.writing import active_writing_request
+from pace.reporting.writing import pending_writing_request
 from pace.runtime.output.workspace import RunWorkspace, list_problems
 
 from .pipeline import ProofPipeline
-from .pipeline_types import DEFAULT_CALL_TIMEOUT_SECONDS, PipelineConfig
+from pace.pipeline_types import DEFAULT_CALL_TIMEOUT_SECONDS, PipelineConfig
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -172,6 +172,8 @@ def _main(argv: list[str] | None = None) -> int:
             problem, run_dir=run_dir, writing_action=args.command,
             outline_ref=getattr(args, "outline", ""), additional_requirements=requirements,
         )
+        if not isinstance(output, Path):
+            raise TypeError(f"{args.command} must return a writing artifact path")
         print_writing_result(output, run_dir=run_dir, action=args.command, machine=args.json)
         return 0
     if args.command == "resume":
@@ -180,7 +182,7 @@ def _main(argv: list[str] | None = None) -> int:
         try:
             ws = RunWorkspace.open_existing(run_dir)
             with ws.execution_lock():
-                writing = active_writing_request(ws.root)
+                writing = pending_writing_request(ws.root)
                 saved_path = ws.path(ws.work_ref('config.json'))
                 saved = json.loads(saved_path.read_text()) if saved_path.is_file() else {}
                 sessions_path = ws.path(ws.work_ref('state/sessions.json'))

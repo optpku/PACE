@@ -232,46 +232,78 @@ def validate_research_delivery(root: Path, result: dict, assignment_ref: str, *,
         if delta['branch_id'] != context['branch_id'] or not set(delta['obligation_ids']) <= set(context['obligation_ids']):
             raise ValueError('research delta must retain the assigned branch and obligation identities')
         payload['delta_ref'] = delta_ref
+        if 'related_versions' in frozen:
+            payload['related_versions'] = frozen['related_versions']
     return payload
+
+
+def _recorded_commit_ids(root: Path) -> dict:
+    from .events import read_events
+    return {event['commit_ref']: event['idempotency_key'] for event in read_events(root)
+            if event['event_kind'] == 'RESEARCH_MEMORY_COMMITTED'}
+
+
+def _load_memory_commit(root, ref, target, expected_id=None):
+    """Replay only the recorded handoff and its exact source versions."""
+    from pace.contracts.research.memory import check_binding, digest, read_json
+    from pace.reporting.research_progress import restore_reporter_delivery
+
+    folder = Path(ref).parent
+    commit_ref = str(folder / 'memory_commit.json')
+    record = read_json(root, commit_ref)
+    ident = digest({k: v for k, v in record.items() if k != 'commit_id'})
+    if (record.get('schema_version') != 'research_memory_commit/v1' or record.get('commit_id') != ident
+            or (expected_id is not None and expected_id != ident)
+            or record['result_ref'] != ref or record['target'] != target):
+        raise ValueError(f'memory commit differs from its recorded handoff: {commit_ref}')
+    delta_ref = record['payload'].get('delta_ref')
+    reporter_ref = record['payload'].get('reporter_ref')
+    for row in record['bindings']:
+        if not reporter_ref or row['ref'] != delta_ref:
+            check_binding(root, row)
+    if reporter_ref:
+        if reporter_ref != str(folder / 'reporter_result.json') or delta_ref != str(folder / 'research_delta.json'):
+            raise ValueError(f'Reporter delivery belongs to a different handoff: {ref}')
+        restore_reporter_delivery(root, ref)
+        check_binding(root, next(row for row in record['bindings'] if row['ref'] == delta_ref))
+    return record
 
 
 def commit_research_memory(root: Path, result_refs=None) -> None:
     """Run only in the parent after its task state is durable; replay is idempotent."""
-    from pace.contracts.research.memory import binding, check_binding, digest, enabled, read_json
+    from pace.contracts.research.memory import binding, digest, enabled, read_json
     from .workspace import _write_json_atomic
     from .events import append_event
     if not enabled(root): return
     initialize_research_memory(root)
     committed_refs = _committed_research_results(root)
     committed = set(committed_refs)
-    if result_refs is None: result_refs = committed_refs
+    replay = result_refs is None
+    if replay: result_refs = committed_refs
     index_path = root / RESEARCH_INDEX_REF
     index = json.loads(index_path.read_text())
-    from .events import read_events
-    notified = {e['idempotency_key'] for e in read_events(root) if e['event_kind'] == 'RESEARCH_MEMORY_COMMITTED'}
-    for ident, saved_ref in index['commits'].items():
-        if ident not in notified:
-            saved = read_json(root, saved_ref)
-            append_event(root, 'RESEARCH_MEMORY_COMMITTED', idempotency_key=ident, commit_ref=saved_ref,
-                         result_ref=saved['result_ref'], branch_id=saved['branch_id'])
-    known_refs = set(index['commits'].values())
+    notified = _recorded_commit_ids(root)
+    known = {commit_ref: ident for ident, commit_ref in index['commits'].items()}
+    pending = (str(Path(path).with_name('agent_result.json')) for path in known if path not in notified)
+    result_refs = (*pending, *result_refs)
     for ref in dict.fromkeys(result_refs):
-        commit_ref = str(Path(ref).parent / 'memory_commit.json')
         if ref not in committed or Path(ref).name != 'agent_result.json': continue
         folder = Path(ref).parent
-        if (root / folder / 'reporter_result.json').is_file() and any(
-                not (root / folder / name).is_file() for name in ('progress.md', 'research_delta.json')):
-            from pace.reporting.research_progress import restore_reporter_delivery
-            restore_reporter_delivery(root, ref)
-        if commit_ref in known_refs: continue
-        result = read_json(root, ref)
-        if result['status'] != 'SUCCEEDED': continue
-        folder = Path(ref).parent
         commit_ref = str(folder / 'memory_commit.json')
-        if (root / commit_ref).is_file():
-            record = read_json(root, commit_ref)
-            for row in record['bindings']: check_binding(root, row)
+        ident = known.get(commit_ref)
+        recorded_id = notified.get(commit_ref)
+        if ident and recorded_id and ident != recorded_id:
+            raise ValueError(f'memory commit differs from the recorded event: {commit_ref}')
+        if ident and ident == recorded_id and not replay:
+            # A normal round only revisits earlier handoffs when a projection is missing.
+            if not (root / folder / 'reporter_result.json').is_file() or all(
+                    (root / folder / name).is_file() for name in ('research_delta.json', 'progress.md')):
+                continue
+        if ident or recorded_id or (root / commit_ref).is_file():
+            record = _load_memory_commit(root, ref, index['target'], ident or recorded_id)
         else:
+            result = read_json(root, ref)
+            if result['status'] != 'SUCCEEDED': continue
             assignment_ref = str(folder / 'assignment/task.json')
             context_ref = str(folder / 'assignment/context.json')
             if not (root / context_ref).is_file(): continue
@@ -288,8 +320,9 @@ def commit_research_memory(root: Path, result_refs=None) -> None:
         if record['commit_id'] not in index['commits']:
             _apply_research_commit(index, record, commit_ref)
             _write_json_atomic(index_path, index)
-        append_event(root, 'RESEARCH_MEMORY_COMMITTED', idempotency_key=record['commit_id'],
-                     commit_ref=commit_ref, result_ref=ref, branch_id=record['branch_id'])
+        if not recorded_id:
+            append_event(root, 'RESEARCH_MEMORY_COMMITTED', idempotency_key=record['commit_id'],
+                         commit_ref=commit_ref, result_ref=ref, branch_id=record['branch_id'])
 
     route = index.get('current_route')
     if route:
@@ -320,7 +353,8 @@ def _apply_research_commit(index, record, commit_ref):
         index['current_route'] = index['routes'][record['branch_id']]
     if 'delta' in payload:
         delta = payload['delta']
-        index['attempts'].append({**delta, 'commit_ref': commit_ref, 'result_ref': record['result_ref']})
+        index['attempts'].append({**delta, 'commit_ref': commit_ref, 'result_ref': record['result_ref'],
+                                  'related_versions': payload.get('related_versions', delta['obligation_versions'])})
         applications = index['applications']
         legacy_keys = {application_review_identity(app): key for key, app in applications.items()
                        if 'proposal_ids' not in app}
@@ -337,16 +371,15 @@ def _apply_research_commit(index, record, commit_ref):
 
 def rebuild_research_index(root: Path) -> dict:
     """Rebuild derived memory from parent-committed results, not author status labels."""
-    from pace.contracts.research.memory import check_binding, read_json
+    from pace.contracts.research.memory import read_json
     from .workspace import _write_json_atomic
     index = _empty_research_index(root)
+    notified = _recorded_commit_ids(root)
     for ref in _committed_research_results(root):
         if Path(ref).name != 'agent_result.json': continue
         commit_ref = str(Path(ref).parent / 'memory_commit.json')
-        if not (root / commit_ref).is_file(): continue
-        record = read_json(root, commit_ref)
-        if record['target'] != index['target']: continue
-        for row in record['bindings']: check_binding(root, row)
+        if commit_ref not in notified and not (root / commit_ref).is_file(): continue
+        record = _load_memory_commit(root, ref, index['target'], notified.get(commit_ref))
         if record['commit_id'] not in index['commits']: _apply_research_commit(index, record, commit_ref)
     _write_json_atomic(root / RESEARCH_INDEX_REF, index)
     # Application receipts are an independent, precisely bound source of authority.
@@ -413,7 +446,7 @@ def whole_proof_application_routes(root: Path, index: dict, *, state: dict | Non
 
 
 def refresh_application_memory(root: Path) -> None:
-    from pace.contracts.research.memory import application_review_bindings, check_binding, read_json, enabled
+    from pace.contracts.research.memory import application_is_approved, application_review_bindings, check_binding, read_json, enabled
     from .workspace import _write_json_atomic
     if not enabled(root): return
     index = read_json(root, RESEARCH_INDEX_REF)
@@ -435,7 +468,11 @@ def refresh_application_memory(root: Path) -> None:
             app.update(status='REVIEWED_AS_WHOLE', whole_verification_ref=whole_ref)
             continue
         ref = str(Path(app['result_ref']).parent / 'verification' / f"application-{app['application_key']}.json")
-        if not (root / ref).is_file(): continue
+        if not (root / ref).is_file():
+            app['status'] = 'PROPOSED'
+            app.pop('review_ref', None)
+            app.pop('review_text_ref', None)
+            continue
         record = read_json(root, ref)
         if record.get('application_key') != app['application_key']: raise ValueError('application review binding mismatch')
         if record['bindings'] != expected: raise ValueError('application review has different dependencies')
@@ -445,13 +482,13 @@ def refresh_application_memory(root: Path) -> None:
         except (ValueError, OSError):
             app['status'] = 'INVALIDATED'; continue
         verdict = record['verdict']
-        checks = verdict.get('application_checks', [])
-        valid = (verdict.get('stage_status') == 'PASS' and verdict.get('reuse_authorized') is True
-                 and len(checks) == 1 and checks[0].get('obligation_id') == app['obligation_id']
-                 and checks[0].get('obligation_version') == app['obligation_version']
-                 and checks[0].get('status') == 'APPLICABLE' and record.get('review_binding')
-                 and checks[0].get('review_ref') == record['review_binding']['ref'])
-        app.update(status='APPLICABLE' if valid else 'NOT_ESTABLISHED', review_ref=ref)
+        if verdict.get('stage_status') == 'VERIFIER_ERROR':
+            app.update(status='PROPOSED', review_ref=ref)
+            app.pop('review_text_ref', None)
+            continue
+        valid = application_is_approved(app, record)
+        app.update(status='APPLICABLE' if valid else 'NOT_ESTABLISHED', review_ref=ref,
+                   review_text_ref=(record.get('review_binding') or {}).get('ref', ''))
         if valid: obligation['status'] = 'CLOSED'
     # A rejected/invalidated application cannot erase another valid application.
     for obligation in index['obligations'].values():
@@ -469,11 +506,16 @@ def research_brief(root: Path) -> str:
     index = read_json(root, RESEARCH_INDEX_REF)
     counts = {}
     for attempt in index['attempts']:
-        related = set(attempt['obligation_ids'])
+        versions = attempt.get('related_versions', attempt.get('obligation_versions', {}))
+        current = {ident for ident, version in versions.items()
+                   if index['obligations'].get(ident, {}).get('version') == version}
+        related = current.intersection(attempt['obligation_ids'])
         pending = list(related)
         while pending:
             for parent in index['obligations'].get(pending.pop(), {}).get('parent_ids', []):
-                if parent not in related: related.add(parent); pending.append(parent)
+                if parent not in related and parent in current:
+                    related.add(parent)
+                    pending.append(parent)
         for ident in related:
             counts[ident] = counts.get(ident, 0) + 1
             if any(app['status'] == 'APPLICABLE' and app['obligation_id'] == ident
@@ -482,10 +524,15 @@ def research_brief(root: Path) -> str:
     return '\nResearch memory (SEARCH_CONTEXT_ONLY; read bound evidence before reuse):\n' + json.dumps({
         'obligations': [{k: o[k] for k in ('id', 'version', 'kind', 'branch_id', 'status', 'statement_ref', 'statement_locator', 'parent_ids') if k in o}
                         for o in index['obligations'].values()],
+        'applicable_evidence': [
+            {k: app[k] for k in ('obligation_id', 'obligation_version', 'argument_ref', 'review_ref', 'review_text_ref') if k in app}
+            for app in index['applications'].values() if app['status'] == 'APPLICABLE'
+            and app['obligation_version'] == index['obligations'][app['obligation_id']]['version']
+        ],
         'pending_applications': [k for k, a in index['applications'].items() if a['status'] == 'PROPOSED'],
         'recent_attempts': [{k: a[k] for k in ('obligation_ids', 'obligation_versions', 'branch_id', 'change_ref', 'attempt', 'result_ref')}
                             for a in index['attempts'][-6:]],
-        'reassessment_due': [k for k, v in counts.items() if v >= 3],
+        'reassessment_due': [k for k, v in counts.items() if v >= 3 and index['obligations'][k]['status'] == 'OPEN'],
         'note': 'Reassessment is advisory, not a stop. Normal node completion does not require replanning. Cite a concrete change for repeated attempts.',
         'archive_ref': RESEARCH_INDEX_REF,
         'branch_costs': index.get('costs', {}).get('branches', {}),

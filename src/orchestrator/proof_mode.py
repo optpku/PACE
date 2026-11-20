@@ -377,12 +377,12 @@ def _finish(pipeline, ws, state, target_id):
         }
         if passed:
             kernel = json.loads(ws.path(report["artifact_refs"]["kernel"]).read_text())
-            publish_finding(
+            published_ref = publish_finding(
                 ws.root, source_ref=report["artifact_refs"]["proof"],
                 verification_ref=report["artifact_refs"]["verification"],
                 round_index=state["loop_index"], publication=kernel["publication"],
             )
-            report["publication_status"] = "PUBLISHED"
+            report["publication_status"] = "PUBLISHED" if published_ref else "NO_PUBLICATION"
         report["artifact_refs"]["findings"] = [row["ref"] for row in finding_entries(ws.root)]
         ws.write_json(report_ref, report)
     report = json.loads(ws.path(report_ref).read_text())

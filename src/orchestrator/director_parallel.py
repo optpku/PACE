@@ -10,8 +10,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 
 from pace.contracts.research.director_protocol import DIRECTOR_PROTOCOL_SCHEMA_VERSION
-from pace.runtime.context_state import commit_verified_progress
-from pace.runtime.output.memory import commit_memory_notes
+from pace.contracts.research.memory import binding, check_binding
+from pace.runtime.research_context import validate_context
 from pace.runtime.processes import cancellable_model_calls
 from pace.orchestrator.recovery import load_operational_checkpoint
 from pace.orchestrator.director_led import (
@@ -38,13 +38,13 @@ def reserve_batch(engine, state, decision):
     manifest_ref = engine._round_ref(first, "batch.json")
     reserved = replace(state, round_index=state.round_index + len(tasks),
                        proof_states_used=state.max_proof_states - credits,
-                       phase="PENDING_BATCH", pending_assignment_ref=manifest_ref)
+                       phase="PENDING_BATCH", pending_assignment_ref=manifest_ref, last_batch_result_ref="", last_batch_result_sha256="")
     # Freeze every input before any worker starts. Siblings never observe a new route.
     frozen = []
     for offset, task in enumerate(tasks):
         index = first + offset
         # All workers use the first round's already committed progress snapshot.
-        refs = engine._assignment_input_refs(task, index)
+        refs = engine._assignment_input_refs(task, index, snapshot_round=first)
         frozen.append({"round_index": index, "input_refs": list(refs), **engine._context_binding(index)})
     _write_json(engine.workdir / manifest_ref, {
         "reserved_state": reserved.to_json(),
@@ -67,9 +67,7 @@ class _TaskExecutor(DirectorLedEngine):
             workdir=parent.workdir, director=parent.director, composer=parent.composer,
             specialists=parent.specialists, verifier=parent.verifier,
             target_contract_id=parent.target_contract_id, max_proof_states=parent.max_proof_states,
-            # The parent Host reports once after the batch is merged; workers
-            # must never race on the shared user-facing report.
-            on_round_committed=None,
+            # Each author has a Reporter. The parent owns shared evidence after the merge.
             reporter=parent.reporter,
         )
         self.parent_task_id = f"batch-{first_round:04d}"
@@ -114,7 +112,7 @@ def _execute(parent, snapshot, task, index, first_round, control_context):
                         last_directive_ref=directive, last_assignment_ref="",
                         pending_prompt_ref="", pending_verifier_request_ref="",
                         last_composer_manifest_ref="", last_specialist_result_ref="",
-                        last_verification_ref="", candidate_ref="", diagnostics_ref="",
+                        last_verification_ref="", last_batch_result_ref="", last_batch_result_sha256="", candidate_ref="", diagnostics_ref="",
                         terminal_result="", stop_reason="")
         worker._persist_state(state)
     if state.phase == "FAILED":
@@ -146,6 +144,15 @@ def run_batch(engine, state, *, control_context):
     snapshot = replace(snapshot, proof_states_used=state.proof_states_used)
     tasks = manifest["tasks"]
     first = manifest["first_round"]
+    for row in manifest["contexts"]:
+        if "context_binding" in row:
+            expected = engine._round_ref(row["round_index"], "assignment/context.json")
+            if row["context_binding"]["ref"] != expected:
+                raise ValueError("batch context belongs to another reservation")
+            check_binding(engine.workdir, row["context_binding"])
+            frozen = validate_context(engine.workdir, expected)
+            if row["input_refs"] != [*frozen["required_refs"], expected, frozen["route_context"]["ref"]]:
+                raise ValueError("batch inputs differ from the reservation")
     from pace.runtime.output.events import publish_progress
     publish_progress(engine.workdir, task_id=f"batch-{first:04d}", stage="batch", status="started", round_index=first, task_count=len(tasks), artifact_refs=(manifest_ref,))
     # Reservations were committed before any worker starts. Recovered workers
@@ -194,21 +201,8 @@ def run_batch(engine, state, *, control_context):
                      stop_reason=selected.stop_reason if winner else "",
                      pending_dispatch_ref="", pending_assignment_ref="",
                      pending_prompt_ref="", pending_verifier_request_ref="",
-                     completed_result_refs=completed)
-    verifications = {
-        item.last_verification_ref: _read_json(engine.workdir / item.last_verification_ref)["verification"]
-        for item in results if item.last_verification_ref
-    }
-    verification_values = tuple(verifications.values())
-    commit_verified_progress(
-        engine.workdir, verification_values,
-        current_progress_ref=verifications.get(selected.last_verification_ref, {}).get("verified_progress_ref") or "",
-    )
-    committed = engine._persist_state(merged)
-    from pace.runtime.output.memory import commit_research_memory
-    commit_research_memory(engine.workdir, completed)
-    commit_memory_notes(engine.workdir, result_refs=completed,
-                                verification_values=verification_values)
+                     completed_result_refs=completed, last_batch_result_ref=result_ref,
+                     last_batch_result_sha256=binding(engine.workdir, result_ref)["sha256"])
     committed = engine._persist_state(merged)
     publish_progress(engine.workdir, task_id=f"batch-{first:04d}", stage="batch", status="completed", round_index=first, task_count=len(tasks), artifact_refs=(result_ref, *completed))
     return committed

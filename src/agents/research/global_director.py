@@ -99,6 +99,8 @@ def run_global_director(
     target_contract_id: str = "",
     input_refs: Iterable[str] = (),
     control_context: str = "",
+    decision_inputs: Mapping[str, Any] | None = None,
+    on_accept: Callable[[dict[str, Any]], None] | None = None,
     proof_states_remaining: int | None = None,
     research_rounds_remaining: int | None = None,
     call_name: str = "global_research_director",
@@ -113,13 +115,13 @@ def run_global_director(
     call is made here.
     """
 
-    from pace.contracts.research.memory import enabled
-    from pace.runtime.output.memory import research_brief
-    memory_enabled = enabled(workdir)
+    if decision_inputs is None:
+        from pace.runtime.research_context import director_decision_inputs
+        decision_inputs = director_decision_inputs(Path(workdir), input_refs)
+    memory_enabled = decision_inputs['memory_enabled']
     index_ref = skill_index_ref(workdir)
-    refs = _unique_nonempty((*input_refs, *((index_ref,) if index_ref else ())))
-    from pace.runtime.research_context import director_archive_refs
-    archives = tuple(ref for ref in director_archive_refs(Path(workdir)) if ref not in refs)
+    refs = _unique_nonempty((*decision_inputs['required_refs'], *((index_ref,) if index_ref else ())))
+    archives = tuple(ref for ref in decision_inputs['archive_refs'] if ref not in refs)
     final_prompt = (
         str(prompt)
         if prompt is not None
@@ -132,7 +134,7 @@ def run_global_director(
     )
 
     if memory_enabled:
-        final_prompt += research_brief(workdir) + (
+        final_prompt += decision_inputs['brief'] + (
             "\nFor each DISPATCH, including each entry in parallel_tasks, provide its own "
             "obligation_ids, branch_id, archive_refs, next_step_kind and change_refs. "
             "Use obligation target and branch b-target before a route exists. "
@@ -141,12 +143,13 @@ def run_global_director(
             "result, or REASSESS for reassessing a line of work. STOP leaves dispatch fields empty."
         )
 
-    # Current-turn execution receipts own the acquisition budget.
-    survey_calls = sum(
-        json.loads(path.read_text()).get("agent_id") == "survey"
-        for path in (Path(workdir) / work_ref(workdir)).glob('*/agent_result.json')
-    )
-    survey_remaining = max(0, 4 - survey_calls)
+    survey_remaining = decision_inputs['survey_remaining']
+    if decision_inputs['latest_survey']:
+        final_prompt += (
+            f"\nLatest Survey: `{decision_inputs['latest_survey']}`. Check the cited result's hypotheses "
+            "against the current obligation. Dispatch the missing bridge or remaining gap. "
+            "Reuse requires a bound independent check; the Survey itself grants no proof authority."
+        )
     final_prompt += (
         f"\nSurvey calls remaining: {survey_remaining}/4 (including initial Survey and failed calls). "
         "Do not repeat unchanged acquisition. When no calls remain, dispatch RCI/Research/Planner/Prover "
@@ -177,18 +180,16 @@ def run_global_director(
             validate_director_stop(decision, proof_states_remaining=proof_states_remaining,
                                    research_rounds_remaining=research_rounds_remaining)
             if memory_enabled:
-                from pace.runtime.research_context import load_index
-                index = load_index(Path(workdir))
                 for index_in_batch, task in enumerate((decision, *decision.parallel_tasks)):
                     prefix = '' if index_in_batch == 0 else f'parallel_tasks/{index_in_batch - 1}/'
                     if task.action.value == "DISPATCH" and not task.next_step_kind:
                         raise DirectorProtocolError("new memory protocol requires next_step_kind, obligation_ids and branch_id",
                                                     field=prefix + 'next_step_kind')
                     if task.action.value == "DISPATCH":
-                        if any(i not in index['obligations'] for i in task.obligation_ids):
+                        if any(i not in decision_inputs['obligation_versions'] for i in task.obligation_ids):
                             raise DirectorProtocolError('task references an unknown obligation; Planner must first declare it',
                                                         field=prefix + 'obligation_ids')
-                        if task.next_step_kind == 'INITIAL_PLAN' and index.get('current_route'):
+                        if task.next_step_kind == 'INITIAL_PLAN' and decision_inputs['route']:
                             raise DirectorProtocolError('a committed route already exists; use evidence-bound REPLAN for Planner',
                                                         field=prefix + 'next_step_kind')
         except ValueError as exc:
@@ -217,6 +218,7 @@ def run_global_director(
     metadata['archive_refs'] = list(_unique_nonempty((*archives, *metadata.get('archive_refs', ()))))
     spec = SemanticRoleSpec(
         role=GLOBAL_DIRECTOR_ROLE,
+        on_accept=on_accept,
         schema=lambda: director_decision_schema(survey_calls_remaining=survey_remaining, memory_enabled=memory_enabled),
         host_schema_version="research_director_decision/v3" if memory_enabled else DIRECTOR_PROTOCOL_SCHEMA_VERSION,
         authority="SEARCH_CONTEXT_ONLY",

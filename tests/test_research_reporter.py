@@ -161,7 +161,10 @@ def test_native_cli_initialization_reporter_and_resume(tmp_path, monkeypatch, mo
     assert len(list(turn.glob('round*/reporter_result.json'))) == (1 if mode=='proof' else 2)
     assert (turn/'input/problem_brief.md').read_text().strip()
     assert not (turn/'orientation/brief_diagnostics.json').exists()
-    if mode == 'research': assert transport.correct_director
+    if mode == 'research':
+        assert transport.correct_director
+        view = json.loads((turn / 'round3/director_context.json').read_text())['decision_inputs']
+        assert work_ref(root, 'round2/progress.md') in view['required_refs']
     assert all(a['attempt']['outcome']=='LOCAL_RESULT' for a in load_index(root)['attempts'])
     completed_calls = list(transport.calls)
     # Completed runs also rebuild navigation/deltas without calling any model.
@@ -173,6 +176,17 @@ def test_native_cli_initialization_reporter_and_resume(tmp_path, monkeypatch, mo
     assert cli.main(['resume','--run-dir',str(root),'--json']) == 0
     assert transport.calls == completed_calls
     assert all(p.read_bytes() == data and p.with_name('progress.md').is_file() for p,data in originals.items())
+    summary = next(iter(originals)).with_name('progress.md')
+    original_summary = summary.read_bytes()
+    delta = summary.with_name('research_delta.json')
+    delta.write_bytes(b'{broken')
+    summary.write_text("The target was solved without additional hypotheses.")
+    assert cli.main(['resume','--run-dir',str(root),'--json']) == 0
+    assert delta.read_bytes() == originals[delta] and summary.read_bytes() == original_summary
+    stamps = (delta.stat().st_mtime_ns, summary.stat().st_mtime_ns)
+    assert cli.main(['resume','--run-dir',str(root),'--json']) == 0
+    assert stamps == (delta.stat().st_mtime_ns, summary.stat().st_mtime_ns)
+    assert transport.calls == completed_calls
     assert len(load_index(root)['attempts']) == (1 if mode=='proof' else 2)
 
 
@@ -180,6 +194,7 @@ def test_native_cli_initialization_reporter_and_resume(tmp_path, monkeypatch, mo
 def test_rci_outer_handoff_and_parallel_reporter_recover_without_author(ws, parallel):
     from pace.orchestrator.director_led import DirectorLedEngine
     from pace.runtime.prompt_composer import PromptComposerResult
+    from pace.runtime.output.delivery_pause import DeliveryPaused, delivery_pause
     use_reporter(ws)
     author_calls = []; reporter_calls = []; interrupted = False
     llm = ProofPublicationTransport('NONE')
@@ -196,18 +211,32 @@ def test_rci_outer_handoff_and_parallel_reporter_recover_without_author(ws, para
             interrupted = True
             raise OSError('Interruption after mathematical delivery')
         return run_research_reporter(llm=llm, workdir=ws.root, result_ref=ref)
+    review_attempts = []
+    def review(**kwargs):
+        state = json.loads(ws.path(ws.work_ref('state/director_state.json')).read_text())
+        assert tuple(state['completed_result_refs']) == kwargs['completed_result_refs']
+        assert len(load_index(ws.root)['attempts']) == (2 if parallel else 1)
+        review_attempts.append(kwargs['retry_errors'])
+        return len(review_attempts) > 1
+
     engine = DirectorLedEngine(workdir=ws.root, director=lambda **_: first,
         composer=lambda **_: PromptComposerResult(final_prompt='Work on the original question.', call_id='composer'),
         specialists={'rci':author,'research':author}, max_rounds=2 if parallel else 1, max_proof_states=2,
-        reporter=reporter, target_contract_id='TARGET')
+        reporter=reporter, review_findings=review, target_contract_id='TARGET')
     result = engine.run()
     assert result.phase == 'FAILED'
     assert len(author_calls) == (2 if parallel else 1)
     from pace.orchestrator.recovery import _restore_operational_checkpoint
     assert _restore_operational_checkpoint(ws, result.state.to_json())
     engine.director = lambda **_: pytest.fail('Do not redispatch the reserved task')
+    with pytest.raises(DeliveryPaused, match="Finding verification is incomplete"):
+        engine.resume()
+    assert delivery_pause(ws.root)['stage'] == 'findings'
+    assert json.loads(engine.state_path.read_text())['phase'] == 'DIRECTOR'
     result = engine.resume()
     assert result.phase == 'FINALIZE'
+    assert review_attempts == [True, True]
+    assert not delivery_pause(ws.root)
     assert author_calls.count('rci') == 1
     assert author_calls.count('research') == (1 if parallel else 0)
     assert len(llm.calls) == (2 if parallel else 1)
@@ -419,3 +448,33 @@ def test_json_only_rci_handoff_schema_is_valid_and_disallows_applications():
     schema=reporter_schema({'original_refs':['outcome.json'],'bindings':[{'ref':'outcome.json'}]})
     assert preflight_output_schema(schema).ok
     assert schema['properties']['delta']['properties']['applications']['maxItems']==0
+
+@pytest.mark.parametrize("interrupt_round", [1, 2])
+def test_cli_resumes_a_director_receipt_accepted_before_dispatch(tmp_path, monkeypatch, interrupt_round):
+    from pace.orchestrator import pipeline
+    transport = NativeFixture("research")
+    monkeypatch.setattr(pipeline, "build_llm", lambda **_: transport)
+    original = pipeline.run_global_director
+    name = f"global_research_director_{interrupt_round:04d}"
+    def interrupt_after_accept(**kwargs):
+        result = original(**kwargs)
+        if kwargs["call_name"] == name:
+            raise KeyboardInterrupt
+        return result
+
+    root = tmp_path / "accepted"
+    problem = tmp_path / "problem.md"
+    problem.write_text("Prove 2+2=4.\n")
+    turn = root / "work/turn001"
+    with monkeypatch.context() as scoped:
+        scoped.setattr(pipeline, "run_global_director", interrupt_after_accept)
+        assert cli.main(["run", "--problem", str(problem), "--problem-id", "accepted",
+                         "--output", str(tmp_path), "--json"]) == 130
+    decision = turn / f"round{interrupt_round}/director_decision.json"
+    saved = decision.read_bytes()
+    old_calls = list(transport.calls)
+    assert cli.main(["resume", "--run-dir", str(root), "--json"]) == 0
+    assert decision.read_bytes() == saved
+    assert all(transport.calls.count(call) == old_calls.count(call) for call in set(old_calls))
+    assert json.loads((turn / "final_report.json").read_text())["result"] == "PASS"
+    assert not (root / "work/turn002").exists()

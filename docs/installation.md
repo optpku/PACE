@@ -163,3 +163,10 @@ function calling. Only assigned artifact paths are writable; receipt-only calls
 expose no file-writing tool. The Host checks the submitted schema and references.
 Survey alone can fetch public source URLs; this transport does not supply a
 search-engine tool or a shell.
+
+## Building a release package
+
+Run `uv build` to create the source distribution and build the wheel from its
+unpacked contents. Both this command and a direct wheel build use a fresh
+temporary build directory. Old modules or prompts left in a checkout’s
+`build/lib` directory cannot enter the package.

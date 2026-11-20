@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import unquote, urlsplit, urlunsplit
 
@@ -18,8 +18,6 @@ from .workspace import (
     _write_json_atomic,
     _write_text_atomic,
     current_turn,
-    stage_ref,
-    work_ref,
 )
 
 FINDINGS_STATE_REF = "work/state/findings.json"
@@ -40,25 +38,16 @@ def finding_entries(workdir: Path) -> list[dict]:
     return [row for row in state["entries"] if (root / row["ref"]).is_file()]
 
 
-def stage_finding_review_refs(
-    workdir: Path, round_index: int, completed_result_refs: Iterable[str] = (),
-) -> tuple[str, ...]:
-    """Navigate all latest-round verdicts, including unpublished rejections."""
-    root = Path(workdir)
-    prefix = Path(work_ref(root)).parts
-    results = [Path(ref) for ref in completed_result_refs
-               if Path(ref).name == "agent_result.json"
-               and Path(ref).parts[:len(prefix)] == prefix]
-    directories = {root / stage_ref(round_index, workdir=root) / "findings"}
-    if results:
-        latest = results[-1].parts[:len(prefix) + 1]
-        # Both committed workers of one batch share the outer round directory.
-        directories = {(root / ref).parent / "findings" for ref in results
-                       if ref.parts[:len(prefix) + 1] == latest}
-    return tuple(sorted({path.relative_to(root).as_posix()
-                         for directory in directories
-                         for path in directory.glob("*.verification.json")
-                         if path.is_file() and not path.is_symlink()}))
+def committed_round_reading_refs(root: Path, result_ref: str) -> tuple[str, ...]:
+    """Surface the accepted handoff, its Reporter summary and all local finding reviews."""
+    folder = (root / result_ref).parent
+    refs = [result_ref]
+    if (folder / "reporter_result.json").is_file() and (folder / "progress.md").is_file():
+        refs.append((folder / "progress.md").relative_to(root).as_posix())
+    refs.extend(path.relative_to(root).as_posix()
+                for path in sorted((folder / "findings").glob("*.verification.json"))
+                if path.is_file() and not path.is_symlink())
+    return tuple(refs)
 
 
 def _finding_link(root: Path, row: dict, document: Path) -> str:

@@ -97,7 +97,7 @@ pace resume --run-dir outputs/even-square \
   --model gpt-6.1-sol --reasoning-effort high --web-search-mode on
 ```
 
-`resume` continues the selected saved task. It preserves the target, mode, resource snapshot, proof-loop limit and committed outputs. `--resource-variant`, `--max-proof-states` and `--mode` are not resume options. Completed mathematical work is reused without another model call. If a writing task is selected, recovery continues that writing task without restarting research.
+`resume` continues the selected saved task. It preserves the target, mode, resource snapshot, proof-loop limit and committed outputs. `--resource-variant`, `--max-proof-states` and `--mode` are not resume options. Completed mathematical work is reused without another model call. An unfinished writing request takes priority, including a paper awaiting its PDF. After delivery, resume returns to the saved mathematical checkpoint.
 
 Resume turns created before the RCI rename with the PACE installation saved for that run. The checkpoint and resource snapshot refer to the role IDs and paths from that version.
 

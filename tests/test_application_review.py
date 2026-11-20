@@ -232,3 +232,19 @@ def test_application_review_is_saved_before_semantic_success_publication(ws, mon
     assert publish_applications(llm=llm, root=ws.root)
     assert len(requests)==2
     assert load_index(ws.root)['obligations']['target']['status']=='CLOSED'
+
+def test_application_interface_failure_remains_pending_on_rebuild(ws, accepted_review):
+    ref = deliver(ws, 1, application=True)
+    commit_research_memory(ws.root, [ref])
+    assert publish_applications(llm=object(), root=ws.root)
+    app = next(iter(load_index(ws.root)['applications'].values()))
+    record = json.loads(ws.path(app['review_ref']).read_text())
+    record.update(verdict={'stage_status': 'VERIFIER_ERROR'}, review_binding=None)
+    ws.write_json(app['review_ref'], record)
+    rebuilt = rebuild_research_index(ws.root)
+    assert next(iter(rebuilt['applications'].values()))['status'] == 'PROPOSED'
+    assert rebuilt['obligations']['target']['status'] == 'OPEN' and pending_finding_checks(ws.root)
+    assert not publish_applications(llm=object(), root=ws.root)
+    assert len(accepted_review) == 1
+    assert publish_applications(llm=object(), root=ws.root, retry_errors=True)
+    assert len(accepted_review) == 2 and not pending_finding_checks(ws.root)

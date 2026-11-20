@@ -40,16 +40,20 @@ from pace.runtime.context_state import (
     snapshot_verified_progress,
 )
 from pace.runtime.output.events import publish_progress
-from pace.runtime.output.delivery_pause import DeliveryPaused
-from pace.runtime.output.memory import commit_memory_notes
-from pace.runtime.output.results import FINDINGS_INDEX_REF, stage_finding_review_refs
+from pace.runtime.output.delivery_pause import (
+    DeliveryPaused, clear_delivery_pause, delivery_pause, pause_delivery,
+)
+from pace.runtime.output.memory import (
+    commit_memory_notes, commit_research_memory, refresh_memory_index, update_research_costs,
+)
+from pace.runtime.output.results import FINDINGS_INDEX_REF, committed_round_reading_refs
 from pace.runtime.output.workspace import (
     _write_json_atomic as _write_json,
 )
 from pace.runtime.output.workspace import (
     _write_text_atomic as _write_text,
 )
-from pace.runtime.output.workspace import is_call_path, stage_ref, work_ref
+from pace.runtime.output.workspace import is_call_path, path_has_symlink_component, stage_ref, work_ref
 from pace.runtime.prompt_composer import PromptComposerResult
 from pace.runtime.prompt_policy import PromptAssembly, load_prompt_assembly
 
@@ -118,8 +122,7 @@ DIRECTOR_LED_PHASES = frozenset(
 
 
 from pace.contracts.research.memory import enabled as research_memory_enabled, binding, check_binding
-from pace.runtime.research_context import freeze_context, validate_context
-from pace.runtime.output.memory import commit_research_memory, initialize_research_memory
+from pace.runtime.research_context import freeze_context
 
 class DirectorLedEngineError(RuntimeError):
     """Raised when the Host cannot continue a Director-led round."""
@@ -165,6 +168,8 @@ class DirectorLedState:
     stop_reason: str = ""
     terminal_result: str = ""
     candidate_ref: str = ""
+    last_batch_result_ref: str = ""
+    last_batch_result_sha256: str = ""
 
     def __post_init__(self) -> None:
         # Dataclass construction is also a machine-owned state boundary.  The
@@ -194,6 +199,8 @@ class DirectorLedState:
             "stop_reason",
             "terminal_result",
             "candidate_ref",
+            "last_batch_result_ref",
+            "last_batch_result_sha256",
         )
         for field_name in string_fields:
             value = getattr(self, field_name)
@@ -213,6 +220,8 @@ class DirectorLedState:
                 )
             if len(set(values)) != len(values):
                 raise ValueError(f"{field_name} must be unique")
+        if bool(self.last_batch_result_ref) != bool(self.last_batch_result_sha256):
+            raise ValueError("batch result requires both path and digest")
         if self.phase not in DIRECTOR_LED_PHASES:
             raise ValueError(f"invalid Director-led phase: {self.phase}")
         if self.round_index < 0:
@@ -221,9 +230,12 @@ class DirectorLedState:
             raise ValueError("Director-led max_proof_states must be positive")
         if type(self.proof_states_used) is not int or not 0 <= self.proof_states_used <= self.max_proof_states:
             raise ValueError("Director-led proof_states_used must be within the proof budget")
-        if self.round_index == 0 and self.phase != "DIRECTOR":
+        empty_final = (self.phase == "FINALIZE" and self.terminal_result == "FAILED"
+                       and self.stop_reason in {"USER_REQUESTED_FINALIZATION", "TOTAL_CALL_BUDGET_EXHAUSTED",
+                                                "ACTIVE_TIME_BUDGET_EXHAUSTED"})
+        if self.round_index == 0 and self.phase != "DIRECTOR" and not empty_final:
             raise ValueError(
-                "Director-led round_index 0 is valid only in the DIRECTOR phase"
+                "round zero requires a pristine Director checkpoint or an explicit pre-dispatch finalization"
             )
         if self.round_index == 0 and any(
             (
@@ -233,13 +245,14 @@ class DirectorLedState:
                 self.pending_verifier_request_ref,
                 self.last_assignment_ref,
                 self.completed_result_refs,
+                self.last_batch_result_ref,
                 self.last_directive_ref,
                 self.last_composer_manifest_ref,
                 self.last_specialist_result_ref,
                 self.last_verification_ref,
                 self.diagnostics_ref,
-                self.stop_reason,
-                self.terminal_result,
+                self.stop_reason and not empty_final,
+                self.terminal_result and not empty_final,
                 self.candidate_ref,
             )
         ):
@@ -352,13 +365,15 @@ class DirectorLedState:
             "stop_reason": self.stop_reason,
             "terminal_result": self.terminal_result,
             "candidate_ref": self.candidate_ref,
+            **({"last_batch_result_ref": self.last_batch_result_ref,
+                "last_batch_result_sha256": self.last_batch_result_sha256} if self.last_batch_result_ref else {}),
         }
 
     @classmethod
     def from_json(cls, value: Mapping[str, Any]) -> "DirectorLedState":
         if not isinstance(value, Mapping):
             raise DirectorLedEngineError("Director-led state must be a JSON object")
-        if set(value) != DIRECTOR_LED_STATE_FIELDS:
+        if set(value).difference({"last_batch_result_ref", "last_batch_result_sha256"}) != DIRECTOR_LED_STATE_FIELDS:
             missing = sorted(DIRECTOR_LED_STATE_FIELDS.difference(value))
             extra = sorted(set(value).difference(DIRECTOR_LED_STATE_FIELDS))
             details: list[str] = []
@@ -396,6 +411,8 @@ class DirectorLedState:
                 stop_reason=_string_value(value.get("stop_reason", ""), "stop_reason"),
                 terminal_result=_string_value(value.get("terminal_result", ""), "terminal_result"),
                 candidate_ref=_string_value(value.get("candidate_ref", ""), "candidate_ref"),
+                last_batch_result_sha256=_string_value(value.get("last_batch_result_sha256", ""), "last_batch_result_sha256"),
+                last_batch_result_ref=_string_value(value.get("last_batch_result_ref", ""), "last_batch_result_ref"),
             )
         except (TypeError, ValueError) as exc:
             if isinstance(exc, DirectorLedEngineError):
@@ -415,10 +432,6 @@ class DirectorLedRunResult:
     @property
     def phase(self) -> str:
         return self.state.phase
-
-    @property
-    def stopped(self) -> bool:
-        return self.state.phase == "STOPPED"
 
     @property
     def result(self) -> str:
@@ -444,9 +457,10 @@ class DirectorLedEngine:
     ``specialists`` maps protocol agent IDs to handlers.  A handler receives
     ``prompt``, ``decision``, ``context`` and the dispatch fields as keyword
     arguments.
-    ``verifier`` is optional and is called after a specialist result.  Its
-    return value is persisted verbatim as search context; this engine never
-    interprets a verifier result as PASS or FAILED.
+    ``verifier`` checks a Prover candidate against the original target. The Host
+    validates the bound verdict and records the resulting scheduling phase.
+    ``review_findings`` independently reviews committed findings and their proposed uses.
+    The parent workflow commits memory before review and refreshes navigation before dispatch.
     ``on_round_committed`` is an optional Host callback invoked only after a committed
     round boundary.  Its display result is never added to search context.
     """
@@ -466,6 +480,7 @@ class DirectorLedEngine:
         verifier: VerifierHandler | None = None,
         on_round_committed: Callable[..., Any] | None = None,
         reporter: Callable[[str], Any] | None = None,
+        review_findings: Callable[..., bool] | None = None,
     ) -> None:
         self.workdir = Path(workdir)
         self.workdir.mkdir(parents=True, exist_ok=True)
@@ -516,6 +531,7 @@ class DirectorLedEngine:
         self.parent_task_id = ""
         self.on_round_committed = on_round_committed
         self.reporter = reporter
+        self.review_findings = review_findings
         unknown = set(self.specialists).difference(
             DISPATCHABLE_AGENT_IDS
         )
@@ -568,8 +584,18 @@ class DirectorLedEngine:
                 "Director-led state already exists; use resume=True for continuation"
             )
         self._persist_state(state)
-        if self.commit_progress and research_memory_enabled(self.workdir):
-            initialize_research_memory(self.workdir)
+        if resume and (
+            state.phase in {"FINALIZE", "STOPPED"} or (state.phase == "DIRECTOR" and state.round_index > 0)
+        ):
+            # The process may have stopped after the parent checkpoint, before
+            # evidence review. Finish it before the Director can choose again.
+            paused = delivery_pause(self.workdir)
+            self._commit_round_evidence(
+                state, trigger=paused.get("trigger") or "recovery-findings", retry_errors=True
+            )
+        elif self.commit_progress:
+            # Pending assignments and VERIFY resume their own frozen transaction.
+            # In particular, do not review a Prover draft before the whole verdict.
             commit_research_memory(self.workdir, state.completed_result_refs)
 
         if state.phase in {"STOPPED", "FINALIZE", "FAILED"}:
@@ -578,10 +604,10 @@ class DirectorLedEngine:
             from pace.orchestrator.director_parallel import run_batch
 
             state = run_batch(self, state, control_context=control_context)
-            self._publish_committed_round(state, trigger_id=f"batch-{state.round_index:04d}")
+            self._publish_committed_round(state, trigger_id=f"batch-{state.round_index:04d}", retry_errors=True)
         if state.phase == "VERIFY":
             if self.verifier is None:
-                return self._fail_round(
+                state = self._fail_round(
                     state,
                     state.round_index,
                     "VERIFY",
@@ -589,10 +615,11 @@ class DirectorLedEngine:
                         "Prover candidate cannot be verified: verifier is not configured"
                     ),
                 )
+                return self._result(state)
             state = self._resume_verification(state, control_context=control_context)
             self._publish_committed_round(
                 state,
-                trigger_id=f"round-{state.round_index:04d}-verification",
+                trigger_id=f"round-{state.round_index:04d}-verification", retry_errors=True,
             )
             if state.phase != "DIRECTOR":
                 return self._result(state)
@@ -602,7 +629,7 @@ class DirectorLedEngine:
                 control_context=control_context,
                 recovering=resume,
             )
-            self._publish_committed_round(state, trigger_id=f"round-{state.round_index:04d}")
+            self._publish_committed_round(state, trigger_id=f"round-{state.round_index:04d}", retry_errors=True)
 
         while state.phase == "DIRECTOR":
             from pace.runtime.sessions import budget_exhausted
@@ -618,6 +645,8 @@ class DirectorLedEngine:
                     terminal_result="FAILED",
                 )
                 self._persist_state(state)
+                if state.round_index == 0:
+                    self._commit_round_evidence(state, trigger="final-findings")
                 break
             state = self._run_round(
                 state,
@@ -628,11 +657,89 @@ class DirectorLedEngine:
 
         return self._result(state)
 
-    def _publish_committed_round(self, state: DirectorLedState, *, trigger_id: str) -> None:
-        """Update the display-only report after a committed Host boundary."""
-
-        if self.commit_progress:
+    def _commit_round_evidence(
+        self, state: DirectorLedState, *, trigger: str, retry_errors: bool = False,
+    ) -> None:
+        """Make parent-committed evidence available to the next Director decision."""
+        if not self.commit_progress or state.phase == "FAILED":
+            return
+        try:
+            self._publish_round_progress(state)
             commit_research_memory(self.workdir, state.completed_result_refs)
+            if self.review_findings is None:
+                return
+            complete = self.review_findings(
+                workdir=self.workdir,
+                completed_result_refs=state.completed_result_refs,
+                accepted_candidate_ref=state.candidate_ref if state.terminal_result == "PASS" else "",
+                retry_errors=retry_errors,
+            )
+            if not complete:
+                raise DeliveryPaused("Finding verification is incomplete; resume the saved task")
+            update_research_costs(self.workdir)
+            refresh_memory_index(self.workdir)
+        except Exception as exc:
+            pause_delivery(self.workdir, trigger=trigger, round_index=state.round_index, stage="findings")
+            if isinstance(exc, DeliveryPaused):
+                raise
+            logger.exception("Could not commit research evidence after %s", trigger)
+            raise DeliveryPaused(f"Research evidence update paused: {exc}") from exc
+        clear_delivery_pause(self.workdir)
+
+    def _committed_round_members(self, state: DirectorLedState):
+        """Return the authors and verdicts accepted by the latest parent checkpoint."""
+        if state.stop_reason == "PROOF_STATE_BUDGET_EXHAUSTED":
+            return []
+        members = [(state.round_index, state.last_specialist_result_ref, state.last_verification_ref)]
+        if state.last_batch_result_ref:
+            ref = self._require_run_local_file_ref(state.last_batch_result_ref, field="last_batch_result_ref")
+            check_binding(self.workdir, {"ref": ref, "sha256": state.last_batch_result_sha256})
+            batch = _read_json(self.workdir / ref)
+            tasks = batch["tasks"]
+            first = tasks[0]["round_index"]
+            if (ref != self._round_ref(first, "batch_result.json")
+                    or not first <= state.round_index <= batch["reserved_through_round"]
+                    or [t["round_index"] for t in tasks] != list(range(first, batch["reserved_through_round"] + 1))):
+                raise DirectorLedEngineError("batch evidence differs from committed round")
+            members = [(t["round_index"], t["result_ref"], t["verification_ref"]) for t in tasks]
+        committed = []
+        for index, result_ref, verification_ref in members:
+            if result_ref not in state.completed_result_refs:
+                if verification_ref:
+                    raise DirectorLedEngineError("uncommitted author for verification")
+                continue
+            if result_ref != self._round_ref(index, "agent_result.json"):
+                raise DirectorLedEngineError("committed result belongs to another round")
+            if verification_ref and verification_ref != self._round_ref(index, "verification/verification.json"):
+                raise DirectorLedEngineError("committed verification belongs to another round")
+            committed.append((index, result_ref, verification_ref))
+        return committed
+
+    def _publish_round_progress(self, state: DirectorLedState) -> None:
+        """Project notes and verified progress from the exact committed round or batch."""
+        results = []
+        verdicts = []
+        current = ""
+        for index, result_ref, verification_ref in self._committed_round_members(state):
+            results.append(result_ref)
+            if verification_ref:
+                path = self._require_round_local_file_ref(
+                    verification_ref, field="verification_ref", round_index=index)
+                verdict = _validate_verification_checkpoint(
+                    _read_json(self.workdir / path), expected_round_index=index,
+                    expected_specialist_result_ref=result_ref)
+                verdicts.append(verdict)
+                if verification_ref == state.last_verification_ref:
+                    current = verdict.get("verified_progress_ref", "")
+        if verdicts:
+            commit_verified_progress(self.workdir, verdicts, current_progress_ref=current)
+        commit_memory_notes(self.workdir, result_refs=results, verification_values=verdicts)
+
+    def _publish_committed_round(
+        self, state: DirectorLedState, *, trigger_id: str, retry_errors: bool = False,
+    ) -> None:
+        """Complete the evidence handoff before notifying optional display consumers."""
+        self._commit_round_evidence(state, trigger=trigger_id, retry_errors=retry_errors)
         if self.on_round_committed is None or int(state.round_index or 0) < 1:
             return
         try:
@@ -650,7 +757,7 @@ class DirectorLedEngine:
             # changing the mathematical state or consuming another dispatch.
             raise
         except Exception:  # noqa: BLE001 - reporting cannot alter proof flow
-            logger.warning("Research Reporter callback failed", exc_info=True)
+            logger.warning("Round notification callback failed", exc_info=True)
 
     def _resume_verification(
         self,
@@ -895,14 +1002,20 @@ class DirectorLedEngine:
     ) -> DirectorLedState:
         round_index = state.round_index + 1
         round_dir = self.workdir / self.round_root / f"round{round_index}"
+        saved_inputs = None
         try:
             batch_path = round_dir / "batch.json"
             if recovering and batch_path.is_file():
                 from pace.orchestrator.director_parallel import run_batch
-                reserved = DirectorLedState.from_json(_read_json(batch_path)["reserved_state"])
+                self._require_round_local_file_ref(self._round_ref(round_index, "batch.json"),
+                                                   field="batch manifest", round_index=round_index)
+                manifest = _read_json(batch_path)
+                if manifest["first_round"] != round_index or manifest["input_snapshot"] != state.to_json():
+                    raise DirectorLedEngineError("batch reservation differs from the parent checkpoint")
+                reserved = DirectorLedState.from_json(manifest["reserved_state"])
                 self._persist_state(reserved)
                 return run_batch(self, reserved, control_context=control_context)
-            if _path_has_symlink_component(self.workdir, round_dir):
+            if path_has_symlink_component(self.workdir, round_dir):
                 raise NotADirectoryError(
                     f"Director round path contains a symlink: {round_dir}"
                 )
@@ -962,6 +1075,7 @@ class DirectorLedEngine:
                         "previous_verification_ref": state.last_verification_ref,
                         "control_context": str(control_context or ""),
                     }
+                    saved_inputs = persisted_context.pop("decision_inputs", None)
                     if persisted_context != expected_context:
                         raise DirectorLedEngineError(
                             "uncommitted Director context differs from committed state"
@@ -989,22 +1103,56 @@ class DirectorLedEngine:
             # Context, decision, and assignment are one Host-owned dispatch
             # transaction.  A write failure must become a committed round
             # diagnostic so the pipeline can still publish a terminal report.
-            _write_json(self.workdir / context_ref, context)
+            reuse_decision = recovering and (self.workdir / directive_ref).is_file()
             publish_progress(self.workdir, task_id=f'round-{round_index:04d}-director', stage='director', status='started', round_index=round_index)
             snapshot_ref = self._round_ref(round_index, "progress_snapshot.json")
-            if recovering and (self.workdir / directive_ref).is_file():
+            if reuse_decision:
                 decision = _coerce_persisted_decision(
                     _read_json(self.workdir / directive_ref),
                     expected_round_index=round_index,
                 )
             else:
+                from pace.runtime.research_context import director_decision_inputs
+                inputs = director_decision_inputs(
+                    self.workdir, self._director_input_refs(state), state.completed_result_refs
+                )
+                inputs.update(proof_states_remaining=proof_states_remaining,
+                              research_rounds_remaining=research_rounds_remaining)
+                if saved_inputs is not None:
+                    # Cost events may have advanced. Evidence and permissions stay
+                    # bound to the original target, route, obligations and sources.
+                    # New versions may surface more committed evidence. A pending
+                    # call keeps its original, still-authorized reading list.
+                    allowed = set(inputs["required_refs"]) | set(inputs["archive_refs"])
+                    if not allowed.issuperset((*saved_inputs["required_refs"], *saved_inputs["archive_refs"])):
+                        raise DirectorLedEngineError("saved Director input is no longer available")
+                    for key in inputs.keys() - {"brief", "required_refs", "archive_refs"}:
+                        if inputs[key] != saved_inputs[key]:
+                            raise DirectorLedEngineError(f"saved Director input changed: {key}")
+                    inputs = saved_inputs
+                context["decision_inputs"] = inputs
+                _write_json(self.workdir / context_ref, context)
+
+                def save_decision(payload):
+                    accepted = _coerce_decision(payload)
+                    validate_director_reference_bindings(accepted, self.workdir)
+                    validate_director_stop(accepted, proof_states_remaining=proof_states_remaining,
+                                           research_rounds_remaining=research_rounds_remaining)
+                    _write_json(self.workdir / directive_ref, {
+                        "schema_version": "research_director_decision/v3" if accepted.next_step_kind else DIRECTOR_PROTOCOL_SCHEMA_VERSION,
+                        "round_index": round_index, **accepted.to_json(),
+                    })
+                    return accepted
+
                 raw_decision = _invoke(
                     self.director,
                     {
                         "workdir": self.workdir,
                         "round_index": round_index,
                         "target_contract_id": context["target_contract_id"],
-                        "input_refs": self._director_input_refs(state),
+                        "input_refs": tuple(inputs["required_refs"]),
+                        "decision_inputs": inputs,
+                        "on_accept": save_decision,
                         "completed_result_refs": state.completed_result_refs,
                         "proof_states_remaining": proof_states_remaining,
                         "research_rounds_remaining": research_rounds_remaining,
@@ -1012,12 +1160,17 @@ class DirectorLedEngine:
                         "context": context,
                     },
                 )
-                decision = _coerce_decision(
-                    raw_decision,
-                )
-            validate_director_reference_bindings(decision, self.workdir)
-            validate_director_stop(decision, proof_states_remaining=proof_states_remaining,
-                                   research_rounds_remaining=research_rounds_remaining)
+                if (self.workdir / directive_ref).is_file():
+                    decision = _coerce_persisted_decision(_read_json(self.workdir / directive_ref),
+                                                          expected_round_index=round_index)
+                    if decision != _coerce_decision(raw_decision):
+                        raise DirectorLedEngineError("Director result differs from the accepted decision")
+                else:
+                    decision = save_decision(raw_decision)
+            if reuse_decision:
+                validate_director_reference_bindings(decision, self.workdir)
+                validate_director_stop(decision, proof_states_remaining=proof_states_remaining,
+                                       research_rounds_remaining=research_rounds_remaining)
         except Exception as exc:
             return self._fail_round(state, round_index, "DIRECTOR", exc)
 
@@ -1034,14 +1187,6 @@ class DirectorLedEngine:
                 return run_batch(self, state, control_context=control_context)
             if decision.action is DirectorAction.DISPATCH:
                 self._check_task_budget((decision,), state)
-            _write_json(
-                self.workdir / directive_ref,
-                {
-                    "schema_version": "research_director_decision/v3" if decision.next_step_kind else DIRECTOR_PROTOCOL_SCHEMA_VERSION,
-                    "round_index": round_index,
-                    **decision.to_json(),
-                },
-            )
             if decision.action is DirectorAction.DISPATCH:
                 assignment_ref = self._round_ref(round_index, "assignment/task.json")
                 output_ref = self._default_output_ref(decision.agent_id, round_index)
@@ -1083,6 +1228,7 @@ class DirectorLedEngine:
                 last_directive_ref=directive_ref,
                 last_composer_manifest_ref="",
                 last_specialist_result_ref="",
+                last_batch_result_ref="", last_batch_result_sha256="",
                 last_verification_ref="",
                 diagnostics_ref="",
                 candidate_ref="",
@@ -1130,24 +1276,24 @@ class DirectorLedEngine:
             state.last_specialist_result_ref,
             state.last_verification_ref,
             state.diagnostics_ref,
-            *stage_finding_review_refs(self.workdir, state.round_index, state.completed_result_refs),
         ]
-        if state.last_verification_ref:
-            verification = _read_json(self.workdir / state.last_verification_ref).get("verification", {})
-            repair_ref = str(verification.get("repair_context_ref") or "")
-            if repair_ref:
-                refs.append(repair_ref)
+        for _, result_ref, verification_ref in self._committed_round_members(state):
+            refs.extend(committed_round_reading_refs(self.workdir, result_ref))
+            if verification_ref:
+                refs.append(verification_ref)
+                verification = _read_json(self.workdir / verification_ref)["verification"]
+                refs.append(verification.get("repair_context_ref", ""))
         return _unique_strings(ref for ref in refs if isinstance(ref, str) and ref)
 
     def _progress_snapshot_ref(self, round_index: int) -> str:
         return self._round_ref(round_index, "progress_snapshot.json")
 
     def _assignment_input_refs(
-        self, decision: DirectorDecision, round_index: int,
+        self, decision: DirectorDecision, round_index: int, *, snapshot_round: int | None = None,
     ) -> tuple[str, ...]:
         """Bind execution inputs without changing the Director's ticket."""
 
-        progress_ref = self._progress_snapshot_ref(round_index)
+        progress_ref = self._progress_snapshot_ref(snapshot_round or round_index)
         refs = _unique_strings((
             work_ref(self.workdir, "input/request.md"),
             work_ref(self.workdir, "input/problem.md"),
@@ -1397,14 +1543,7 @@ class DirectorLedEngine:
                         "on_accept": lambda result: _write_json(self.workdir / result_ref, result),
                     },
                 )
-            result_record, stable_ref = _coerce_specialist_result(
-                specialist_value,
-                default_ref=result_ref,
-            )
-            _validate_specialist_result_agent_id(
-                result_record,
-                expected_agent_id=decision.agent_id,
-            )
+            result_record, stable_ref = _specialist_handoff(specialist_value, decision.agent_id)
             if str(result_record.get("status") or "").upper() == "INTERFACE_FAILED":
                 return self._fail_round(
                     state,
@@ -1416,9 +1555,6 @@ class DirectorLedEngine:
                         or "specialist interface failed"
                     )),
                 )
-            # The Host-owned wrapper is the stable handoff when a successful
-            # specialist does not provide a separate artifact.  A separately
-            # named deliverable is promoted only after it resolves to a file.
             stable_refs = []
             succeeded = _is_success_status(result_record.get("status"))
             if succeeded:
@@ -1491,9 +1627,9 @@ class DirectorLedEngine:
                 )
             self._persist_state(state)
             if self.commit_progress and specialist_succeeded:
-                commit_research_memory(self.workdir, (result_ref,))
-                commit_memory_notes(self.workdir, result_refs=(result_ref,))
-            self._persist_state(state)
+                if state.phase == "VERIFY":
+                    # A verifier receives the same committed handoff on start and resume.
+                    commit_research_memory(self.workdir, (result_ref,))
             publish_progress(self.workdir, task_id=f'round-{round_index:04d}', parent_task_id=self.parent_task_id, stage=decision.agent_id, status='completed' if specialist_succeeded else 'failed', round_index=round_index)
             if decision.agent_id == "prover" and specialist_succeeded:
                 if self.verifier is None:
@@ -1930,9 +2066,6 @@ class DirectorLedEngine:
                 candidate_ref=state.candidate_ref,
             )
             if resolved["status"] == "VERIFIER_ERROR":
-                if self.commit_progress:
-                    commit_verified_progress(self.workdir, (value,))
-                    commit_memory_notes(self.workdir, result_refs=(), verification_values=(value,))
                 raise DirectorLedEngineError("verifier_interface_failed")
             checkpoint = {
                 "schema_version": DIRECTOR_LED_ROUND_SCHEMA_VERSION,
@@ -1981,9 +2114,6 @@ class DirectorLedEngine:
             )
         elif verification_status != "FAILED":
             raise DirectorLedEngineError("verifier returned no recognized terminal status")
-        if self.commit_progress and isinstance(value, Mapping):
-            commit_verified_progress(self.workdir, (value,))
-            commit_memory_notes(self.workdir, result_refs=(), verification_values=(value,))
         self._persist_state(state)
         publish_progress(self.workdir, task_id=f'round-{state.round_index:04d}-verification', stage='verification', round_index=state.round_index, status='completed' if verification_status == 'PASS' else 'needs_work', notice='candidate_checked' if verification_status == 'PASS' else 'candidate_repair' if state.phase == 'DIRECTOR' else 'candidate_unresolved')
         return state
@@ -2069,7 +2199,7 @@ class DirectorLedEngine:
             return ""
         try:
             lexical = self.workdir / normalized
-            if _path_has_symlink_component(self.workdir, lexical):
+            if path_has_symlink_component(self.workdir, lexical):
                 return ""
             workspace_root = self.workdir.resolve()
             canonical = lexical.resolve()
@@ -2109,7 +2239,7 @@ class DirectorLedEngine:
                 f"{field} must be a public relative workspace reference"
             )
         lexical = self.workdir / normalized
-        if _path_has_symlink_component(self.workdir, lexical):
+        if path_has_symlink_component(self.workdir, lexical):
             raise DirectorLedEngineError(f"{field} must not contain a symlink")
         try:
             workspace_root = self.workdir.resolve()
@@ -2172,7 +2302,7 @@ class DirectorLedEngine:
         return normalized
 
     def _load_state(self) -> DirectorLedState:
-        if _path_has_symlink_component(self.workdir, self.state_path):
+        if path_has_symlink_component(self.workdir, self.state_path):
             raise DirectorLedEngineError(
                 "Director-led state path must not contain a symlink"
             )
@@ -2182,7 +2312,7 @@ class DirectorLedEngine:
             raise DirectorLedEngineError("cannot load Director-led state") from exc
 
     def _persist_state(self, state: DirectorLedState) -> DirectorLedState:
-        if _path_has_symlink_component(self.workdir, self.state_path):
+        if path_has_symlink_component(self.workdir, self.state_path):
             raise DirectorLedEngineError(
                 "Director-led state path must not contain a symlink"
             )
@@ -2618,83 +2748,24 @@ def _coerce_composer(value: Any) -> PromptComposerResult:
     return value
 
 
-def _coerce_specialist_result(value: Any, *, default_ref: str) -> tuple[dict[str, Any], str]:
-    """Normalize an opaque specialist return and identify an explicit stable ref."""
-
-    if isinstance(value, str):
-        # A transport response is not a specialist artifact.  Keep only the
-        # interface diagnosis in the public handoff; the adapter owns any
-        # private response trace.
-        return (
-            {
-                "status": "INTERFACE_FAILED",
-                "failure_class": "HOST_INTERFACE",
-                "reason_code": "specialist_result_not_object",
-                "message": "specialist handoff must be an object with an explicit deliverable_ref",
-            },
-            "",
-        )
-    if isinstance(value, Mapping):
-        record = {str(key): _json_value(item) for key, item in value.items()}
-        # ``proof_ref`` and ``candidate_proof_ref`` belonged to removed
-        # handoff shapes.  Treat their presence as an interface failure
-        # instead of silently promoting either one to a deliverable.
-        unsupported_aliases = tuple(
-            field
-            for field in ("proof_ref", "candidate_proof_ref")
-            if field in record
-        )
-        if unsupported_aliases:
-            record.update(
-                {
-                    "status": "INTERFACE_FAILED",
-                    "failure_class": "HOST_INTERFACE",
-                    "reason_code": "specialist_deliverable_ref_alias",
-                    "message": (
-                        "specialist handoff must use the explicit deliverable_ref; "
-                        "unsupported aliases: " + ", ".join(unsupported_aliases)
-                    ),
-                }
-            )
-            return record, ""
-        raw_status = record.get("status")
-        if not isinstance(raw_status, str) or not raw_status.strip():
-            record.update(
-                {
-                    "status": "INTERFACE_FAILED",
-                    "failure_class": "HOST_INTERFACE",
-                    "reason_code": "specialist_status_missing",
-                    "message": "specialist handoff requires an explicit status",
-                }
-            )
-            return record, ""
-        status = raw_status.strip().upper()
-        record["status"] = status
-        if status != "SUCCEEDED":
-            return record, ""
-
-        raw_ref = record.get("deliverable_ref")
-        stable = raw_ref.strip() if isinstance(raw_ref, str) else ""
-        if not stable:
-            record.update(
-                {
-                    "status": "INTERFACE_FAILED",
-                    "failure_class": "HOST_INTERFACE",
-                    "reason_code": "specialist_deliverable_ref_missing",
-                    "message": "successful specialist handoff requires an explicit deliverable_ref",
-                }
-            )
-            return record, ""
-        return record, stable
-    if value is None:
-        return {"status": "FAILED", "message": "specialist returned no result"}, ""
-    return {
-        "status": "INTERFACE_FAILED",
-        "failure_class": "HOST_INTERFACE",
-        "reason_code": "specialist_result_type_invalid",
-        "message": "specialist handoff must be a JSON object",
-        "value_type": type(value).__name__,
-    }, ""
+def _specialist_handoff(value: Any, agent_id: str) -> tuple[dict[str, Any], str]:
+    """Validate the current handoff before committing it or scheduling verification."""
+    if not isinstance(value, Mapping):
+        raise DirectorLedEngineError("specialist handoff must be a JSON object")
+    _validate_specialist_result_agent_id(value, expected_agent_id=agent_id)
+    if "proof_ref" in value or "candidate_proof_ref" in value:
+        raise DirectorLedEngineError("specialist handoff must use deliverable_ref for its artifact")
+    raw_status = value.get("status")
+    if not isinstance(raw_status, str) or not raw_status.strip():
+        raise DirectorLedEngineError("specialist handoff requires an explicit status")
+    status = raw_status.strip().upper()
+    record = {**value, "status": status}
+    if status != "SUCCEEDED":
+        return record, ""
+    ref = record.get("deliverable_ref")
+    if not isinstance(ref, str) or not ref.strip():
+        raise DirectorLedEngineError("successful specialist handoff requires an explicit deliverable_ref")
+    return record, ref.strip()
 
 
 def _is_success_status(value: Any) -> bool:
@@ -2763,51 +2834,13 @@ def _is_private_transport_path(path: Path) -> bool:
     return is_call_path(path) or path.name.startswith("private_")
 
 
-def _path_has_symlink_component(root: Path, path: Path) -> bool:
-    """Return whether a path uses a symbolic-link component below ``root``.
-
-    Resolving a reference and checking that its destination remains inside the
-    run is insufficient for machine-owned checkpoints: an in-run alias can
-    still substitute a different artifact while retaining the expected
-    lexical reference.  Check each lexical component before resolution so
-    canonical state and round identities remain stable.
-    """
-
-    root_path = Path(root)
-    candidate = Path(path)
-    try:
-        relative = candidate.relative_to(root_path)
-    except ValueError:
-        return True
-    current = root_path
-    for part in relative.parts:
-        current = current / part
-        try:
-            if current.is_symlink():
-                return True
-        except OSError:
-            # An unreadable component cannot establish a stable identity.
-            return True
-    return False
-
-
 def _validate_specialist_result_agent_id(
     result_record: Mapping[str, Any],
     *,
     expected_agent_id: str,
 ) -> None:
-    """Bind an optional specialist result identity to the dispatched agent.
-
-    Specialist handoffs remain opaque apart from their scheduling fields, so
-    older injected handlers may omit ``agent_id``.  Whenever a handler emits
-    the field, however, it is a machine-visible identity claim and must match
-    the committed Director decision exactly.
-    """
-
-    if "agent_id" not in result_record:
-        return
-    observed = result_record.get("agent_id")
-    if not isinstance(observed, str) or observed != str(expected_agent_id):
+    """Require the handoff to identify the specialist that owns the assignment."""
+    if result_record.get("agent_id") != expected_agent_id:
         raise DirectorLedEngineError(
             "specialist result agent_id differs from dispatched agent"
         )
@@ -2822,7 +2855,7 @@ def _unique_strings(values: Iterable[str]) -> tuple[str, ...]:
     return tuple(result)
 
 
-def _safe_relative_ref(value: str, *, default: str) -> str:
+def _safe_relative_ref(value: str | None, *, default: str) -> str:
     raw = str(value or default).replace("\\", "/").strip()
     if _unsafe_ref_syntax(raw):
         raise ValueError("artifact references must be relative to the engine workdir")
@@ -2840,30 +2873,6 @@ def _unsafe_ref_syntax(value: str) -> bool:
         or PureWindowsPath(raw).is_absolute()
         or any(part in {".", ".."} for part in raw.split("/"))
     )
-
-
-def _json_value(value: Any) -> Any:
-    if hasattr(value, "to_json"):
-        try:
-            return _json_value(value.to_json())
-        except Exception:
-            pass
-    if hasattr(value, "__dataclass_fields__"):
-        try:
-            from dataclasses import asdict
-
-            return _json_value(asdict(value))
-        except Exception:
-            pass
-    if isinstance(value, Mapping):
-        return {str(key): _json_value(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_value(item) for item in value]
-    try:
-        json.dumps(value, ensure_ascii=False)
-    except (TypeError, ValueError):
-        return {"type": type(value).__name__, "text": str(value)}
-    return value
 
 
 def _read_json(path: Path) -> dict[str, Any]:

@@ -66,7 +66,7 @@ def paper_artifacts(root: Path, *, snapshots: bool = False) -> dict[str, str]:
 
 def paper_build_status(root: Path) -> str:
     state = read_state(root, paper_state_ref(root))
-    return read_state(root, state["build_ref"])["status"] if state.get("build_ref") else ""
+    return read_state(root, state["build_ref"]).get("status", "") if state.get("build_ref") else ""
 
 
 class TheoryPaperWriter:
@@ -167,7 +167,7 @@ class TheoryPaperWriter:
             paper_outline_artifacts(self.workdir) if outline else paper_artifacts(self.workdir)
         )
         if delivered:
-            if not outline and paper_build_status(self.workdir) != "COMPLETE":
+            if not outline and "paper_pdf" not in delivered:
                 state_ref = paper_state_ref(self.workdir)
                 state = read_state(self.workdir, state_ref)
                 self._build_delivery(state["paper_ref"], state)
@@ -269,13 +269,12 @@ class TheoryPaperWriter:
                 destination = self.workdir / PAPER_OUTLINE_REF
                 _write_text_atomic(destination, relocate_links(body, source, destination))
                 state["outline_ref"] = output_ref
-                publications = {"paper_outline": output_ref}
             else:
                 self._build_delivery(output_ref, state)
             _write_json_atomic(self.workdir / state_ref, state)
             commit_artifact_call_success(handle, workdir=self.workdir, artifact_ref=output_ref)
-            if not outline:
-                publications = paper_artifacts(self.workdir, snapshots=True)
+            publications = ({"paper_outline": output_ref} if outline
+                            else paper_artifacts(self.workdir, snapshots=True))
         except Exception as exc:
             logger.warning("Theory paper writing failed", exc_info=True)
             diagnostic = f"{attempt}/failure.json"

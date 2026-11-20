@@ -1542,7 +1542,7 @@ class RciPipeline:
             if kind not in {"TARGET_ANCHOR", "CANDIDATE", "SEED"}
             for ref in ((values,) if isinstance(values, str) else values)
         )
-        for row in reversed(getattr(self, "prior_scope_records", ())):
+        for row in reversed(self.prior_scope_records):
             if row["phase"] != phase or row["candidate_ref"] != candidate:
                 continue
             # A review may follow a source reference that was not a suggested
@@ -1593,7 +1593,7 @@ class RciPipeline:
                 rules,
                 tuple(result.payload["dependency_refs"]),
             )
-            scope["objections"].update(getattr(self, "scope_objections", {}))
+            scope["objections"].update(self.scope_objections)
             outputs = [
                 result.output_ref,
                 *(
@@ -1644,8 +1644,8 @@ class RciPipeline:
             input_refs=input_refs,
             prompt_seed=prompt_seed,
             skill_card_refs=skill_card_refs,
-            **({"allowed_actions": tuple(allowed_actions)} if allowed_actions else {}),
-            **({"routing_context": routing_context} if routing_context else {}),
+            allowed_actions=allowed_actions,
+            routing_context=routing_context,
         )
 
     def _new_candidate(

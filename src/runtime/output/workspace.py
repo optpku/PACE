@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-_OWNED_LOCKS = ContextVar("pace_owned_execution_locks", default=())
+_OWNED_LOCKS: ContextVar[tuple[tuple[int, int, str], ...]] = ContextVar("pace_owned_execution_locks", default=())
 _EXECUTION_FDS = {}
 _EXECUTION_FDS_MUTEX = threading.Lock()
 
@@ -60,47 +60,6 @@ def stage_directories(root: Path, *, turn_id: str | None = None) -> tuple[Path, 
         key=lambda path: int(path.name[5:]),
     )
     return tuple(path for path in (turn / "orientation", *rounds, turn / "finalization") if path.is_dir())
-
-
-def reader_artifact_path(run_dir: Path, output_dir: Path, relative: Path) -> Path:
-    """Keep round materials in the run and flatten final writing documents.
-
-    The delivery consumer links these originals from its generated pages rather
-    than copying receipts, memory drafts or mathematical files into each round.
-    The publisher selects the current paper directory separately for results.
-    """
-    parts = list(relative.parts)
-    for index in range(len(parts) - 2):
-        if parts[index] != "work" or re.fullmatch(r"turn\d+", parts[index + 1]) is None:
-            continue
-        stage = parts[index + 2]
-        if re.fullmatch(r"round\d+", stage) and len(parts) > index + 3:
-            return Path(run_dir) / relative
-        tail = parts[index + 3:]
-        for attempt, part in enumerate(tail[:-1]):
-            if re.fullmatch(r"attempt[-_]\d+", part):
-                del tail[attempt]
-                break
-        if stage == "finalization":
-            if index == 0 and tail[:3] == ["papers", "paper", "paper"]:
-                return Path(run_dir) / relative
-            if tail[:2] in (["reports", "outline"], ["reports", "report"],
-                            ["papers", "outline"], ["papers", "paper"]):
-                group, task = tail[:2]
-                tail = tail[2:]
-                if group == "reports" and task == "report" and tail == ["outline.md"]:
-                    tail = ["report_outline.md"]
-                elif group == "papers" and task == "paper" and tail == ["paper_outline.md"]:
-                    tail = ["paper_used_outline.md"]
-        elif tail[:2] == ["reports", stage]:
-            del tail[:2]
-        return Path(output_dir) / Path(*parts[:index + 3], *tail)
-    return Path(output_dir) / relative
-
-
-def artifact_attempt(path: Path) -> Path | None:
-    return next((parent for parent in path.parents
-                 if re.fullmatch(r"attempt[-_]\d+", parent.name)), None)
 
 
 def path_has_symlink_component(root: Path, path: Path) -> bool:

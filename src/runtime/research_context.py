@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from pace.contracts.research.memory import binding, check_binding, check_source_ownership, digest, public_file, read_json
+from pace.contracts.research.memory import application_is_approved, application_review_bindings, binding, check_binding, check_source_ownership, digest, public_file, read_json
 from pace.runtime.output.workspace import _write_json_atomic, work_ref
 from pace.runtime.output.results import relocate_links
 
@@ -37,11 +37,54 @@ def director_archive_refs(root: Path) -> tuple[str, ...]:
                      attempt['attempt'].get('reopen_condition_ref', '')))
     for application in index['applications'].values():
         refs.extend((application['argument_ref'], *application['premise_refs'],
-                     application.get('review_ref', '')))
+                     application.get('review_ref', ''), application.get('review_text_ref', '')))
     refs = tuple(dict.fromkeys(ref for ref in refs if ref))
     for ref in refs:
         public_file(root, ref)
     return refs
+
+
+def director_decision_inputs(root: Path, input_refs, completed_refs=()) -> dict:
+    """Select the reading list and scheduling facts for one Director call."""
+    from pace.contracts.research.memory import enabled
+    from pace.runtime.output.memory import research_brief
+
+    required = list(input_refs)
+    archives = list(director_archive_refs(root))
+    survey_reports = []
+    for ref in completed_refs:
+        if Path(ref).name != 'agent_result.json':
+            continue
+        result = read_json(root, ref)
+        if result.get('agent_id') != 'survey' or result.get('status') != 'SUCCEEDED':
+            continue
+        report = result['deliverable_ref']
+        if report not in completed_refs:
+            raise ValueError("Survey report is missing from the committed handoff")
+        public_file(root, report)
+        survey_reports.append(report)
+        folder = Path(ref).parent
+        for source in result.get('published_refs', ()):
+            if (Path(source).is_relative_to(folder / 'sources')
+                    or source in {str(folder / 'source_manifest.json'), str(folder / 'source_processing.json')}):
+                public_file(root, source)
+                archives.append(source)
+    if survey_reports:
+        required.append(survey_reports[-1])
+        archives.extend(survey_reports[:-1])
+    # A completed or failed Survey costs one acquisition. Transport attempts
+    # within the same round share the one host receipt.
+    surveys = sum(json.loads(p.read_text()).get('agent_id') == 'survey'
+                  for p in (root / work_ref(root)).glob('*/agent_result.json'))
+    index = load_index(root)
+    return {
+        'required_refs': list(dict.fromkeys(required)),
+        'archive_refs': list(dict.fromkeys(ref for ref in archives if ref not in required)),
+        'memory_enabled': enabled(root), 'brief': research_brief(root),
+        'obligation_versions': {key: row['version'] for key, row in index['obligations'].items()},
+        'route': index.get('current_route', {}), 'survey_remaining': max(0, 4 - surveys),
+        'latest_survey': survey_reports[-1] if survey_reports else '',
+    }
 
 
 def validate_context(root: Path, context_ref: str) -> dict:
@@ -74,6 +117,8 @@ def freeze_context(root: Path, assignment_ref: str, decision, input_refs) -> dic
     while pending:
         for parent in index['obligations'][pending.pop()].get('parent_ids', []):
             if parent not in related: related.add(parent); pending.append(parent)
+    archives = list(decision.archive_refs)
+    premises = set()
     for ident in ids:
         obligation = index['obligations'][ident]
         for row in obligation['bindings']: check_binding(root, row)
@@ -83,17 +128,46 @@ def freeze_context(root: Path, assignment_ref: str, decision, input_refs) -> dic
             selected += [index['obligations'][parent]['statement_ref']]
         for group in obligation.get('premise_groups', []):
             for premise in group:
+                premises.add(premise)
                 for row in index['obligations'][premise]['bindings']: check_binding(root, row)
                 selected += [index['obligations'][premise]['statement_ref'], index['obligations'][premise]['scope_ref']]
-        for app in index.get('applications', {}).values():
-            if app['obligation_id'] == ident:
-                selected += [app['argument_ref'], *app['premise_refs']]
-                if app.get('review_ref'): selected.append(app['review_ref'])
+    for app in index.get('applications', {}).values():
+        ident = app['obligation_id']
+        direct = ident in ids
+        if not direct and (ident not in premises or app['status'] != 'APPLICABLE'):
+            continue
+        sources = [app['argument_ref'], *app['premise_refs']]
+        sources.extend(app[key] for key in ('review_ref', 'review_text_ref') if app.get(key))
+        current = app['obligation_version'] == index['obligations'][ident]['version']
+        if current and app['status'] != 'INVALIDATED':
+            if app['status'] == 'APPLICABLE':
+                expected = application_review_bindings(app)
+                review = read_json(root, app['review_ref'])
+                if (review['application_key'] != app['application_key'] or review['bindings'] != expected
+                        or not application_is_approved(app, review)
+                        or (app.get('review_text_ref') and app['review_text_ref'] != review['review_binding']['ref'])):
+                    raise ValueError(f"application review differs from the selected evidence: {app['review_ref']}")
+                for row in (*expected, review['request_binding'], review['review_binding']):
+                    check_binding(root, row)
+            selected.extend(sources)
+        elif direct:
+            archives.extend(sources)
     attempts = [a for a in index.get('attempts', []) if related & set(a['obligation_ids'])]
-    # Retain scoped obstacles even when old; the latest attempt provides the continuation.
+    # A direct obstacle can outlive a revision. Other branches remain accessible
+    # without turning every attempt at a common ancestor into required reading.
+    latest_change = ""
     for attempt in attempts:
-        if attempt['attempt']['obstacle_ref']: selected.append(attempt['attempt']['obstacle_ref'])
-    if attempts: selected.append(attempts[-1]['change_ref'])
+        obligation_ids = set(attempt['obligation_ids'])
+        same_task = bool(obligation_ids.intersection(ids)) or attempt['branch_id'] == decision.branch_id
+        obstacle = attempt['attempt']['obstacle_ref']
+        if obstacle:
+            (selected if same_task else archives).append(obstacle)
+        versions = attempt.get('obligation_versions', {})
+        if same_task and any(versions.get(i) == index['obligations'][i]['version']
+                             for i in related & obligation_ids):
+            latest_change = attempt['change_ref']
+    if latest_change:
+        selected.append(latest_change)
     route_path = root / work_ref(root, 'state/current_route.json')
     route = json.loads(route_path.read_text()) if route_path.is_file() else {}
     if route:
@@ -103,7 +177,7 @@ def freeze_context(root: Path, assignment_ref: str, decision, input_refs) -> dic
         selected += [route['ref']]
         if route.get('relations_ref'): selected.append(route['relations_ref'])
     # Navigation is a frozen entry, not a reason to expand the complete archive.
-    archives = list(decision.archive_refs)
+    archives = list(dict.fromkeys(archives))
     required, bindings, aliases = [], [], {}
     for original in dict.fromkeys((*selected, *archives)):
         source = public_file(root, original)
@@ -127,6 +201,7 @@ def freeze_context(root: Path, assignment_ref: str, decision, input_refs) -> dic
                      'target': binding(root, work_ref(root, 'input/target_contract.json')),
                      'branch_id': decision.branch_id or 'b-target',
                      'obligations': [index['obligations'][i] for i in ids],
+                     'related_versions': {i: index['obligations'][i]['version'] for i in sorted(related)},
                      'related_attempt_refs': [a['change_ref'] for a in attempts]}
     _write_json_atomic(root / route_ref, route_context)
     context = {'schema_version': 'research_context/v1', 'assignment_ref': assignment_ref,

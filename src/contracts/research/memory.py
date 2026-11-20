@@ -260,6 +260,17 @@ def application_review_bindings(app: dict) -> list[dict]:
     return list({digest(row): row for row in bindings}.values())
 
 
+def application_is_approved(app: dict, record: dict) -> bool:
+    verdict = record['verdict']
+    checks = verdict.get('application_checks', [])
+    review = record.get('review_binding')
+    return (verdict.get('stage_status') == 'PASS' and verdict.get('reuse_authorized') is True
+            and len(checks) == 1 and checks[0].get('obligation_id') == app['obligation_id']
+            and checks[0].get('obligation_version') == app['obligation_version']
+            and checks[0].get('status') == 'APPLICABLE' and bool(review)
+            and checks[0].get('review_ref') == review['ref'])
+
+
 def application_review_identity(app: dict) -> str:
     """Identify the review by its bound authority, never by a reporter label."""
     return digest({
