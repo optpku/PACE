@@ -22,6 +22,29 @@ from pace.runtime.output.sources import fetch_source, read_source, search_source
 _request_context = ContextVar('pace_chat_request_context', default=None)
 
 
+def _same_navigation_snapshot(root, ref, path, saved_text):
+    """Permit bookkeeping changes while keeping the task and evidence fixed."""
+    if ref == work_ref(root, 'state/director_state.json'):
+        bookkeeping = {
+            'phase', 'round_index', 'pending_assignment_ref', 'pending_dispatch_ref',
+            'pending_prompt_ref', 'last_directive_ref', 'last_composer_manifest_ref',
+        }
+    elif ref == 'memory/research_index.json':
+        bookkeeping = {'costs', 'cost_cursor'}
+    else:
+        return False
+    if not isinstance(saved_text, str):
+        return False
+    try:
+        previous = json.loads(saved_text)
+        current = json.loads(path.read_bytes())
+    except (UnicodeError, ValueError):
+        return False
+    return (isinstance(previous, dict) and isinstance(current, dict)
+            and {key: value for key, value in previous.items() if key not in bookkeeping}
+            == {key: value for key, value in current.items() if key not in bookkeeping})
+
+
 def _resume_messages(root, directory, context, capabilities, initial):
     """Continue an interrupted conversation in this exact task, never another role's."""
     from pace.runtime.output.calls import call_directory
@@ -68,15 +91,22 @@ def _resume_messages(root, directory, context, capabilities, initial):
                 if function['name'] in {'read_file', 'search_file'}:
                     if not tools.readable(args['path']):
                         raise ValueError('saved conversation refers to a file outside the current input view')
-                    reads.append((args['path'], value.get('source_sha256')))
+                    reads.append((args['path'], value.get('source_sha256'), value.get('content')))
                 elif function['name'] == 'fetch_url' and value.get('artifact_ref'):
-                    reads.append((value['artifact_ref'], value.get('source_sha256')))
+                    original_ref = value['artifact_ref']
+                    reads.append((original_ref, value.get('sha256') or value.get('source_sha256'), None))
+                    if value.get('read_ref'):
+                        reads.append((value['read_ref'], value.get('source_sha256'), None))
                 elif function['name'] == 'write_file':
                     writes[args['path']] = args['content']
-            for ref, digest in reads:
+            for ref, digest, saved_text in reads:
                 # Drafts may have been revised by this same conversation. Their
                 # final write is checked below; immutable inputs must still match.
-                if ref not in writes and digest != hashlib.sha256(tools.path(ref).read_bytes()).hexdigest():
+                if ref in writes:
+                    continue
+                path = tools.path(ref)
+                if (digest != hashlib.sha256(path.read_bytes()).hexdigest()
+                        and not _same_navigation_snapshot(root, ref, path, saved_text)):
                     raise ValueError(f'saved conversation input changed: {ref}')
             for ref, content in writes.items():
                 if tools.path(ref).read_text() != content:
