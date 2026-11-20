@@ -475,6 +475,86 @@ def test_chat_resume_rejects_changed_read_input(ws, monkeypatch):
     assert 'input changed' in result.diagnostics[0]['message']
 
 
+@pytest.mark.parametrize('changed', [None, 'original', 'original.txt'])
+def test_chat_resume_binds_download_and_reading_copy_separately(ws, monkeypatch, changed):
+    from hashlib import sha256
+    from test_research_reporter import NativeFixture
+    from pace.runtime.llm import TransportFailure, TransportSuccess
+
+    original = ws.work_ref('round1/sources/web_cache/paper/original')
+    reading = original + '.txt'
+    files = {original: b'%PDF example bytes', reading: b'Extracted mathematical text.'}
+    for ref, content in files.items():
+        ws.path(ref).parent.mkdir(parents=True, exist_ok=True)
+        ws.path(ref).write_bytes(content)
+    url = 'https://example.org/paper.pdf'
+    tool_responses = []
+
+    def fetch(*args, **kwargs):
+        tool_responses.append(kwargs['url'])
+        return {'artifact_ref': original, 'sha256': sha256(files[original]).hexdigest(),
+                'read_ref': reading, 'source_sha256': sha256(files[reading]).hexdigest(),
+                'content': 'Extracted mathematical text.'}
+
+    llm = ChatCompletionsLLM(model='fixture', web_search=True)
+    requests = []
+
+    def reply(messages, tools):
+        requests.append(len(messages))
+        if len(requests) == 1:
+            return NativeFixture.tool('fetch_url', {'url': url})
+        if len(requests) == 2:
+            raise RuntimeError('HTTP 504 fixture')
+        assert messages[-1]['role'] == 'tool'
+        return {'choices': [{'message': {'role': 'assistant', 'content': 'Continued.'}, 'finish_reason': 'stop'}]}
+
+    monkeypatch.setattr('pace.runtime.chat_api.fetch_source', fetch)
+    monkeypatch.setattr(llm, '_request', reply)
+    arguments = {'outputs': (ws.work_ref('round1/sources'),), 'role': 'SURVEY'}
+    assert isinstance(_checkpoint_call(ws, llm, 'first', 'Survey', **arguments), TransportFailure)
+    if changed:
+        ws.path(str(Path(original).with_name(changed))).write_bytes(b'Substituted version')
+    result = _checkpoint_call(ws, llm, 'second', 'Survey', **arguments)
+    if changed:
+        assert isinstance(result, TransportFailure) and 'input changed' in result.diagnostics[0]['message']
+    else:
+        assert isinstance(result, TransportSuccess) and len(requests) == 3
+    assert tool_responses == [url]
+
+
+@pytest.mark.parametrize('change_evidence', [False, True])
+def test_chat_resume_allows_navigation_bookkeeping_changes_only(ws, monkeypatch, change_evidence):
+    from test_research_reporter import NativeFixture
+    from pace.runtime.llm import TransportFailure, TransportSuccess
+
+    ref = 'memory/research_index.json'
+    before = {'commits': {'binding': 'accepted source'}, 'costs': {}, 'cost_cursor': 1}
+    ws.write_json(ref, before)
+    llm = ChatCompletionsLLM(model='fixture')
+    requests = []
+
+    def reply(messages, tools):
+        requests.append(len(messages))
+        if len(requests) == 1:
+            return NativeFixture.tool('read_file', {'path': ref})
+        if len(requests) == 2:
+            raise RuntimeError('HTTP 504 fixture')
+        assert json.loads(json.loads(messages[-1]['content'])['content']) == before
+        return {'choices': [{'message': {'role': 'assistant', 'content': 'Continued.'}, 'finish_reason': 'stop'}]}
+
+    monkeypatch.setattr(llm, '_request', reply)
+    assert isinstance(_checkpoint_call(ws, llm, 'first', 'Survey', inputs=(ref,)), TransportFailure)
+    updated = {**before, 'costs': {'failed_request': 1}, 'cost_cursor': 2}
+    if change_evidence:
+        updated['commits'] = {'binding': 'replacement source'}
+    ws.write_json(ref, updated)
+    result = _checkpoint_call(ws, llm, 'second', 'Survey', inputs=(ref,))
+    if change_evidence:
+        assert isinstance(result, TransportFailure) and len(requests) == 2
+    else:
+        assert isinstance(result, TransportSuccess) and len(requests) == 3
+
+
 def test_search_directory_returns_actionable_error_without_exposing_files(ws):
     tools=WorkspaceTools(ws.root, {'role':'SMI_BLIND_PROVER_PROBE','input_refs':[ws.work_ref('input/problem.md')]})
     with pytest.raises(ValueError,match='use list_files'):
