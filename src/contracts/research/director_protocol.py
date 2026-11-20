@@ -182,7 +182,13 @@ def director_decision_schema(*, survey_calls_remaining: int = 4, memory_enabled:
         fields = {"obligation_ids": STRING_LIST, "branch_id": STRING, "archive_refs": STRING_LIST,
                   "next_step_kind": {**STRING, "enum": ["", *sorted(NEXT_STEP_KINDS)]}, "change_refs": STRING_LIST}
         schema["properties"].update(fields)
-        schema["properties"]["parallel_tasks"]["items"]["properties"].update(fields)
+        companion_fields = schema["properties"]["parallel_tasks"]["items"]["properties"]
+        companion_fields.update(fields)
+        companion_fields["next_step_kind"] = {
+            **fields["next_step_kind"],
+            "description": "Set this companion's own purpose. Planner must choose INITIAL_PLAN or REPLAN "
+                           "explicitly. For other roles an omitted or empty purpose defaults to CONTINUE.",
+        }
     return schema
 
 

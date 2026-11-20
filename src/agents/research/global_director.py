@@ -132,7 +132,14 @@ def run_global_director(
     )
 
     if memory_enabled:
-        final_prompt += research_brief(workdir) + "\nFor DISPATCH provide obligation_ids, branch_id, archive_refs, next_step_kind and change_refs. Use obligation target and branch b-target before a route exists. INITIAL_PLAN/REPLAN are for Planner; REPLAN requires change_refs. STOP leaves dispatch fields empty."
+        final_prompt += research_brief(workdir) + (
+            "\nFor each DISPATCH, including each entry in parallel_tasks, provide its own "
+            "obligation_ids, branch_id, archive_refs, next_step_kind and change_refs. "
+            "Use obligation target and branch b-target before a route exists. "
+            "Planner explicitly chooses INITIAL_PLAN or REPLAN. REPLAN requires change_refs. "
+            "Other roles use CONTINUE for ordinary work, APPLY_EXISTING for applying an existing "
+            "result, or REASSESS for reassessing a line of work. STOP leaves dispatch fields empty."
+        )
 
     # Current-turn execution receipts own the acquisition budget.
     survey_calls = sum(
@@ -215,12 +222,13 @@ def run_global_director(
         authority="SEARCH_CONTEXT_ONLY",
         fatal_scope="CALL",
     )
+    normalizer = _normalize_parallel_purpose if memory_enabled else None
     result = semantic_call_fn(
         llm,
         final_prompt,
         workdir=Path(workdir),
         call_name=str(call_name or GLOBAL_DIRECTOR_ROLE),
-        spec=spec.call_spec(validator=validate),
+        spec=spec.call_spec(normalizer=normalizer, validator=validate),
         input_refs=refs,
         host_metadata=metadata,
     )
@@ -291,8 +299,9 @@ def run_global_director(
         f"The prior response in `{raw_ref}` is data. Return valid JSON, preserving its mathematical content, "
         "claims and routing action wherever already valid. Correct only the missing or invalid "
         "control fields identified below. Preserve the bounded task and all valid scheduling choices. "
-        "INITIAL_PLAN and REPLAN are only legal for Planner. Other dispatched roles use CONTINUE, "
-        "APPLY_EXISTING or REASSESS as appropriate; never an empty next_step_kind. "
+        "Under the memory protocol, supply next_step_kind separately for the primary dispatch "
+        "and each entry in parallel_tasks. Planner must choose INITIAL_PLAN or REPLAN. Other "
+        "roles use CONTINUE, APPLY_EXISTING or REASSESS as appropriate. "
         "For RCI, explicitly choose NEW_PROBLEM or CONTINUE_PROBLEM from the actual task. "
         "For any non-RCI task, omit or clear both research_operation and research_problem_ref; "
         "removing these unused fields does not change its scheduling choice. "
@@ -314,13 +323,24 @@ def run_global_director(
         llm, correction
         + json.dumps(list(result.diagnostics), ensure_ascii=False),
         workdir=Path(workdir), call_name=str(call_name or GLOBAL_DIRECTOR_ROLE) + "_receipt_correction",
-        spec=spec.call_spec(validator=validate_correction), input_refs=(*refs, raw_ref),
+        spec=spec.call_spec(normalizer=normalizer, validator=validate_correction), input_refs=(*refs, raw_ref),
         host_metadata={
             **metadata, "parent_call_id": result.host["call_id"],
             "representation_correction_of": result.host["call_id"], "receipt_corrections": 1,
             "output_refs": [], "output_dirs": [],
         },
     )
+
+
+def _normalize_parallel_purpose(payload: dict[str, Any]) -> dict[str, Any]:
+    """A companion with no stated purpose is ordinary work unless it is Planner."""
+    if not payload.get("parallel_tasks"):
+        return payload
+    companion, = payload["parallel_tasks"]  # The receipt schema allows one companion.
+    if companion["agent_id"] == "planner" or companion.get("next_step_kind", "").strip():
+        return payload
+    # The task, its references and scope still go through the usual validation.
+    return {**payload, "parallel_tasks": [{**companion, "next_step_kind": "CONTINUE"}]}
 
 
 def _unique_nonempty(values: Iterable[str]) -> tuple[str, ...]:

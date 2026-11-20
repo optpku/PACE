@@ -233,6 +233,49 @@ def test_native_director_repairs_empty_purpose_locally(ws):
     assert len(llm.calls) == 2
 
 
+@pytest.mark.parametrize(("agent", "purpose", "expected", "needs_correction"), [
+    ("research", None, "CONTINUE", False),
+    ("research", "", "CONTINUE", False),
+    ("research", "APPLY_EXISTING", "APPLY_EXISTING", False),
+    ("research", "REASSESS", "REASSESS", False),
+    ("research", "INITIAL_PLAN", "CONTINUE", True),
+    ("planner", None, "INITIAL_PLAN", True),
+])
+def test_native_director_parallel_purpose(ws, monkeypatch, agent, purpose, expected, needs_correction):
+    from pace.agents.research.global_director import run_global_director
+    from pace.runtime.semantic import StructuredSemanticResult
+
+    primary = task("research" if agent == "planner" else "planner").to_json()
+    companion = task(agent).to_json()
+    companion.pop("parallel_tasks")
+    if purpose is None:
+        companion.pop("next_step_kind")
+    else:
+        companion["next_step_kind"] = purpose
+    primary["parallel_tasks"] = [companion]
+    requests = []
+    transport = NativeFixture("research")
+
+    def reply(messages, _tools):
+        prompt = messages[1]["content"]
+        requests.append(prompt)
+        if len(requests) == 1:
+            assert "including each entry in parallel_tasks" in prompt
+            return transport.tool("submit_result", primary)
+        assert needs_correction and "/parallel_tasks/0/next_step_kind" in prompt
+        corrected = {**companion, "next_step_kind": expected}
+        return transport.tool("submit_result", {**primary, "parallel_tasks": [corrected]})
+
+    monkeypatch.setattr(transport, "_request", reply)
+    result = run_global_director(llm=transport, workdir=ws.root)
+    assert isinstance(result, StructuredSemanticResult)
+    assert result.payload["parallel_tasks"] == [{**companion, "next_step_kind": expected}]
+    assert result.payload["next_step_kind"] == primary["next_step_kind"]
+    assert len(requests) == (2 if needs_correction else 1)
+    if not needs_correction:
+        assert json.loads(ws.path(result.host["response_ref"]).read_text()) == primary
+
+
 def test_reporter_receipt_repair_cannot_write_mathematical_files(ws):
     use_reporter(ws); ref = deliver(ws, 1)
     llm = NativeFixture('research')
