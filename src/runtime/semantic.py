@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Union
 
-from pace.runtime.json_values import as_dict as _as_dict
+from pace.runtime.json_values import as_dict as _as_dict, decode_structured_fields
 from pace.runtime.output.calls import begin_call, call_directory, finish_call
 from pace.runtime.output.events import (
     append_event,
@@ -446,7 +446,11 @@ def _semantic_call_once(
         representation_failed = transport.retry_class == RETRY_MODEL_REPRESENTATION
     else:
         try:
-            payload = json.loads(raw)
+            payload, repairs = decode_structured_fields(json.loads(raw), spec.semantic_schema)
+            if repairs:
+                _write_json_atomic(trace_dir / 'receipt_normalization.json',
+                                   {'json_pointers': repairs, 'response_ref':
+                                    (Path(transport.artifact_dir) / 'response.txt').relative_to(root).as_posix()})
             diagnostics.extend(validate_semantic_payload(payload, spec.semantic_schema))
             if not diagnostics and spec.normalizer is not None:
                 payload = spec.normalizer(payload)

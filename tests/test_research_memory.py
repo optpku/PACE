@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from pace.contracts.research.director_protocol import parse_director_decision
-from pace.contracts.research.memory import binding, digest, prepare_delta, public_file
+from pace.contracts.research.memory import binding, digest, prepare_delta, prepare_route, public_file, repair_route_references
 from pace.orchestrator.director_led import DirectorLedEngine
 from pace.orchestrator.finding_publication import publish_applications
 from pace.runtime.output.events import read_events
@@ -215,6 +215,42 @@ def test_memory_rejects_symlink(ws,tmp_path):
     outside=tmp_path/'outside.md';outside.write_text('secret')
     ws.path('escape.md').symlink_to(outside)
     with pytest.raises(ValueError):public_file(ws.root,'escape.md')
+
+
+@pytest.mark.parametrize('combined', [False, True])
+@pytest.mark.parametrize('records,locator,valid', [
+    ([{'clause_id': 'TC001'}, {'clause_id': 'TC002'}], '#TC001', True),
+    ([{'id': 'lemma'}], '#lemma', True),
+    ([{'clause_id': 'other', 'text': 'TC001 appears only in prose.'}], '#TC001', False),
+    ([{'clause_id': 'TC001'}, {'clause_id': 'TC001'}], '#TC001', False),
+])
+def test_json_route_locator_resolves_a_unique_record_without_editing_source(ws, combined, records, locator, valid):
+    contract = ws.work_ref('input/clauses.json')
+    source = ws.work_ref('round1/route.md')
+    route = ws.work_ref('round1/route_relations.json')
+    ws.write_json(contract, {'records': records})
+    ws.write_text(source, 'A route with an explicitly bound target clause.')
+    row = {'id': 'lemma', 'kind': 'ROUTE_SUFFICIENT', 'statement_ref': contract, 'scope_ref': contract,
+           'parent_ids': [], 'branch_id': 'b-target', 'premise_groups': []}
+    for field in ('statement', 'scope'):
+        if combined:
+            row[field + '_ref'] += locator
+        else:
+            row[field + '_locator'] = locator
+    ws.write_json(route, {'schema_version': 'route_relations/v1', 'change_ref': source, 'obligations': [row]})
+    original = ws.path(contract).read_bytes()
+    before = ws.path(route).read_bytes()
+    if valid:
+        assert len(repair_route_references(ws.root, route)) == (2 if combined else 0)
+        prepared = prepare_route(ws.root, route, {})['obligations'][0]
+        assert all(binding['locator'] == locator for binding in prepared['bindings'])
+        assert repair_route_references(ws.root, route) == []
+    else:
+        with pytest.raises(ValueError, match='one JSON record'):
+            repair_route_references(ws.root, route)
+            prepare_route(ws.root, route, {})
+        assert ws.path(route).read_bytes() == before
+    assert ws.path(contract).read_bytes() == original
 
 
 def test_interrupted_handoff_repair_reuses_original_author(ws):

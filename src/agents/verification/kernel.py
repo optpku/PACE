@@ -15,7 +15,7 @@ from pace.runtime.prompts import (
     render_prompt_template,
 )
 from pace.runtime.roles import SemanticRoleSpec
-from pace.runtime.schema import open_object
+from pace.runtime.schema import array_of, open_object
 from pace.runtime.semantic import (
     SemanticCallResult,
     SemanticInterfaceFailure,
@@ -52,32 +52,14 @@ def verify_finding(
                    "(APPLICABLE or NOT_ESTABLISHED), and review_ref. Write the detailed review to the assigned review_ref. "
                    "PASS and reuse_authorized=true are required for APPLICABLE. publication.action=NONE is valid; "
                    "do not create a new finding merely to authorize an application. Rejecting an application does not refute its premise theorem.")
-    def validate(payload):
-        errors = _validate_finding_receipt(payload)
-        if request:
-            checks = payload.get('application_checks')
-            if (not isinstance(checks, list) or len(checks) != 1 or not isinstance(checks[0], dict)
-                or checks[0].get('obligation_id') != request['obligation_id']
-                or checks[0].get('obligation_version') != request['obligation_version']
-                or checks[0].get('status') not in {'APPLICABLE', 'NOT_ESTABLISHED'}
-                or checks[0].get('review_ref') != request['review_ref']
-                or (checks[0].get('status') == 'APPLICABLE' and
-                    (payload.get('stage_status') != 'PASS' or payload.get('reuse_authorized') is not True))):
-                errors.append({'reason_code': 'invalid_application_review', 'json_pointer': '/application_checks'})
-            from pace.contracts.research.memory import public_file
-            try:
-                if not public_file(workdir, request['review_ref']).read_text().strip(): raise ValueError('empty review')
-            except (ValueError, OSError):
-                errors.append({'reason_code': 'missing_application_review', 'json_pointer': '/application_checks'})
-        return errors
     return run_semantic_role(
         llm, prompt, workdir=workdir,
         call_name=f"finding_verifier_{round_index:04d}_{Path(draft_ref).stem}",
         role=SemanticRoleSpec(
-            role="finding_verifier", schema=_finding_receipt_schema,
+            role="finding_verifier", schema=lambda: _finding_receipt_schema(request),
             host_schema_version="finding_verification",
             authority="MathVerifierKernel", fatal_scope="CALL",
-            validator=validate,
+            validator=lambda payload: validate_finding_application(payload, request, workdir),
             on_accept=on_accept,
         ),
         input_refs=input_refs,
@@ -91,7 +73,17 @@ def verify_finding(
     )
 
 
-def _finding_receipt_schema():
+def _finding_receipt_schema(request=None):
+    check = open_object({
+        "obligation_id": {"type": "string"},
+        "obligation_version": {"type": "string"},
+        "status": {"type": "string", "enum": ["APPLICABLE", "NOT_ESTABLISHED"]},
+        "review_ref": {"type": "string"},
+    })
+    check["required"] = list(check["properties"])
+    checks = array_of(check)
+    if request:
+        checks.update(minItems=1, maxItems=1)
     schema = open_object({
         "stage_status": {"type": "string", "enum": ["PASS", "MATH_FAIL", "VERIFIER_ERROR"]},
         "reuse_authorized": {"type": "boolean"},
@@ -99,9 +91,33 @@ def _finding_receipt_schema():
             "action": {"type": "string", "enum": ["CREATE", "UPDATE", "NONE"]},
             "finding_ref": {"type": "string"},
         }),
+        "application_checks": checks,
     })
-    schema["required"] = ["stage_status"]
+    schema["required"] = ["stage_status", *(["application_checks"] if request else [])]
     return schema
+
+
+def validate_finding_application(payload, request, workdir):
+    """Apply identical authorization checks to new and recovered receipts."""
+    errors = _validate_finding_receipt(payload)
+    if not request:
+        return errors
+    checks = payload.get('application_checks')
+    if (not isinstance(checks, list) or len(checks) != 1 or not isinstance(checks[0], dict)
+        or checks[0].get('obligation_id') != request['obligation_id']
+        or checks[0].get('obligation_version') != request['obligation_version']
+        or checks[0].get('status') not in {'APPLICABLE', 'NOT_ESTABLISHED'}
+        or checks[0].get('review_ref') != request['review_ref']
+        or (checks[0].get('status') == 'APPLICABLE' and
+            (payload.get('stage_status') != 'PASS' or payload.get('reuse_authorized') is not True))):
+        errors.append({'reason_code': 'invalid_application_review', 'json_pointer': '/application_checks'})
+    from pace.contracts.research.memory import public_file
+    try:
+        if not public_file(workdir, request['review_ref']).read_text().strip():
+            raise ValueError('empty review')
+    except (ValueError, OSError):
+        errors.append({'reason_code': 'missing_application_review', 'json_pointer': '/application_checks'})
+    return errors
 
 
 def _validate_finding_receipt(payload):

@@ -210,6 +210,52 @@ def _check_and_publish(
     return True
 
 
+def _recover_application_receipt(root, record, request, target_id):
+    """Revalidate an independently authored receipt against its unchanged owner bindings."""
+    from pace.agents.verification.kernel import _finding_receipt_schema, validate_finding_application
+    from pace.contracts.research.memory import digest
+    from pace.runtime.json_values import decode_structured_fields
+    from pace.runtime.schema import validate_json_instance
+    from pace.runtime.output.workspace import path_has_symlink_component
+    from pace.runtime.output.events import append_event
+
+    call_id = record.get('call_id', '')
+    if not call_id or Path(call_id).name != call_id or call_id in {'.', '..'}:
+        return None
+    directory = root / Path(request['review_ref']).parent.parent / 'calls' / call_id
+    try:
+        call = json.loads((directory / 'record.json').read_text())
+        host = json.loads((directory / 'interface_result.json').read_text())['host']
+        metadata = host['host_metadata']
+        response = root / call['response_ref']
+        if (not response.resolve().is_relative_to(directory.resolve())
+            or any(path_has_symlink_component(root, p) for p in
+                   (response, directory / 'record.json', directory / 'interface_result.json'))
+            or call['status'] != 'REPRESENTATION_FAILED' or call['role'] != 'finding_verifier'
+            or host['call_id'] != call_id or host['authority'] != 'MathVerifierKernel'
+            or host['interface_status'] != 'OK' or metadata['transport']['status'] != 'SUCCESS'
+            or metadata.get('application_key') != request['application_key']
+            or metadata.get('draft_ref') != request['argument_ref']
+            or metadata.get('target_contract_id') != target_id
+            or not {record['request_ref'], *(row['ref'] for row in record['bindings'])}
+                   <= set(call['input_refs'])):
+            return None
+        raw = response.read_text()
+        schema = _finding_receipt_schema(request)
+        payload, repairs = decode_structured_fields(json.loads(raw), schema)
+        if validate_json_instance(payload, schema) or validate_finding_application(payload, request, root):
+            return None
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    audit_ref = (directory / ('receipt_revalidation-' + digest(payload) + '.json')).relative_to(root).as_posix()
+    _write_json_atomic(root / audit_ref, {'response_ref': call['response_ref'], 'response_sha256': digest(raw.encode()),
+                                        'json_pointers': repairs, 'payload': payload,
+                                        'request_binding': record['request_binding'], 'bindings': record['bindings']})
+    append_event(root, 'SEMANTIC_RECEIPT_REVALIDATED', call_id=call_id,
+                 idempotency_key='receipt-revalidated:' + digest(payload), audit_ref=audit_ref)
+    return {**record, 'verdict': payload, 'receipt_revalidation_ref': audit_ref}
+
+
 def publish_applications(*, llm, root, retry_errors=False):
     """Independently check committed applications, including publication NONE."""
     from pace.contracts.research.memory import (
@@ -246,7 +292,10 @@ def publish_applications(*, llm, root, retry_errors=False):
         if record and record['verdict'].get('stage_status') == 'VERIFIER_ERROR':
             if not retry_errors: return False
             _write_json_atomic(root / directory / f'application-{key}.{uuid.uuid4().hex}.attempt.json', record)
-            record = None
+            record = _recover_application_receipt(root, record, request,
+                         read_json(root, app['target']['ref'])['contract_id'])
+            if record is not None:
+                _write_json_atomic(root / ref, record)
         if record is None:
             assignment = read_json(root, str(Path(app['result_ref']).parent / 'assignment/task.json'))
             def save_review(verdict, call_id=''):

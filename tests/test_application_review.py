@@ -248,3 +248,63 @@ def test_application_interface_failure_remains_pending_on_rebuild(ws, accepted_r
     assert len(accepted_review) == 1
     assert publish_applications(llm=object(), root=ws.root, retry_errors=True)
     assert len(accepted_review) == 2 and not pending_finding_checks(ws.root)
+
+
+@pytest.mark.parametrize('status', ['APPLICABLE', 'NOT_ESTABLISHED'])
+def test_recover_double_encoded_review_without_repeating_independent_check(ws, monkeypatch, status):
+    from pace.agents.verification import kernel
+    from test_finding_publication import ProofPublicationTransport
+
+    ref = deliver(ws, 1, application=True)
+    commit_research_memory(ws.root, [ref])
+    app = next(iter(load_index(ws.root)['applications'].values()))
+    schema = kernel._finding_receipt_schema
+
+    def legacy_schema(request=None):
+        value = schema(request)
+        value['properties'].pop('application_checks')
+        value['required'] = ['stage_status']
+        return value
+
+    class Review(ProofPublicationTransport):
+        def complete_structured_result(self, prompt, *, workdir, call_name, ledger_context, **kwargs):
+            request_ref = next(r for r in ledger_context['input_refs'] if r.endswith('.request.json'))
+            request = json.loads((workdir / request_ref).read_text())
+            if ledger_context.get('output_refs'):
+                ws.write_text(request['review_ref'], 'The exact application has been independently checked.')
+            payload = {'stage_status': 'PASS', 'reuse_authorized': True, 'publication': {'action': 'NONE'},
+                       'evidence': 'Literal mathematical text [1, 2] remains unchanged.',
+                       'application_checks': json.dumps([{'obligation_id': request['obligation_id'],
+                           'obligation_version': request['obligation_version'], 'status': status,
+                           'review_ref': request['review_ref']}])}
+            return self._reply(json.dumps(payload), workdir=workdir, call_name=call_name,
+                               ledger_context=ledger_context, structured=True)
+
+    llm = Review('NONE')
+    with monkeypatch.context() as scoped:
+        scoped.setattr(kernel, '_finding_receipt_schema', legacy_schema)
+        assert not publish_applications(llm=llm, root=ws.root)
+    assert len(llm.calls) == 2
+    snapshots = {p: p.read_bytes() for p in ws.root.rglob('response.txt')}
+    assert publish_applications(llm=llm, root=ws.root, retry_errors=True)
+    assert len(llm.calls) == 2
+    assert all(p.read_bytes() == data for p, data in snapshots.items())
+    restored = next(iter(load_index(ws.root)['applications'].values()))
+    assert restored['status'] == status
+    assert (load_index(ws.root)['obligations']['target']['status'] == 'CLOSED') == (status == 'APPLICABLE')
+    record = json.loads(ws.path(restored['review_ref']).read_text())
+    assert record['verdict']['application_checks'][0]['status'] == status
+    assert record['verdict']['evidence'] == 'Literal mathematical text [1, 2] remains unchanged.'
+    assert record['receipt_revalidation_ref']
+
+
+def test_local_receipt_decoding_cannot_supply_authorization():
+    from pace.agents.verification.kernel import _finding_receipt_schema
+    from pace.runtime.json_values import decode_structured_fields
+    from pace.runtime.schema import validate_json_instance
+
+    value = {'stage_status': 'PASS', 'reuse_authorized': 'true', 'publication': {'action': 'NONE'},
+             'application_checks': '[{"obligation_id":"target","obligation_version":"v","status":"APPLICABLE","review_ref":"review.md"}]'}
+    result, changes = decode_structured_fields(value, _finding_receipt_schema())
+    assert changes == ['/application_checks'] and result['reuse_authorized'] == 'true'
+    assert validate_json_instance(result, _finding_receipt_schema())

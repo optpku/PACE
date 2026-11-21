@@ -114,11 +114,25 @@ def check_reference_fields(root: Path, value) -> None:
 
 
 def _check_locator(path: Path, locator: str) -> None:
-    """Accept only an existing Markdown anchor; never guess a nearby section."""
+    """Resolve a recorded section or unique JSON record identity."""
     if not isinstance(locator, str) or not locator.startswith('#') or not locator[1:]:
         raise ValueError('route locator must be a nonempty #anchor')
     anchor = unquote(locator[1:])
     text = path.read_text(encoding='utf-8')
+    if path.suffix.lower() == '.json':
+        nodes = [json.loads(text)]
+        matches = 0
+        while nodes:
+            node = nodes.pop()
+            if isinstance(node, dict):
+                if any(node.get(key) == anchor for key in ('id', 'clause_id')):
+                    matches += 1
+                nodes.extend(node.values())
+            elif isinstance(node, list):
+                nodes.extend(node)
+        if matches != 1:
+            raise ValueError(f'route locator must identify one JSON record: {path.name}{locator}')
+        return
     explicit = re.findall(r'<[^>]+\b(?:id|name)\s*=\s*[\"\']([^\"\']+)[\"\']', text)
     explicit += re.findall(r'\{#([^\s}]+)\}', text)
     headings = []
@@ -159,8 +173,6 @@ def repair_route_references(root: Path, ref: str) -> list[dict]:
             locator = '#' + fragment
             try:
                 source = public_file(root, file_ref)
-                if source.suffix.lower() != '.md':
-                    raise ValueError('route section locators require a Markdown manuscript')
                 _check_locator(source, locator)
                 if row.get(locator_key, locator) != locator:
                     raise ValueError('conflicting route reference and section locator')
@@ -355,6 +367,7 @@ def delivery_instruction(root: Path, output_ref: str, agent_id: str) -> str:
             'An optional disposition may be OPEN, DEFERRED or SUPERSEDED, never CLOSED; explain route retirement in change_ref. '
             'For section precision use optional statement_locator/scope_locator as #existing-anchor, '
             'separately from the plain file paths. Do not append #anchors to *_ref fields. '
+            'A JSON locator must match exactly one record by its id or clause_id. '
             'Use existing or simultaneously declared IDs. Keep unchanged obligations and their exact source refs; '
             'changing a definition creates a new version. Do not recreate the root target or silently change its kind. '
             'Explain dependencies and the next bounded task; leave detailed proofs at their original locations. '
