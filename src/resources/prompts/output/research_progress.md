@@ -23,6 +23,13 @@ its tested scope, and the first open transfer step or distinguishing test
 given by the author. Attribute each point to the manuscript. Leave
 applications empty when the manuscript only supplies a lead.
 
+For such a Research handoff, preserve a documented forced property or
+remaining choice when it explains why another route could matter. For a joint
+attempt, identify the two source passages cited by the author, the joint
+consequence or failure point, and any next distinction the author actually
+derived. Keep source locators in the summary and point `change_ref` to the
+current Research manuscript.
+
 The delta has exactly schema_version (`research_delta/v1`), obligation_ids,
 branch_id, change_ref, applications, and attempt. Cite the original handoff in
 change_ref. Applications have id, obligation_id, argument_ref, premise_refs.

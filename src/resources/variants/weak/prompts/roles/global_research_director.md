@@ -343,3 +343,9 @@ manuscript in the task inputs. Select Research for a bounded calculation,
 Survey for a missing source argument, RCI for a substantive mechanism
 question, or Planner when the evidence changes an existing dependency or its
 feasibility.
+
+For a joint Research ticket, locate one passage from each of two committed
+arguments. Identify a choice left open by one that the other can restrict, or
+a common case where their predictions can be distinguished. Include both
+source files. Before scheduling a follow-up, identify what the last
+calculation changed and which next result would affect the choice of route.

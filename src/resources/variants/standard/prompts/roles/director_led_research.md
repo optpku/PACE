@@ -31,6 +31,16 @@ disappear. State what the calculation settles in this case and the first step
 that would need a new argument in the original setting. If it changes how the
 blocker should be understood, explain why in the same manuscript.
 
+When asked to investigate two routes together, choose an object or operation
+that both arguments constrain. Justify the correspondence, including the
+hypotheses, parameter dependencies and order of choices. Recover one usable
+relation from each source and carry out a deduction that uses both. State the
+consequence, its assumptions and what it adds to the separate arguments. If
+the correspondence fails, identify the first incompatible requirement or the
+missing implication. When a calculation stalls but still identifies a forced
+property or a choice that remains available, record it with its justification
+in the manuscript.
+
 Save useful partial derivations and completed checks as work proceeds, with
 their actual status. On resuming an interrupted task, inspect its existing
 deliverable and scratch outputs and continue the unfinished work. Reuse a

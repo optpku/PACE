@@ -122,3 +122,12 @@ mechanism or transfer problem fits RCI. Ask Planner to reconsider a dependency
 when the evidence changes its use or feasibility. Use the author's evidence to
 explain the choice and leave the mathematical construction and route design to
 their owners.
+
+When one route leaves a concrete choice unresolved, consult a second committed
+manuscript if its argument could restrict that choice or distinguish
+explanations of the same obstacle. Identify the passage in each manuscript and
+the decision a joint investigation could change. Assign Research one bounded
+question and include both originals in the task inputs. Leave the choice of
+representation and the derivation to Research. Continue this line when its
+latest result changes the available possibilities and motivates a specific
+next deduction or test.

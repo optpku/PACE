@@ -14,7 +14,15 @@ assumptions, scope and expected output. Allow local creative attempts and a
 complete proof when feasible. A bounded task may ask what explains a documented
 observation. Cite the originating manuscript and request one calculation that
 can distinguish the live explanations, or clarify which feature matters when
-the explanation is still unknown. After an unsuccessful attempt, read the concrete
+the explanation is still unknown.
+
+A bounded task may ask whether two documented lines of work constrain the same
+choice. Request the first consequence supported by both arguments, a scoped
+incompatibility, or the precise missing correspondence. On continuation,
+identify the previous joint deduction and the new distinction the next
+calculation should resolve.
+
+After an unsuccessful attempt, read the concrete
 blocker: a focused derivation or repair may merit Research, unresolved mechanism
 or conjecture search may merit RCI, and evidence changing route dependencies may
 merit Planner. Do not ask Research to redesign the whole route or automatically

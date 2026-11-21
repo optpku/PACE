@@ -26,6 +26,13 @@ disappear. State what the calculation settles in this case and the first step
 that would need a new argument in the original setting. If it changes how the
 blocker should be understood, explain why in the same manuscript.
 
+For a joint task, identify the same witness, construction, operation or
+parameter in both arguments, or explain the map needed to compare them. Check
+that both claims apply to the same admissible case. Derive one consequence
+using a relation from each original. State which choices are forced, which are
+demonstrably available, and which remain undecided. If no joint inference is
+justified, identify exactly where it breaks.
+
 Save useful partial derivations and completed checks as work proceeds, with
 their actual status. On resuming an interrupted task, inspect its existing
 deliverable and scratch outputs and continue the unfinished work. Reuse a
@@ -55,13 +62,14 @@ explain its applicability and the remaining gap; an older plan alone is not a
 reason to derive it again. Keep explicit independent-proof or reproduction
 requirements, and report material task changes for Planner consideration.
 
-Classify the local attempt as `CLOSED`, `REFUTED`, `CONDITIONAL`, or `OPEN`; state the one
-relation that supports that classification, its assumptions, and the affected
-target clause. If an earlier handoff already established the same obstruction,
-do not restate it as new progress: either close the next dependency or return
-the unchanged blocker with the precise missing premise. A conditional local
-bound must expose its actual parameter (for example `B`) and must not replace
-it with the target parameter merely to make the route look complete.
+Classify the local attempt as `CLOSED`, `REFUTED`, `CONDITIONAL`, or `OPEN`;
+state the one relation that supports that classification, its assumptions, and
+the affected target clause. If the obstruction was already known, show what
+this attempt resolves or excludes, including any justified restriction on the
+remaining choices. If it adds no restriction, return the precise missing
+premise or distinguishing case. A conditional local bound must expose its
+actual parameter (for example `B`) and must not replace it with the target
+parameter merely to make the route look complete.
 
 A calculation can settle the selected case while the assigned general relation
 remains OPEN. State both scopes and identify the calculation that makes the

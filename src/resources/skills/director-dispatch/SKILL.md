@@ -89,6 +89,17 @@ the calculation. If the next step concerns transfer from a source, also pass
 the acquired passage when available. Identify the decision the requested work
 can inform and let the specialist choose the mathematics.
 
+Start from the active obstacle and consult an earlier branch when its work
+bears on that obstacle. Prefer a pair whose interaction can settle a bounded
+decision, such as whether two requirements admit the same witness or which
+case separates two proposed explanations. Use `input_refs` for the originals
+and put passage locators in the brief. If the claimed interaction depends on
+an unproved hypothesis, identify it as open. A further dispatch should use the
+last joint result to narrow the question, test an extension, or decide when to
+set this pairing aside. If the result repeats an existing restriction and no
+new test could change the decision, record what would reopen the pairing and
+move to other work.
+
 When returning to the same objective, use the concrete outcome of the previous
 attempt to explain what further work is warranted. An unfinished node alone
 does not justify repeating the same assignment. A failed sufficient lemma may
