@@ -129,11 +129,9 @@ def validate_json_instance(
         ):
             errors.append(_schema_error(pointer or "/", value, f"maximum={maximum}"))
     if isinstance(value, dict):
-        properties = (
-            schema.get("properties")
-            if isinstance(schema.get("properties"), dict)
-            else {}
-        )
+        properties = schema.get("properties")
+        if not isinstance(properties, dict):
+            properties = {}
         for key in schema.get("required") or []:
             if key not in value:
                 errors.append(

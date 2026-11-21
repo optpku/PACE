@@ -46,6 +46,34 @@ def load_model_json(text: str) -> tuple[Any, tuple[int, ...]]:
             raise original from None
 
 
+def decode_structured_fields(value: Any, schema: dict) -> tuple[Any, list[str]]:
+    """Decode JSON text only where the contract explicitly expects an array or object."""
+    from pace.runtime.schema import validate_json_instance
+
+    changes = []
+
+    def visit(node, contract, pointer):
+        expected = contract.get('type')
+        if isinstance(node, str) and expected in {'array', 'object'}:
+            try:
+                decoded = json.loads(node)
+            except ValueError:
+                return node
+            if validate_json_instance(decoded, contract):
+                return node
+            node = decoded
+            changes.append(pointer or '/')
+        if isinstance(node, dict):
+            properties = contract.get('properties', {})
+            return {key: visit(child, properties[key], pointer + '/' + key)
+                    if key in properties else child for key, child in node.items()}
+        if isinstance(node, list) and isinstance(contract.get('items'), dict):
+            return [visit(child, contract['items'], pointer + f'/{index}') for index, child in enumerate(node)]
+        return node
+
+    return visit(value, schema, ''), changes
+
+
 def as_dict(value: Any) -> dict[str, Any]:
     """Return an existing JSON object, or an empty object for every other type."""
 
@@ -71,50 +99,4 @@ def one_or_many_dict_rows(value: Any) -> list[dict[str, Any]]:
         row
         for row in (value if isinstance(value, list) else [value])
         if isinstance(row, dict)
-    ]
-
-
-def stripped_strings(value: Any) -> list[str]:
-    """Trim non-empty strings from either a scalar or a JSON array."""
-
-    if value is None:
-        return []
-    return [
-        str(item).strip()
-        for item in (value if isinstance(value, list) else [value])
-        if str(item).strip()
-    ]
-
-
-def list_strings(value: Any) -> list[str]:
-    """Trim non-empty strings from a JSON array; reject scalar values."""
-
-    return [
-        str(item).strip()
-        for item in (value if isinstance(value, list) else [])
-        if str(item).strip()
-    ]
-
-
-def deduplicated_strings(value: Any) -> list[str]:
-    """Trim and order-deduplicate strings from a JSON array."""
-
-    return list(
-        dict.fromkeys(
-            str(item).strip()
-            for item in (value if isinstance(value, list) else [])
-            if str(item).strip()
-        )
-    )
-
-
-def raw_strings(value: Any) -> list[str]:
-    """Stringify non-empty scalar or array values without trimming them."""
-
-    if value is None:
-        return []
-    return [
-        str(item)
-        for item in (value if isinstance(value, list) else [value])
-        if str(item)
     ]

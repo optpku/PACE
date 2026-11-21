@@ -39,20 +39,18 @@ def writing_artifacts(root: Path, *, snapshots: bool = False) -> dict[str, str]:
     }
 
 
-def writing_complete(root: Path) -> bool:
+def pending_writing_request(root: Path) -> dict[str, Any]:
+    """Select only a writing request whose own delivery is unfinished."""
     task = active_writing_request(root)
     if not task:
-        return True
+        return {}
     key = {
         "outline": "research_outline",
         "report": "research_report",
         "paper-outline": "paper_outline",
         "paper": "paper_source",
     }[task["action"]]
-    if key not in writing_artifacts(root):
-        return False
-    if task["action"] == "paper":
-        from .theory_paper import paper_build_status
-
-        return paper_build_status(root) == "COMPLETE"
-    return True
+    artifacts = writing_artifacts(root)
+    if key not in artifacts or (task["action"] == "paper" and "paper_pdf" not in artifacts):
+        return task
+    return {}

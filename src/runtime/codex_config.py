@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -72,7 +73,7 @@ def check_codex_isolation(executable: str) -> dict[str, Any]:
 @contextmanager
 def isolated_codex_environment(
     environment: dict[str, str], directory: Path
-) -> dict[str, str]:
+) -> Iterator[dict[str, str]]:
     """Reuse only authentication in the selected Codex configuration home."""
     source = Path(environment.get("CODEX_HOME") or Path.home() / ".codex")
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)

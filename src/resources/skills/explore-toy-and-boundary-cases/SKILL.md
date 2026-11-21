@@ -11,14 +11,19 @@ A sign, index, scale, constant, or structural claim is uncertain.
 
 ## Inputs
 
-The candidate relation, admissible class, parameter range, and the specific uncertainty being tested. Use actual supplied files; no special mechanism-pack JSON fields are required.
+Start from either a candidate relation to test or a recorded observation whose
+cause is unclear. Name the admissible family, parameter range, relevant
+assumptions and uncertainty a small calculation can resolve. Use the supplied
+files for the task.
 
 ## Procedure
 
 1. Choose the smallest admissible family and include zero, first, and endpoint cases.
 2. Compute exact expressions where possible; retain numerical precision and tested ranges otherwise.
-3. Extract a symbolic obstruction or a precise candidate general relation.
-4. Hand the general relation to proving, or an admissible violation to counterexample construction.
+3. Extract the identity, obstruction or dependence that the calculation reveals.
+   Hand off its first unresolved extension when one can be stated, or an admissible
+   violation for counterexample construction. If the calculation only narrows the
+   choice of objects or explanations, record that choice and the evidence for it.
 
 ## Output and handoff
 

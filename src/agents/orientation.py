@@ -138,7 +138,7 @@ def run_problem_orientation(
                        if proof_brief else None,
             input_refs=(work_ref(root, "input/problem.md"), target_ref),
             semantic_call_fn=semantic_call,
-            host_metadata={"output_ref": brief_ref if proof_brief else assessment_ref,
+            host_metadata={"output_ref": brief_ref, "output_refs": [brief_ref],
                            "task_id": "orientation", "stage_ref": work_ref(root, "orientation")},
         )
         diagnostic = {}

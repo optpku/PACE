@@ -70,9 +70,9 @@ where neither the specified certificate nor any nonconstant finite cycle exists.
 When `--mode` is omitted, the first target-location call selects `proof` only for tasks suited to direct proving; tasks requiring mechanism exploration, or uncertainty about suitability, select `research`. You can set either mode explicitly. Research follows the loop below; proof runs one initial Survey and up to five successive proof-and-review loops, stopping once verified.
 
 1. **Plan and gather sources.** The Director selects objectives and chooses between local exploration and deeper investigation; the Planner develops the mathematical route. Survey gathers literature and can optionally use [ReasAtlas](https://atlas.reaslab.io) for mathematical source retrieval through a separately supplied client and Skill; see [retrieval configuration](docs/configuration.md#reasatlas-source-retrieval).
-2. **Refine conjectures and their supporting arguments.** The conjecture-refinement process, SMI, develops candidate statements and mechanisms: intermediate claims intended to establish them. It checks whether the claims are justified without circular reasoning and whether they cover the full candidate. Proof attempts and counterexample searches distinguish an unsupported argument from a false statement, guiding repair, revision, or decomposition within the original request.
+2. **Refine conjectures and their supporting arguments.** Refined Conjecture Investigation (RCI) develops candidate statements and the intermediate claims intended to establish them. It checks the justification for those claims, tests for circular reasoning, and checks whether they cover the full candidate. Proof attempts and counterexample searches distinguish an unsupported argument from a false statement, guiding repair, revision, or decomposition within the original request.
 3. **Construct and review proofs.** The Prover assembles the relevant arguments. Auditor and Kernel independently review the candidate proof against the original target using model-based natural-language verification.
-4. **Retain evidence for the next task.** Versioned memory records results separately from their uses, preserving assumptions, scope, sources, dependencies, and review findings. Changes to a candidate or condition trigger renewed review of affected evidence; established results retain their original conditions. Reuse requires checking those conditions and the argument connecting the old conclusion to its new use. Missing steps and failed routes guide the next objective, with checked premises, exploratory material, and unresolved obligations kept distinct in task-specific context.
+4. **Retain evidence for the next task.** After a research round or parallel batch, the Director workflow updates memory and sends new findings and proposed uses for independent review before selecting the next task. Versioned memory records results separately from their uses, preserving assumptions, scope, sources, dependencies, and review findings. Changes to a candidate or condition trigger renewed review of affected evidence; established results retain their original conditions. Reuse requires checking those conditions and the argument connecting the old conclusion to its new use. Missing steps and failed routes guide the next objective, with checked premises, exploratory material, and unresolved obligations kept distinct in task-specific context.
 5. **Report and continue.** Checked findings update progress as the research proceeds. Explicit writing tasks produce a research-report outline and report, or an independent paper outline and LaTeX/PDF paper from saved evidence. The Web application owns user updates, reader briefs and downloads. [Resume](docs/user-guide.md#resume-an-interrupted-turn) continues unfinished stages while reusing completed work; [continue](docs/user-guide.md#continue-with-a-new-question) starts a new turn with prior findings.
 
 A finding identifier names a mathematical result that can be improved over time.
@@ -89,7 +89,7 @@ without overwriting the thematic overview or changing target acceptance.
 
 ### 1. Install PACE
 
-Requirements: **Python 3.11+** and **Codex CLI** with access to your chosen model. The Python runtime has no third-party dependencies; Codex is installed separately. The proof-mode example below needs no TeX or Poppler. Explicit paper writing also needs `xelatex`, BibTeX, and `pdffonts`; see [PDF tools](docs/installation.md#paper-pdf-tools).
+Requirements: **Python 3.11+** and model access through **Codex CLI** or a [Chat Completions API](docs/configuration.md#chat-completions-api). Installation includes `pypdf` for reading PDF sources; Codex is installed separately when used. The proof-mode example below needs no TeX or Poppler. Explicit paper writing also needs `xelatex`, BibTeX, and `pdffonts`; see [PDF tools](docs/installation.md#paper-pdf-tools).
 
 The commands below use Bash. Run PACE on macOS/Linux or, on Windows, inside WSL; see the [environment requirements](docs/installation.md#requirements).
 
@@ -124,7 +124,7 @@ codex login status
 
 If sign-in is needed, run `codex login`. Custom provider and executable settings are covered in [Configuration](docs/configuration.md).
 
-PACE reuses the login and isolates role calls from personal Codex memories, plugins, hooks and directory instructions. Search is available to each role within its assigned task by default (`--web-search-mode on`). Use `off` to disable external retrieval; blind probes retain their restricted local context. Use a recent CLI supporting `codex exec --ignore-user-config`; `pace doctor` checks compatibility before inference.
+PACE reuses the login and isolates role calls from personal Codex memories, plugins, hooks and directory instructions. Only Survey may retrieve external sources (`--web-search-mode on` by default). All other roles explicitly disable retrieval; `off` also disables Survey retrieval. Blind probes retain their restricted local context. Use a recent CLI supporting `codex exec --ignore-user-config`; `pace doctor` checks compatibility before inference.
 
 PACE runs Codex with `--dangerously-bypass-approvals-and-sandbox` for unattended tasks. Use an environment whose filesystem and command access you intend to grant to the agent; see [execution permissions](docs/installation.md#requirements).
 
@@ -174,7 +174,7 @@ pace problems --output outputs
 ```
 
 Research runs accept `--max-rounds N` to cap outer dispatch rounds per user turn,
-including planning, source research and SMI exploration. Every parallel task takes
+including planning, source research and RCI exploration. Every parallel task takes
 one slot; batches are limited to the remaining slots. The last dispatched task and
 pending verification finish before research closes. Reaching the limit produces a
 completed run with an OPEN mathematical status unless a full candidate has passed
@@ -182,48 +182,67 @@ verification. Explicit writing tasks can then report the existing results and ga
 Resume retains the saved limit and used rounds; continue starts a new turn with its
 own setting. This does not cap the model calls inside one round.
 
-In Research mode, Research and SMI each consume one proof-state credit per
-dispatch, including partial or failed attempts. SMI subphases and recovery share
+In Research mode, Research and RCI each consume one proof-state credit per
+dispatch, including partial or failed attempts. RCI subphases and recovery share
 that reservation. Prover assembly, repair and verification consume no proof-state
 credits and can use existing evidence after the balance reaches zero. All roles
 remain subject to the research-round, call and time budgets.
 
 The user guide covers [report and paper writing](docs/user-guide.md#write-a-report-or-paper), [batch execution](docs/user-guide.md#run-a-batch), and [recorded result summaries](docs/user-guide.md#summarize-recorded-results). See [Configuration](docs/configuration.md) for models, retrieval, budgets, custom providers, and paper styles.
 
+New research turns freeze task inputs and route versions. After each completed Research, Prover or RCI handoff, a short Reporter call extracts `progress.md` and `research_delta.json` from the originals. Authors focus on mathematics; Planner continues to write `route_relations.json`. Reporter receipts are saved separately, so recovery reuses completed authors and summaries. Planner updates are committed by the parent after task completion; ordinary node completion does not require replanning. Attempts retain their parent obligation and scoped obstacles. Independent application checks connect an existing result to a particular obligation, even when no new finding is published. See [research memory](docs/user-guide.md#research-memory-and-task-context).
+
 ## Read the research output
 
 PACE saves mathematical originals, checkpoints and factual runtime records. The external Web application renders user updates, thematic reader briefs, activity cards and download packages from these records.
 
-The core's reader layout keeps each public `work/turnNNN/roundN/` directory limited to its `README.md` index and numbered agent pages. Supporting manuscripts, SMI phase files, execution receipts and memory drafts stay in the hidden run directory; links in the reader pages open those originals. Execution and recovery continue to use the original files.
+The core's reader layout keeps each public `work/turnNNN/roundN/` directory limited to its `README.md` index and numbered agent pages. Supporting manuscripts, RCI phase files, execution receipts and memory drafts stay in the hidden run directory; links in the reader pages open those originals. Execution and recovery continue to use the original files.
 
 | Output | What it provides |
 |---|---|
 | `work/turnNNN/final_report.json` | Bound mathematical result, mode selection and execution status. |
 | `results/findings/` | Independently checked manuscripts with their verification references. |
+| `memory/research_index.json` | Rebuildable obligation, application, attempt and cost records. |
+| `work/turnNNN/roundN/assignment/context.json` | Frozen required inputs and on-demand archives. |
+| `work/turnNNN/roundN/progress.md`, `research_delta.json` | Short Reporter summary and structured changes extracted from that handoff. |
 | `results/outline.md`, `results/research_report.md` | Explicit research-outline and report task outputs. |
 | `results/paper_outline.md`, `results/paper/main.tex`, `main.pdf` | Independent paper-writing outputs; PDF exists only after a successful build. |
 
 Reports and papers preserve the original hypotheses, proof scope and open gaps. Read [writing instructions](docs/user-guide.md#write-a-report-or-paper) for the two writing paths and [recorded result summaries](docs/user-guide.md#summarize-recorded-results) for batch inspection. Mathematical acceptance is separate from writing completion and Web delivery.
 
-## License and citation
+## License
 
-[Apache License 2.0](LICENSE). Inherited license notices are preserved in [NOTICE](NOTICE) and [LICENSES](LICENSES). Software citation metadata is maintained in [CITATION.cff](CITATION.cff).
+PACE is released under the [Apache License 2.0](LICENSE). Inherited license notices are preserved in [NOTICE](NOTICE) and [LICENSES](LICENSES).
 
-If you use PACE in your research, please cite:
+## Contact and Citation
 
-Shu Miao, Feiming Wang, Wentao Long, Chenyi Li, Kun Yuan, and Zaiwen Wen. [*PACE: Research Proving Agent for Adaptive Conjecture Exploration*](https://arxiv.org/abs/2610.33690). arXiv:2610.33690, 2026.
+We hope PACE is useful in your work. If you find a bug or have feedback, please feel free to email one of the authors listed below.
+
+- Feiming Wang — <wangfeiming@mail.nankai.edu.cn>
+- Wentao Long — <23307130521@m.fudan.edu.cn>
+- Chenyi Li — <lichenyi@stu.pku.edu.cn>
+- Kun Yuan — <kunyuan@pku.edu.cn>
+- Zaiwen Wen — <wenzw@pku.edu.cn>
+
+If you use PACE in your research, please cite the paper below.
+
+Shu Miao, Feiming Wang, Wentao Long, Chenyi Li, Kun Yuan, and Zaiwen Wen. *PACE: Research Proving Agent for Adaptive Conjecture Exploration*. 2026. [arXiv:2610.33690](https://arxiv.org/abs/2610.33690)
 
 ```bibtex
 @misc{miao2026paceresearchprovingagent,
-  title={PACE: Research Proving Agent for Adaptive Conjecture Exploration},
-  author={Shu Miao and Feiming Wang and Wentao Long and Chenyi Li and Kun Yuan and Zaiwen Wen},
-  year={2026},
-  eprint={2610.33690},
-  archivePrefix={arXiv},
-  primaryClass={cs.AI},
-  url={https://arxiv.org/abs/2610.33690},
+  title         = {{PACE}: Research Proving Agent for Adaptive Conjecture Exploration},
+  author        = {Shu Miao and Feiming Wang and Wentao Long and Chenyi Li and
+                   Kun Yuan and Zaiwen Wen},
+  year          = {2026},
+  eprint        = {2610.33690},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.AI},
+  doi           = {10.48550/arXiv.2610.33690},
+  url           = {https://arxiv.org/abs/2610.33690},
 }
 ```
+
+Software citation metadata is available in [CITATION.cff](CITATION.cff).
 
 ## Acknowledgements
 

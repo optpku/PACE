@@ -25,7 +25,7 @@ pace run \
   --web-search-mode on
 ```
 
-Replace the model and effort with values supported by your provider. This creates `outputs/even-square/` and starts `turn001`. `proof` handles a fixed statement with one initial Survey followed by direct proving. It runs at most five successive proof loops by default: the first writes a complete proof and later loops revise it using independent review feedback. Verification success ends the turn early; there is no candidate pool. Repairs and resume reuse the Survey. `research` uses dynamic Director scheduling with Planner, Research and SMI as needed. Omit `--mode` to let the first target-location call select: only tasks suited to direct proving choose proof; mechanism exploration or uncertainty chooses research. Explicit mode choices override selection. Both modes use independent Auditor/Kernel checks; see [mode and budget settings](configuration.md#command-line-settings).
+Replace the model and effort with values supported by your provider. This creates `outputs/even-square/` and starts `turn001`. `proof` handles a fixed statement with one initial Survey followed by direct proving. It runs at most five successive proof loops by default: the first writes a complete proof and later loops revise it using independent review feedback. Verification success ends the turn early; there is no candidate pool. Repairs and resume reuse the Survey. `research` uses dynamic Director scheduling with Planner, Research and RCI as needed. Omit `--mode` to let the first target-location call select: only tasks suited to direct proving choose proof; mechanism exploration or uncertainty chooses research. Explicit mode choices override selection. Both modes use independent Auditor/Kernel checks; see [mode and budget settings](configuration.md#command-line-settings).
 
 For your own open conjecture, save the problem as `conjecture.md` and start a research-mode run:
 
@@ -41,7 +41,7 @@ pace run \
 
 This creates `outputs/my-conjecture/`. In the continuation and recovery commands below, replace `outputs/even-square` with `outputs/my-conjecture` when working on this study.
 
-Web Search is enabled by default for every role when its assigned task needs external sources. Use `--web-search-mode off` to disable external retrieval. Statement-only probes retain their restricted local inputs.
+Only Survey may retrieve external sources; `--web-search-mode on` enables Survey retrieval and `off` disables it. Other roles have no retrieval override. Statement-only probes retain their restricted local inputs.
 
 The terminal prints factual task milestones, errors and artifact paths. The external Web application generates user updates, reader briefs and activity cards from those records. `--json` emits machine-readable started/completed JSONL records. `--profile` includes timing events. The model may produce partial findings even if the full target remains unresolved.
 
@@ -59,7 +59,7 @@ Read `work/turnNNN/final_report.json` for the recorded mathematical result and e
 PACE records mathematical originals and runtime events. The Web application generates the user-facing brief, thematic results overview, activity cards, reader copies and downloads. These presentation documents are not required inputs for core execution or recovery. Explicit report and paper tasks are described below.
 
 The core stores `orientation/`, `round1/`, `round2/` and `finalization/` directly
-under each `work/turnNNN/`. SMI candidates are direct children of `smi/attempt_NNN/`;
+under each `work/turnNNN/`. RCI candidates are direct children of `rci/attempt_NNN/`;
 each phase writes its files directly in a named directory, such as
 `candidate_01/seed_scout/seed.md`. Distinct phase iterations use sibling names
 such as `frontier_explorer/` and `frontier_explorer_02/`. Internal attempts remain
@@ -97,7 +97,9 @@ pace resume --run-dir outputs/even-square \
   --model gpt-6.1-sol --reasoning-effort high --web-search-mode on
 ```
 
-`resume` continues the selected saved task. It preserves the target, mode, resource snapshot, proof-loop limit and committed outputs. `--resource-variant`, `--max-proof-states` and `--mode` are not resume options. Completed mathematical work is reused without another model call. If a writing task is selected, recovery continues that writing task without restarting research.
+`resume` continues the selected saved task. It preserves the target, mode, resource snapshot, proof-loop limit and committed outputs. `--resource-variant`, `--max-proof-states` and `--mode` are not resume options. Completed mathematical work is reused without another model call. An unfinished writing request takes priority, including a paper awaiting its PDF. After delivery, resume returns to the saved mathematical checkpoint.
+
+Resume turns created before the RCI rename with the PACE installation saved for that run. The checkpoint and resource snapshot refer to the role IDs and paths from that version.
 
 A service failure retains its concrete diagnostic and stops subsequent model dispatches in that Host session. Correct the service or environment before resuming. A new literal question uses `continue` or a new problem ID, preserving the committed original.
 
@@ -159,4 +161,51 @@ python scripts/summarize_results.py --runs-dir outputs --output exports/summary
 
 The destination must be a new directory outside the source directories. This command reads the current turn of each immediate child problem directory and writes factual `summary.json` and `README.md` without model calls or source changes. Preserve the original workspace for recovery. Reader-view exports, file-link conversion and download packaging belong to the external Web application.
 
-An SMI assignment states the fixed question, the one gap to address and its return condition. Continuing an unchanged question enters exploration directly. A bounded attempt can return `HANDOFF` with its original work and unresolved gap; this is distinct from a mathematical rejection.
+An RCI assignment states the fixed question, the one gap to address and its return condition. Continuing an unchanged question enters exploration directly. A bounded attempt can return `HANDOFF` with its original work and unresolved gap; this is distinct from a mathematical rejection.
+
+
+## Research memory and task context
+
+New turns record `research_memory_version=1` and `research_delta_owner=reporter`. Each task freezes required inputs,
+on-demand archives and its route version under `roundN/assignment/`. Resume checks
+those versions before continuing; later route edits do not change saved inputs.
+Planner delivers a compact route and relations, and only the parent commits its
+shared pointer. Ordinary node completion can continue without another Planner.
+
+Required reading and on-demand archives have separate lists, but both grant
+read-only access through the compatible API's file tools. The Director can follow
+the Host's problem and memory indexes; task roles use their saved archive lists.
+Public findings link to their exact manuscripts and reviews across turns. An
+arbitrary link in a manuscript does not grant additional access, and blind probes
+retain only their supplied statement and permitted assumptions.
+
+`memory/research_index.json` links target obligations, scoped attempts, proposed
+applications and independent reviews. It is a rebuildable search index, never a
+substitute for the source proof. A checked local theorem and its applicability
+to the current obligation are separate. Application reviews may accept a use
+without creating another result number. Three consecutive attempts without a
+checked application prompt reassessment; this is advice, not an automatic stop.
+
+After each successful outer Research, Prover or RCI task, Reporter reads the
+saved handoff and direct dependencies once. It returns a short summary and a
+structured delta; the Host writes `roundN/progress.md` and
+`roundN/research_delta.json`. Reporter does not write proofs, retrieve sources,
+or authorize acceptance. RCI subphases do not each call Reporter. Planner still
+writes `route_relations.json`; Survey does not trigger this progress call.
+Proof mode also reports after each Prover handoff, before independent verification.
+Its progress receipt leaves applications empty: the existing whole-proof verifier
+checks the candidate, so no unused application-review queue is created.
+This short task is separate from explicit long-report and paper writing.
+
+`reporter_request.json` freezes its input references and versions;
+`reporter_result.json` saves the accepted receipt before projections are written.
+If Reporter is interrupted, resume keeps the completed author and finishes only
+the missing reporting step. Missing progress projections and the derived memory index are restored on resume,
+including completed turns, without a model call. Changed original evidence, the bound target or an obligation statement is reported
+as a version conflict. Navigation snapshots cannot serve as mathematical premises. Parallel tasks have separate receipts; only their parent
+updates shared memory. `memory/README.md` links the latest task progress.
+
+Old runs without the saved version retain their protocol. Runs with the memory version but without the Reporter owner also retain their
+original author-delta contract. Keep their original runtime for recovery. Explicit writing and the single-turn boundary are unchanged.
+
+Planner can mark an unused route obligation `DEFERRED` or `SUPERSEDED`, with its reason in the route manuscript. This does not retract historical evidence. Splitting a task retains its ancestor obligations for obstacle lookup and reassessment; local progress alone does not close the parent target.

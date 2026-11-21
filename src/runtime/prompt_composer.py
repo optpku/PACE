@@ -69,7 +69,7 @@ def compose_prompt(
 
 
 def write_dependency_manifest(*, workdir: Path, output_ref: str,
-                              target_contract_id: str) -> tuple[str, str]:
+                              target_contract_id: str, selected_dependencies: Iterable[str] | None = None) -> tuple[str, str]:
     """Index exact finding sources and receipts without inventing proof authority."""
     from pace.runtime.output.results import finding_entries
 
@@ -83,7 +83,12 @@ def write_dependency_manifest(*, workdir: Path, output_ref: str,
         "| Finding | Exact statement, assumptions and proof | Verifier receipt |",
         "|---|---|---|",
     ]
+    from pace.contracts.research.memory import enabled
+    selected = (set(selected_dependencies or ()) if enabled(workdir) else
+                None if selected_dependencies is None else set(selected_dependencies))
     for row in finding_entries(workdir):
+        if selected is not None and not ({row["source_ref"], row["verification_ref"], row.get("ref", "")} & selected):
+            continue
         source = workdir / row["source_ref"]
         body = source.read_text(encoding="utf-8")
         title = next((line[2:].strip() for line in body.splitlines() if line.startswith("# ")), row["finding_id"])
@@ -91,7 +96,10 @@ def write_dependency_manifest(*, workdir: Path, output_ref: str,
         entries.append({
             **row, "statement_and_assumptions_ref": row["source_ref"],
             "source_lines": [1, len(body.splitlines())], "source_summary_verbatim": title,
-            "source_text": body, "verification_receipt": receipt,
+            **({"source_text": body, "verification_receipt": receipt} if selected is None else {
+                "source_sha256": __import__("hashlib").sha256(body.encode()).hexdigest(),
+                "verification_ref": row["verification_ref"],
+                "verification_sha256": __import__("hashlib").sha256((workdir / row["verification_ref"]).read_bytes()).hexdigest()}),
             "current_target_contract_id": target_contract_id,
             "target_relationship": "To be established explicitly in this candidate; not inferred by the Host.",
         })
@@ -149,24 +157,6 @@ def _format_budget(value: Any) -> str:
         return json.dumps(value, ensure_ascii=False, sort_keys=True)
     except (TypeError, ValueError):
         return str(value)
-
-
-def _input_guidance(paths: Iterable[str], assembly: PromptAssembly, root: Path) -> str:
-    """Label suggested reading paths; the role can discover further context."""
-
-    groups = {
-        label: {(root / ref).resolve() for ref in refs}
-        for label, refs in (
-            ("required", assembly.required_refs),
-            ("contract guide", assembly.contract_guide_refs),
-            ("artifact guide", assembly.artifact_guide_refs),
-        )
-    }
-    lines = []
-    for ref in paths:
-        labels = [label for label, refs in groups.items() if (root / ref).resolve() in refs]
-        lines.append(f"- `{ref}` — {', '.join(labels) or 'on-demand context'}")
-    return "\n".join(lines) or "- (none)"
 
 
 __all__ = [

@@ -14,7 +14,7 @@ from pace.runtime.prompts import (
     render_role_task,
 )
 from pace.runtime.roles import SemanticRoleSpec
-from pace.runtime.schema import open_object
+from pace.runtime.schema import array_of, open_object
 from pace.runtime.semantic import (
     SemanticCallResult,
     SemanticInterfaceFailure,
@@ -30,6 +30,8 @@ CALL_SCHEMA_VERSION = "math_verifier_kernel_call/v2"
 def verify_finding(
     *, llm: Any, workdir: Path, draft_ref: str,
     input_refs: tuple[str, ...], round_index: int, target_contract_id: str,
+    application_request: dict | None = None,
+    on_accept=None,
 ) -> SemanticCallResult:
     """Check one standalone result without granting whole-target acceptance."""
 
@@ -39,25 +41,48 @@ def verify_finding(
         target_contract_id=target_contract_id,
         input_files="\n".join(f"- `{ref}`" for ref in input_refs),
     )
+    request = application_request
+    if request:
+        prompt += "\nIndependent application review: " + json.dumps(request, ensure_ascii=False)
+        prompt += ("\nCheck the exact premise versions, hypotheses, quantifiers and connecting argument against only the requested obligation. "
+                   "A request may cover multiple derivations in the same manuscript for this obligation. "
+                   "Review them together, state which derivations and premises actually support the obligation, and keep distinct scopes explicit. "
+                   "Return application_checks with exactly one entry containing obligation_id, obligation_version, status "
+                   "(APPLICABLE or NOT_ESTABLISHED), and review_ref. Write the detailed review to the assigned review_ref. "
+                   "PASS and reuse_authorized=true are required for APPLICABLE. publication.action=NONE is valid; "
+                   "do not create a new finding merely to authorize an application. Rejecting an application does not refute its premise theorem.")
     return run_semantic_role(
         llm, prompt, workdir=workdir,
         call_name=f"finding_verifier_{round_index:04d}_{Path(draft_ref).stem}",
         role=SemanticRoleSpec(
-            role="finding_verifier", schema=_finding_receipt_schema,
+            role="finding_verifier", schema=lambda: _finding_receipt_schema(request),
             host_schema_version="finding_verification",
             authority="MathVerifierKernel", fatal_scope="CALL",
-            validator=_validate_finding_receipt,
+            validator=lambda payload: validate_finding_application(payload, request, workdir),
+            on_accept=on_accept,
         ),
         input_refs=input_refs,
         semantic_call_fn=semantic_call,
         host_metadata={
             "agent_id": "finding_verifier", "round_index": round_index,
             "draft_ref": draft_ref, "target_contract_id": target_contract_id,
+            "output_refs": [request["review_ref"]] if request else [],
+            **({"purpose": "APPLICATION", "application_key": request["application_key"]} if request else {}),
         },
     )
 
 
-def _finding_receipt_schema():
+def _finding_receipt_schema(request=None):
+    check = open_object({
+        "obligation_id": {"type": "string"},
+        "obligation_version": {"type": "string"},
+        "status": {"type": "string", "enum": ["APPLICABLE", "NOT_ESTABLISHED"]},
+        "review_ref": {"type": "string"},
+    })
+    check["required"] = list(check["properties"])
+    checks = array_of(check)
+    if request:
+        checks.update(minItems=1, maxItems=1)
     schema = open_object({
         "stage_status": {"type": "string", "enum": ["PASS", "MATH_FAIL", "VERIFIER_ERROR"]},
         "reuse_authorized": {"type": "boolean"},
@@ -65,9 +90,33 @@ def _finding_receipt_schema():
             "action": {"type": "string", "enum": ["CREATE", "UPDATE", "NONE"]},
             "finding_ref": {"type": "string"},
         }),
+        "application_checks": checks,
     })
-    schema["required"] = ["stage_status"]
+    schema["required"] = ["stage_status", *(["application_checks"] if request else [])]
     return schema
+
+
+def validate_finding_application(payload, request, workdir):
+    """Apply identical authorization checks to new and recovered receipts."""
+    errors = _validate_finding_receipt(payload)
+    if not request:
+        return errors
+    checks = payload.get('application_checks')
+    if (not isinstance(checks, list) or len(checks) != 1 or not isinstance(checks[0], dict)
+        or checks[0].get('obligation_id') != request['obligation_id']
+        or checks[0].get('obligation_version') != request['obligation_version']
+        or checks[0].get('status') not in {'APPLICABLE', 'NOT_ESTABLISHED'}
+        or checks[0].get('review_ref') != request['review_ref']
+        or (checks[0].get('status') == 'APPLICABLE' and
+            (payload.get('stage_status') != 'PASS' or payload.get('reuse_authorized') is not True))):
+        errors.append({'reason_code': 'invalid_application_review', 'json_pointer': '/application_checks'})
+    from pace.contracts.research.memory import public_file
+    try:
+        if not public_file(workdir, request['review_ref']).read_text().strip():
+            raise ValueError('empty review')
+    except (ValueError, OSError):
+        errors.append({'reason_code': 'missing_application_review', 'json_pointer': '/application_checks'})
+    return errors
 
 
 def _validate_finding_receipt(payload):
@@ -85,7 +134,7 @@ def _validate_finding_receipt(payload):
     return diagnostics
 
 
-def _validate_finding_publication(payload):
+def _validate_finding_publication(payload: dict[str, Any]) -> list[dict[str, Any]]:
     if payload.get("stage_status") != "PASS":
         return []
     decision = payload.get("publication")
@@ -138,6 +187,8 @@ def run_math_verifier_kernel(
         "round_index": int(round_index),
         "output_ref": str(output_ref or ""),
         "receipt_correction_owner": "KERNEL",
+        "output_refs": [(Path(proof_file_ref).parent / 'verification/memory_note.md').as_posix()] if proof_file_ref else [],
+        "output_dirs": [(Path(proof_file_ref).parent / 'findings').as_posix()] if proof_file_ref else [],
         **binding,
     }
     call_name = f"math_verifier_kernel_round_{round_index}"
@@ -185,6 +236,7 @@ def run_math_verifier_kernel(
                 **metadata, "parent_call_id": result.host["call_id"],
                 "representation_correction_of": result.host["call_id"],
                 "receipt_corrections": 1,
+                "output_refs": [], "output_dirs": [],
             },
         )
     if call_metadata is not None:

@@ -11,6 +11,7 @@ from pace.agents.orientation import build_problem_extraction_prompt
 from pace.agents.research.global_director import build_global_director_prompt
 from pace.runtime.agent_environment import prepare_agent_environments, role_home
 from pace.runtime.llm import CodexLLM
+from pace.runtime.chat_api import ChatCompletionsLLM
 from pace.runtime.output.workspace import RunWorkspace
 from pace.runtime.prompt_composer import compose_prompt
 from pace.runtime.prompt_policy import build_prompt_assembly
@@ -109,6 +110,33 @@ def test_composer_passes_task_and_evidence_without_fixed_instructions(role_works
     assert "resources/prompts/" not in task
 
 
+@pytest.mark.parametrize("role, heading", [
+    ("PROBLEM_ORIENTATION_EXTRACTOR", "# Literal Target Locations"),
+    ("GLOBAL_RESEARCH_DIRECTOR", "# Global Research Director"),
+])
+def test_api_receives_the_same_fixed_role_instructions(role_workspace, monkeypatch, role, heading):
+    ws = role_workspace
+    prompt = (build_problem_extraction_prompt("Prove the exact current target.", workdir=ws.root)
+              if role == "PROBLEM_ORIENTATION_EXTRACTOR" else
+              build_global_director_prompt(workdir=ws.root, target_contract_id="CURRENT-TARGET"))
+    llm = ChatCompletionsLLM(model="fixture", max_retries=0)
+    requests = []
+
+    def reply(messages, tools):
+        requests.append(messages[:])
+        assert heading in messages[0]["content"]
+        assert heading not in messages[1]["content"]
+        return {"choices": [{"message": {"role": "assistant", "content": "Task received."},
+                             "finish_reason": "stop"}]}
+
+    monkeypatch.setattr(llm, "_request", reply)
+    result = begin_artifact_call(llm, prompt, workdir=ws.root, call_name="api-role",
+                                 role=role, stage="TEST", input_refs=())
+    assert result.transport_status == "SUCCESS"
+    assert len(requests) == 1
+    assert requests[0][1]["content"] == prompt
+
+
 def native_process(monkeypatch, *, interrupt_first=False):
     calls = []
 
@@ -184,9 +212,9 @@ def test_web_reporter_keeps_owner_home_with_its_evidence_workspace(role_workspac
 
 def test_rci_keeps_its_ephemeral_environment(role_workspace, monkeypatch):
     calls = native_process(monkeypatch)
-    result = invoke(role_workspace, "SMI_FRONTIER_EXPLORER", "rci-phase")
+    result = invoke(role_workspace, "RCI_FRONTIER_EXPLORER", "rci-phase")
     assert result.transport_status == "SUCCESS"
     cmd, home, _, _ = calls[0]
     assert "--ephemeral" in cmd and "project_doc_max_bytes=0" in cmd
     assert not home.exists()
-    assert role_home(role_workspace.root, "SMI_FRONTIER_EXPLORER") is None
+    assert role_home(role_workspace.root, "RCI_FRONTIER_EXPLORER") is None

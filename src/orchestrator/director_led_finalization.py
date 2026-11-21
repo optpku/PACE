@@ -22,7 +22,6 @@ from pace.contracts.proof.binding import (
 )
 from pace.orchestrator.director_led import (
     DirectorLedEngineError,
-    DirectorLedRunResult,
     DirectorLedState,
     _validate_verification_checkpoint,
 )
@@ -49,17 +48,12 @@ class DirectorLedFinalizationError(ValueError):
 def finalize_director_led(
     workspace: RunWorkspace,
     problem: Problem,
-    run_result: DirectorLedRunResult | DirectorLedState | Mapping[str, Any] | Any,
+    state: DirectorLedState,
     profiler: ProfileRecorder | None = None,
     reason_code: str = "",
     defer_delivery: bool = False,
 ) -> PipelineResult:
     """Persist and project one Director-led terminal result.
-
-    ``run_result`` is normally :class:`DirectorLedRunResult`.  A state object
-    or a JSON-like mapping is accepted as a narrow convenience for recovery
-    callers and focused tests.  The function is intentionally usable with
-    positional arguments as well as keyword arguments.
 
     A PASS is possible only when the committed state says ``FINALIZE/PASS``
     and the verifier's explicit references resolve through the canonical proof
@@ -68,16 +62,17 @@ def finalize_director_led(
     never copied into the reserved proof artifact fields.
     """
 
-    ws = _coerce_workspace(workspace)
+    ws = workspace
     root = ws.root
     root.mkdir(parents=True, exist_ok=True)
 
-    problem_error = _ensure_problem_file(ws, problem)
-    state, state_ref, state_error = _coerce_state(ws, run_result)
+    problem_error = _check_problem_file(ws, problem)
+    state_ref = ws.work_ref("state/director_state.json")
+    state_error = _check_committed_state(ws, state_ref, state)
     target, target_error = _load_target(root)
     target_available = bool(target)
     canonical_target_id = str(target.get("contract_id") or "").strip()
-    state_target_id = str(state.target_contract_id or "").strip() if state is not None else ""
+    state_target_id = str(state.target_contract_id or "").strip()
     # The report may still expose the canonical ID (or the committed state ID
     # when the canonical target could not be loaded), but only an explicit,
     # non-empty state ID equal to the canonical ID can authorize PASS.
@@ -88,7 +83,7 @@ def finalize_director_led(
         and canonical_target_id
         and state_target_id == canonical_target_id
     )
-    if state is not None and not state_target_id:
+    if not state_target_id:
         target_error = target_error or (
             "Director-led state target_contract_id is required"
         )
@@ -106,8 +101,7 @@ def finalize_director_led(
     chain: dict[str, Any] = {}
     chain_error = ""
     if (
-        state is not None
-        and not state_error
+        not state_error
         and not target_error
         and target_identity_valid
         and candidate_state is not None
@@ -124,10 +118,10 @@ def finalize_director_led(
 
     verification_failure = chain.get("verification_failure", {})
     requested_result = (
-        str(state.terminal_result or "").upper() if state is not None else ""
+        str(state.terminal_result or "").upper()
     )
-    state_phase = str(state.phase or "") if state is not None else ""
-    if state is not None and state_phase not in {"FINALIZE", "STOPPED", "FAILED"}:
+    state_phase = str(state.phase or "")
+    if state_phase not in {"FINALIZE", "STOPPED", "FAILED"}:
         raise DirectorLedFinalizationError(
             f"Director-led state is not terminal: {state_phase}"
         )
@@ -260,10 +254,10 @@ def finalize_director_led(
         "final_provenance_valid": bool(chain_is_complete),
         "director_state": {
             "phase": state_phase,
-            "round_index": state.round_index if state is not None else 0,
-            "max_proof_states": state.max_proof_states if state is not None else 0,
-            "proof_states_used": state.proof_states_used if state is not None else 0,
-            "stop_reason": state.stop_reason if state is not None else "",
+            "round_index": state.round_index,
+            "max_proof_states": state.max_proof_states,
+            "proof_states_used": state.proof_states_used,
+            "stop_reason": state.stop_reason,
         },
     }
     if diagnostics:
@@ -276,7 +270,7 @@ def finalize_director_led(
                 else {}
             ),
         }
-    if verification_failure:
+    if verification_failure and candidate_state is not None:
         from pace.runtime.semantic import diagnostic_messages
 
         report["operational_diagnostics"] = {
@@ -308,9 +302,9 @@ def finalize_director_led(
         report["run_status"] = "completed_with_operational_error"
         report["operational_failure_owner"] = "INTERFACE"
         report["operational_reason_code"] = "finding_verification_incomplete"
+    envelope = FinalReportEnvelope.validate(report)
     _safe_write_json(ws, work_ref(root, "final_report.json"), report, "final report")
     from pace.runtime.output.events import publish_progress
-    envelope = FinalReportEnvelope.validate(report)
 
     publish_progress(root, task_id=f"final-{report['director_state']['round_index']}-{envelope.result}", stage='run', status='finished', final_report=report)
 
@@ -334,13 +328,7 @@ def finalize_director_led(
     )
 
 
-def _coerce_workspace(value: RunWorkspace) -> RunWorkspace:
-    if not isinstance(value, RunWorkspace):
-        raise TypeError("workspace must be a RunWorkspace")
-    return value
-
-
-def _ensure_problem_file(ws: RunWorkspace, problem: Problem) -> str:
+def _check_problem_file(ws: RunWorkspace, problem: Problem) -> str:
     path = _safe_workspace_path(ws.root, work_ref(ws.root, 'input/problem.md'))
     if path is None:
         return "canonical problem.md is not a safe workspace file"
@@ -349,8 +337,7 @@ def _ensure_problem_file(ws: RunWorkspace, problem: Problem) -> str:
     # way before comparing it with an existing checkpoint.
     expected = _canonical_problem_text(problem.text)
     if not path.is_file():
-        _safe_write_text(ws, work_ref(ws.root, 'input/problem.md'), expected, "canonical problem.md")
-        return ""
+        return "canonical problem.md is missing"
     try:
         actual = path.read_text(encoding="utf-8").replace("\r\n", "\n").replace("\r", "\n")
     except (OSError, UnicodeError) as exc:
@@ -360,85 +347,17 @@ def _ensure_problem_file(ws: RunWorkspace, problem: Problem) -> str:
     return ""
 
 
-def _coerce_state(
-    ws: RunWorkspace,
-    run_result: Any,
-) -> tuple[DirectorLedState | None, str, str]:
-    raw_state: Any = None
-    state_ref = work_ref(ws.root, 'state/director_state.json')
-    if isinstance(run_result, DirectorLedRunResult):
-        raw_state = run_result.state
-        state_ref = str(run_result.state_ref or state_ref)
-    elif isinstance(run_result, DirectorLedState):
-        raw_state = run_result
-    elif isinstance(run_result, Mapping):
-        state_ref = str(run_result.get("state_ref") or state_ref)
-        raw_state = run_result.get("state", run_result)
-    elif run_result is not None and hasattr(run_result, "state"):
-        raw_state = getattr(run_result, "state")
-        state_ref = str(getattr(run_result, "state_ref", state_ref) or state_ref)
-
-    state_path_error = ""
-    if not _is_safe_ref(state_ref):
-        state_path_error = "Director-led state_ref is not a safe workspace path"
-        state_ref = work_ref(ws.root, 'state/director_state.json')
-
-    state: DirectorLedState | None = None
-    if isinstance(raw_state, DirectorLedState):
-        state = raw_state
-    elif isinstance(raw_state, Mapping):
-        try:
-            state = DirectorLedState.from_json(raw_state)
-        except (DirectorLedEngineError, TypeError, ValueError) as exc:
-            state_path_error = state_path_error or f"invalid Director-led state: {exc}"
-
-    state_path = _safe_workspace_path(ws.root, state_ref)
-    if state_path is None:
-        state_path_error = state_path_error or "Director-led state_ref is not a safe workspace path"
-        state_ref = work_ref(ws.root, 'state/director_state.json')
-        state_path = _safe_workspace_path(ws.root, state_ref)
-    if state_path is None:
-        return None, state_ref, state_path_error or "Director-led state path is invalid"
-    if state is None and state_path.is_file():
-        try:
-            payload = json.loads(state_path.read_text(encoding="utf-8"))
-            state = DirectorLedState.from_json(payload)
-        except (
-            DirectorLedEngineError,
-            OSError,
-            UnicodeError,
-            json.JSONDecodeError,
-            TypeError,
-            ValueError,
-        ) as exc:
-            state_path_error = state_path_error or f"cannot load Director-led state: {exc}"
-    elif state is not None:
-        # The engine normally persisted this already.  Tests and recovery
-        # adapters may provide the state object directly, in which case write
-        # the same explicit bytes so the manifest has a resolvable state file.
-        if state_path.is_file():
-            try:
-                committed = json.loads(state_path.read_text(encoding="utf-8"))
-                if committed != state.to_json():
-                    state_path_error = state_path_error or "committed Director-led state differs from run result"
-            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-                state_path_error = state_path_error or f"cannot read committed Director-led state: {exc}"
-        elif not state_path_error:
-            try:
-                _safe_write_json(
-                    ws,
-                    state_ref,
-                    state.to_json(),
-                    "Director-led state",
-                )
-            except Exception as exc:
-                state_path_error = (
-                    state_path_error
-                    or f"cannot persist Director-led state: {exc}"
-                )
-    if state is None and not state_path_error:
-        state_path_error = "Director-led finalization has no committed state"
-    return state, state_ref, state_path_error
+def _check_committed_state(ws: RunWorkspace, ref: str, state: DirectorLedState) -> str:
+    path = _safe_existing_path(ws.root, ref)
+    if path is None:
+        return "committed Director-led state is missing or unsafe"
+    try:
+        saved = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return f"cannot read committed Director-led state: {exc}"
+    if saved != state.to_json():
+        return "committed Director-led state differs from run result"
+    return ""
 
 
 def _load_target(root: Path) -> tuple[dict[str, Any], str]:
@@ -453,7 +372,7 @@ def _load_target(root: Path) -> tuple[dict[str, Any], str]:
 
 def _context_refs(
     ws: RunWorkspace,
-    state: DirectorLedState | None,
+    state: DirectorLedState,
     state_ref: str,
     target_available: bool,
 ) -> dict[str, Any]:
@@ -465,23 +384,22 @@ def _context_refs(
             refs[name] = ref
     if _existing_safe_ref(ws.root, state_ref):
         refs["director_state"] = state_ref
-    if state is not None:
-        for name, ref in (
-            ("director_decision", state.last_directive_ref),
-            ("director_assignment", state.last_assignment_ref),
-            ("specialist_result", state.last_specialist_result_ref),
-            ("director_verification", state.last_verification_ref),
-            ("director_diagnostics", state.diagnostics_ref),
-        ):
-            if _existing_safe_ref(ws.root, ref):
-                refs[name] = ref
-        completed = [
-            ref
-            for ref in state.completed_result_refs
-            if _existing_safe_ref(ws.root, ref)
-        ]
-        if completed:
-            refs["director_completed_results"] = completed
+    for name, ref in (
+        ("director_decision", state.last_directive_ref),
+        ("director_assignment", state.last_assignment_ref),
+        ("specialist_result", state.last_specialist_result_ref),
+        ("director_verification", state.last_verification_ref),
+        ("director_diagnostics", state.diagnostics_ref),
+    ):
+        if _existing_safe_ref(ws.root, ref):
+            refs[name] = ref
+    completed = [
+        ref
+        for ref in state.completed_result_refs
+        if _existing_safe_ref(ws.root, ref)
+    ]
+    if completed:
+        refs["director_completed_results"] = completed
     for name, ref in (
         ("execution_policy", work_ref(ws.root, 'state/research_execution_policy.json')),
         ("memory", "memory/README.md"),
@@ -572,9 +490,7 @@ def _resolve_chain(
     }
 
 
-def _last_candidate_state(ws: RunWorkspace, state: DirectorLedState | None) -> DirectorLedState | None:
-    if state is None:
-        return None
+def _last_candidate_state(ws: RunWorkspace, state: DirectorLedState) -> DirectorLedState | None:
     # PASS must retain its exact winning binding, never choose a later sibling.
     if state.terminal_result == "PASS":
         return state
@@ -601,28 +517,32 @@ def _last_candidate_state(ws: RunWorkspace, state: DirectorLedState | None) -> D
 def _publish_report(ws: RunWorkspace, report: dict[str, Any]) -> dict[str, Any]:
     """Publish terminal authority and retain cumulative verified findings."""
     refs = report["artifact_refs"]
+    report["publication_status"] = "REPORT_ONLY"
     if report["result"] == "PASS":
         try:
             kernel = json.loads(ws.path(refs["kernel"]).read_text(encoding="utf-8"))
-            publish_finding(
+            published_ref = publish_finding(
                 ws.root, source_ref=refs["proof"], verification_ref=refs["verification"],
                 round_index=report["director_state"]["round_index"],
                 publication=kernel["publication"],
             )
+            report["publication_status"] = "PUBLISHED" if published_ref else "NO_PUBLICATION"
         except Exception as exc:
+            report.update(publication_status="INCOMPLETE", run_status="completed_with_operational_error",
+                          operational_failure_owner="INTERFACE", operational_reason_code="finding_publication_incomplete")
             report["finding_publication_diagnostics"] = [str(exc)]
             logger.warning("Verified final finding publication failed", exc_info=True)
     refs["findings"] = [row["ref"] for row in finding_entries(ws.root)]
-    report["publication_status"] = "PUBLISHED" if report["result"] == "PASS" else "REPORT_ONLY"
-    FinalReportEnvelope.validate(report)
-
-    _safe_write_json(ws, work_ref(ws.root, 'final_report.json'), report, work_ref(ws.root, 'final_report.json'))
+    from pace.contracts.research.memory import enabled
+    if enabled(ws.root) and ws.path('memory/research_index.json').is_file():
+        refs['research_memory'] = 'memory/research_index.json'
+        refs['research_memory_navigation'] = 'memory/README.md'
     return report
 
 
 def _default_reason(
     *,
-    state: DirectorLedState | None,
+    state: DirectorLedState,
     terminal_result: str,
     chain_error: str,
     operational_error: bool,
@@ -631,8 +551,8 @@ def _default_reason(
         return "director_led_verified"
     if operational_error:
         return "director_led_finalization_failed"
-    phase = str(state.phase or "") if state is not None else ""
-    stop_reason = str(state.stop_reason or "") if state is not None else ""
+    phase = str(state.phase or "")
+    stop_reason = str(state.stop_reason or "")
     if phase == "STOPPED":
         return "director_stopped"
     if stop_reason == "PROOF_STATE_BUDGET_EXHAUSTED":
@@ -719,17 +639,6 @@ def _safe_write_json(
     normalized = str(ref or "").strip().replace("\\", "/")
     _safe_write_path(ws.root, normalized, label)
     return ws.write_json(normalized, payload)
-
-
-def _safe_write_text(
-    ws: RunWorkspace,
-    ref: str,
-    content: str,
-    label: str,
-) -> Path:
-    normalized = str(ref or "").strip().replace("\\", "/")
-    _safe_write_path(ws.root, normalized, label)
-    return ws.write_text_atomic(normalized, content)
 
 
 def _safe_write_path(root: Path, ref: str, label: str) -> Path:

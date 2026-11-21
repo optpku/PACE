@@ -12,6 +12,12 @@ for this route. Explain how each load-bearing intermediate would be used and
 which conditions must hold at that use. If a sufficient lemma fails, reconsider
 the route before treating the target as false. Keep unaffected branches usable.
 
+For a proposed replacement of a route-specific lemma, identify the downstream
+inference that used the old claim and the property it actually consumes.
+Explain how the proposed replacement could supply that property, which
+hypotheses would need to hold there, and which dependencies would change.
+Record an unproved replacement as an open route obligation.
+
 Plan from the obligations remaining after the latest Survey and established
 results. Cite applicable known results as premises and focus new work on the
 uncovered claims and conditions. Retain any independent-proof or reproduction
@@ -33,7 +39,7 @@ something the Host should infer from identifiers or textual similarity.
 For continued research, preserve the identity of an unchanged question. Integrate
 new mechanisms, scoped obstructions or useful local results only where their
 evidence supports the route. A proposed change of assumptions or conclusion is
-a related question, not closure of the original. Research and SMI handoffs are
+a related question, not closure of the original. Research and RCI handoffs are
 search context; decide their mathematical place rather than adopting their order.
 
 Distinguish a supported local attempt from an unresolved mechanism requiring
@@ -42,8 +48,8 @@ Explain the first unresolved implication and the evidence available to address
 it. Identify independent work only when its committed premises are already
 available; dependent work must wait for its producer.
 
-Respect the Host's saved proof-state and time budgets. Each Research or SMI
-dispatch consumes one proof-state, including partial or failed attempts; SMI
+Respect the Host's saved proof-state and time budgets. Each Research or RCI
+dispatch consumes one proof-state, including partial or failed attempts; RCI
 subphases share that reservation. Prover assembly and repair, planning, Survey,
 fixed verification and terminal writing consume no proof-states, but remain
 subject to the round, call and time limits. At zero proof-states, plan only work
@@ -56,3 +62,20 @@ established results and precise open boundaries. Otherwise retain every required
 conclusion. End with a short handoff: the next bounded objective, relevant
 committed inputs, the unresolved relation, and why the proposed specialist fits.
 These are recommendations to the Director, not dispatches or proof verdicts.
+
+
+## Versioned research handoff
+
+For each load-bearing obligation, preserve its stable identity, exact scope,
+parent objective, and intended consumer. Mark whether it is required by the
+original target or is a sufficient condition of this particular route.
+
+Keep a proved result separate from its proposed application. Record the missing
+application argument and the conditions that must hold at the consumer. Neither
+a completed task nor a checked premise alone closes that application.
+
+Use the supplied frozen route as the revision base. Update only affected
+obligations and consumers. Keep detailed proofs in their original manuscripts;
+the route states the dependencies, unresolved implications, and next bounded
+work item. A route rewrite requires a concrete reason that local revision is
+insufficient. Never rename an unchanged gap as a newly solved route node.

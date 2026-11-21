@@ -36,7 +36,7 @@ def test_project_catalog_exposes_both_skill_roots_to_prover_and_writer(tmp_path,
         paths = json.loads(instruction.split("Project Skill paths: ")[1])
         assert [Path(path) for path in paths] == [local, report]
         assert "from its own directory" in instruction
-    for role in ("problem_orientation_extractor", "DIRECTOR_LED_FRAMER", "SMI_BLIND_PROVER_PROBE",
+    for role in ("problem_orientation_extractor", "DIRECTOR_LED_FRAMER", "RCI_BLIND_PROVER_PROBE",
                  "math_verifier_kernel"):
         assert not project_skill_instruction(run, role=role)
     assert not project_skill_instruction(tmp_path / "another project", role="WHOLE_PROVER")

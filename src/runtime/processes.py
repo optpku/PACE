@@ -100,7 +100,9 @@ def tracked_model_process(workdir: Path, process: subprocess.Popen, *, kind="mod
     path = Path(workdir) / f"work/state/model_processes/{process.pid}.json"
     has_workspace = (Path(workdir) / "work/state/current_turn.json").is_file()
     identity = _process_identity(process.pid) if has_workspace else None
+    started_identity = None
     if identity and not identity["state"].startswith("Z"):
+        started_identity = identity["started_identity"]
         saved = {**identity, "kind": kind, "owner_pid": os.getpid(), "observed_at": utc_now()}
         _write_json_atomic(path, saved)
         append_event(workdir, "MODEL_PROCESS_STARTED" if kind == "model" else "HOST_TOOL_PROCESS_STARTED", **saved)
@@ -122,11 +124,11 @@ def tracked_model_process(workdir: Path, process: subprocess.Popen, *, kind="mod
         if scope is not None:
             with _calls_lock:
                 scope.processes.discard(process)
-        if path.is_file() and process.poll() is not None:
+        if started_identity is not None and process.poll() is not None and path.is_file():
             try:
                 path.unlink()
                 append_event(workdir, "MODEL_PROCESS_FINISHED" if kind == "model" else "HOST_TOOL_PROCESS_FINISHED",
-                             pid=process.pid, started_identity=identity["started_identity"], exit_code=process.returncode)
+                             pid=process.pid, started_identity=started_identity, exit_code=process.returncode)
             except OSError:
                 logger.warning("Could not finalize model process observation", exc_info=True)
 

@@ -16,6 +16,7 @@ from pace.runtime.output.workspace import (
 )
 from pace.runtime.prompt_composer import compose_prompt
 from pace.runtime.prompt_policy import PromptAssembly
+from pace.runtime.agent_environment import prepare_role_environment
 from pace.runtime.prompts import materialize_run_resources
 from pace.runtime.semantic import (
     begin_artifact_call,
@@ -111,6 +112,9 @@ class ResearchReportOutliner:
         output_ref = f"{attempt}/outline.md"
         task_id = f"reporter-artifacts-outline-{Path(attempt).name}"
         resources = state["resources_ref"]
+        prepare_role_environment(
+            self.workdir, "RESEARCH_REPORT_OUTLINE", resources=self.workdir / resources / "prompts",
+        )
         guides = (
             f"{resources}/prompts/roles/research_report_outline.md",
             f"{resources}/skills/research-report-composition/SKILL.md",
@@ -168,6 +172,7 @@ class ResearchReportOutliner:
                 input_refs=refs,
                 metadata={
                     "agent_id": "research_report_outline",
+                    "output_refs": [output_ref],
                     "inline_task": True,
                     "task_id": task_id,
                     "protected_input_refs": refs,
@@ -305,6 +310,9 @@ class ResearchReportWriter:
         output_ref = f"{attempt}/research_report.md"
         task_id = f"reporter-artifacts-report-{Path(attempt).name}"
         resources = state["resources_ref"]
+        prepare_role_environment(
+            self.workdir, "RESEARCH_REPORT_WRITER", resources=self.workdir / resources / "prompts",
+        )
         guides = (
             f"{resources}/prompts/roles/research_report_writer.md",
             f"{resources}/skills/research-report-composition/SKILL.md",
@@ -360,6 +368,7 @@ class ResearchReportWriter:
                 input_refs=refs,
                 metadata={
                     "agent_id": "research_report_writer",
+                    "output_refs": [output_ref],
                     "inline_task": True,
                     "task_id": task_id,
                     "protected_input_refs": refs,

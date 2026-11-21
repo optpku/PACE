@@ -60,56 +60,65 @@ def role_home(workdir: Path, role: str, *, environment_root: Path | None = None)
 
 
 def prepare_agent_environments(workdir: Path, *, mode: str | None) -> None:
-    """Write role instructions from the committed resource snapshot before calls."""
+    """Write ordinary role instructions from the committed turn resources."""
     root = Path(workdir).resolve()
-    resources = prompt_root(root)
+    for role in _ROLES:
+        prepare_role_environment(root, role, resources=prompt_root(root), mode=mode)
+
+
+def prepare_role_environment(
+    workdir: Path, role: str, *, resources: Path, mode: str | None = None,
+) -> None:
+    """Bind one role's instructions to the resource snapshot used by its task."""
+    root = Path(workdir).resolve()
+    role = role.upper()
+    template = _ROLES[role][1]
     guides = tuple(f"guides/{path.name}" for path in sorted((resources / "guides").glob("*.md")))
-    for role, (_, template) in _ROLES.items():
-        home = role_home(root, role)
-        if role == "WEB_REPORTER":
-            body = _WEB_REPORTER_INSTRUCTIONS
-        else:
-            if role == "WHOLE_PROVER" and mode == "proof":
-                template = "proof_prover"
-            refs = [f"roles/{template}.md"]
-            if role in _SPECIALISTS:
-                if mode == "proof" and role == "WHOLE_PROVER":
-                    refs.extend(guides)
-                elif not (mode == "proof" and role == "SURVEY"):
-                    refs.extend(("shared/transport.md", *guides,
-                                 "modes/RESEARCH_FRAMING.md" if role == "DIRECTOR_LED_FRAMER" else "modes/SPECIALIST.md",
-                                 "output/files.md", "output/findings.md", "output/memory.md"))
-                if role == "DIRECTOR_LED_FRAMER":
-                    refs.extend(("kernel/literal_target.md", "contracts/research.md", "kernel/artifact_writing.md"))
-            if role in {"PROOF_CONTRACT_AUDITOR", "MATH_VERIFIER_KERNEL"}:
-                refs.append("output/structured.md")
-            if role in {"FINDING_VERIFIER", "MATH_VERIFIER_KERNEL"}:
-                refs.append("output/finding_publication.md")
-            if role == "MATH_VERIFIER_KERNEL":
-                refs.extend(("output/findings.md", "output/memory.md"))
-            fragments = []
-            for ref in refs:
-                text = (resources / ref).read_text(encoding="utf-8")
-                # Existing placeholders become references, never stale task values.
-                text = _FIELDS.sub(
-                    lambda match: work_ref(root) if match[1] == "turn_dir" else f"TASK.{match[1]}",
-                    text,
-                )
-                fragments.append(f"<!-- Source: {ref} -->\n{text.strip()}")
-            body = "\n\n".join(fragments)
-        if role == "GLOBAL_RESEARCH_DIRECTOR":
-            body = append_skill_catalog(body, workdir=root)
-        instructions = (
-            f"# PACE role: {role}\n\n"
-            f"Problem directory: `{root}`\nCurrent turn: `{work_ref(root)}`\n\n"
-            "These are fixed role instructions. TASK.field references mean the value "
-            "provided under that exact field name in the current task prompt, not a "
-            "literal path or mathematical premise. Current inputs, target, feedback, "
-            "outputs and budgets are supplied separately on every call.\n\n" + body + "\n"
-        )
-        path = home / "AGENTS.md"
-        if not path.is_file() or path.read_text(encoding="utf-8") != instructions:
-            _write_text_atomic(path, instructions)
+    home = role_home(root, role)
+    if role == "WEB_REPORTER":
+        body = _WEB_REPORTER_INSTRUCTIONS
+    else:
+        if role == "WHOLE_PROVER" and mode == "proof":
+            template = "proof_prover"
+        refs = [f"roles/{template}.md"]
+        if role in _SPECIALISTS:
+            if mode == "proof" and role == "WHOLE_PROVER":
+                refs.extend(guides)
+            elif not (mode == "proof" and role == "SURVEY"):
+                refs.extend(("shared/transport.md", *guides,
+                             "modes/RESEARCH_FRAMING.md" if role == "DIRECTOR_LED_FRAMER" else "modes/SPECIALIST.md",
+                             "output/files.md", "output/findings.md", "output/memory.md"))
+            if role == "DIRECTOR_LED_FRAMER":
+                refs.extend(("kernel/literal_target.md", "contracts/research.md", "kernel/artifact_writing.md"))
+        if role in {"PROOF_CONTRACT_AUDITOR", "MATH_VERIFIER_KERNEL"}:
+            refs.append("output/structured.md")
+        if role in {"FINDING_VERIFIER", "MATH_VERIFIER_KERNEL"}:
+            refs.append("output/finding_publication.md")
+        if role == "MATH_VERIFIER_KERNEL":
+            refs.extend(("output/findings.md", "output/memory.md"))
+        fragments = []
+        for ref in refs:
+            text = (resources / ref).read_text(encoding="utf-8")
+            # Existing placeholders become references, never stale task values.
+            text = _FIELDS.sub(
+                lambda match: work_ref(root) if match[1] == "turn_dir" else f"TASK.{match[1]}",
+                text,
+            )
+            fragments.append(f"<!-- Source: {ref} -->\n{text.strip()}")
+        body = "\n\n".join(fragments)
+    if role == "GLOBAL_RESEARCH_DIRECTOR":
+        body = append_skill_catalog(body, workdir=root)
+    instructions = (
+        f"# PACE role: {role}\n\n"
+        f"Problem directory: `{root}`\nCurrent turn: `{work_ref(root)}`\n\n"
+        "These are fixed role instructions. TASK.field references mean the value "
+        "provided under that exact field name in the current task prompt, not a "
+        "literal path or mathematical premise. Current inputs, target, feedback, "
+        "outputs and budgets are supplied separately on every call.\n\n" + body + "\n"
+    )
+    path = home / "AGENTS.md"
+    if not path.is_file() or path.read_text(encoding="utf-8") != instructions:
+        _write_text_atomic(path, instructions)
 
 
 def director_thread(home: Path) -> str:

@@ -20,6 +20,13 @@ Neither mode permits changing the target or accepting a theorem on behalf of
 the proof verifier. Respect the Host's retrieval setting; when disabled, inspect
 supplied local material and report its limitations without external retrieval.
 
+In research mode, a source question may specify a mathematical effect needed
+at one use site. Search for arguments that produce that effect, including
+under different terminology or for different objects when the requested effect
+gives a concrete reason. For a useful source, locate the decisive step,
+identify what produces the effect there, and state the first condition or
+correspondence still missing in the current problem.
+
 For a source-only review or report, provide the requested evidence and comparison
 within the assigned scope. Explain which requested parts the acquired material
 covers and which remain limited by missing or uncertain sources. Do not turn an
@@ -34,7 +41,7 @@ roles begin with the remaining work while preserving their judgment and scope.
 
 No catalog IDs or per-source target bindings are required. Keep any bridge
 dependencies globally acyclic. In research mode, leave mechanism composition
-to SMI and work-item framing to Framer. In proof mode, hand the focused source
+to RCI and work-item framing to Framer. In proof mode, hand the focused source
 report directly to Prover. Complete the assigned source report in this call.
 
 Use external retrieval only when the Host's current retrieval settings enable

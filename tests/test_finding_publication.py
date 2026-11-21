@@ -106,6 +106,7 @@ def test_research_finalization_obeys_the_kernel_publication_action(tmp_path, act
               "mathematical_status": "VERIFIED", "director_state": {"round_index": 2},
               "artifact_refs": {"proof": proof, "verification": receipt, "kernel": kernel}}
     _publish_report(ws, report)
+    assert report["publication_status"] == ("NO_PUBLICATION" if action == "NONE" else "PUBLISHED")
     assert report["result"] == "PASS"
     assert "report" not in report["artifact_refs"]
     assert not (ws.root / "work/turn001/outcome.md").exists()
@@ -135,7 +136,15 @@ class ProofPublicationTransport:
         from pace.runtime.output.workspace import work_ref
 
         root = Path(workdir)
-        if call_name == "problem_orientation_extract":
+        if call_name.startswith('research_reporter_'):
+            request_ref = next(r for r in ledger_context['input_refs'] if r.endswith('/reporter_request.json'))
+            request = json.loads((root / request_ref).read_text())
+            original = request['original_refs'][0]
+            result = {'summary': 'The original argument is submitted for independent verification.',
+                'delta': {'schema_version': 'research_delta/v1', 'obligation_ids': request['obligation_ids'],
+                    'branch_id': request['branch_id'], 'change_ref': original, 'applications': [],
+                    'attempt': {'outcome': 'LOCAL_RESULT', 'obstacle_ref': '', 'reopen_condition_ref': ''}}}
+        elif call_name == "problem_orientation_extract":
             result = {"target_clauses": [{"start_line": 1, "end_line": 1}],
                       "recommended_mode": "proof", "mode_reason": "An exact equality."}
         elif call_name == "problem_research_decision":
@@ -160,6 +169,8 @@ class ProofPublicationTransport:
         output = Path(workdir) / re.search(r"## Deliverable\nWrite `([^`]+)`", prompt)[1]
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text("By integer addition, 2+2=4. Consequently, 4=2+2.\n")
+        from test_research_round_limit import write_delta
+        write_delta(Path(workdir), output)
         if call_name.startswith("director_led_survey_"):
             output.with_name("source_manifest.json").write_text('{"sources": []}')
         else:
@@ -178,6 +189,7 @@ def test_public_cli_keeps_publication_separate_from_pass_and_updates_on_continue
                      "--output", str(tmp_path), "--json"]) == 0
     root = tmp_path / "proof"
     report = json.loads((root / "work/turn001/final_report.json").read_text())
+    assert report["publication_status"] == ("NO_PUBLICATION" if action == "NONE" else "PUBLISHED")
     assert report["result"] == "PASS"
     assert len(report["artifact_refs"]["findings"]) == (1 if action == "CREATE" else 0)
     if action == "NONE":

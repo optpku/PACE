@@ -22,7 +22,7 @@ supplies no mathematical evidence about the conjecture.
 4. Choose a repair that changes the failed ingredient: derive a bridge, weaken
    an unnecessary intermediate claim, replace a mechanism, or develop a witness.
 5. Give the next role an exact obligation, needed files, and a falsification
-   check. Explain when deeper SMI work is warranted.
+   check. Explain when deeper RCI work is warranted.
 
 ## Output and handoff
 

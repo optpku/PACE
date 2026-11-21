@@ -63,14 +63,16 @@ def run_session(root: Path, *, profile=False, config=None):
     _ACTIVE[str(root)] = (started, sum(x.get("elapsed_seconds", 0) for x in rows[:-1]))
     try:
         yield
-        if model_failure(root) is not None:
-            raise model_failure(root)
+        failure = model_failure(root)
+        if failure is not None:
+            raise failure
         row["status"] = "completed"
     except BaseException:
         row["status"] = "interrupted"
-        if model_failure(root) is not None:
-            row["model_failure"] = model_failure(root).to_json()
-            raise model_failure(root) from None
+        failure = model_failure(root)
+        if failure is not None:
+            row["model_failure"] = failure.to_json()
+            raise failure from None
         raise
     finally:
         for name, key in (("state/research_execution_policy.json", "policy"),
@@ -85,6 +87,14 @@ def run_session(root: Path, *, profile=False, config=None):
         _write_json_atomic(ref, rows)
         _ACTIVE.pop(str(root), None)
         _MODEL_FAILURES.pop(str(root), None)
+        # Derived accounting must include the just-closed session, without
+        # replacing a mathematical result if an optional index is unavailable.
+        from pace.runtime.output.memory import update_research_costs
+        try:
+            update_research_costs(root)
+        except (OSError, ValueError, KeyError):
+            import logging
+            logging.getLogger(__name__).warning('Research cost index refresh failed', exc_info=True)
 
 
 def budget_exhausted(root: Path) -> str:

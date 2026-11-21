@@ -140,8 +140,8 @@ def validate_resource_snapshot(destination: Path, *, resource_variant: str) -> N
                 "prompts/roles/global_research_director.md", "templates/neurips2026/neurips_2026.sty",
                 "skills/direct-proving-and-gap-closure/SKILL.md"}
     if manifest.get("skill_layout") == "shared/v1":
-        required.update({"skills/README.md", "skills/smi-investigation/SKILL.md",
-                         "skills/smi-investigation/references/smi_search_core.md"})
+        required.update({"skills/README.md", "skills/rci-investigation/SKILL.md",
+                         "skills/rci-investigation/references/rci_search_core.md"})
     if (manifest.get("schema_version") != "resource_snapshot/v1"
             or manifest.get("resource_variant") != resource_variant
             or not isinstance(manifest.get("files"), list)

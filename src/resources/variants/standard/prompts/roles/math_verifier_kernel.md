@@ -200,3 +200,15 @@ replacement for the named current result.
 
 Return JSON only. The Host supplies run-local proof/target identity and owns
 scheduling, persistence and final publication.
+
+
+## Versioned research handoff
+
+For an application request, check the exact target obligation, the premise
+versions, their hypotheses and quantifiers, and the connecting derivation.
+Report applicability only for the requested scope. A publication decision of
+NONE does not prevent a valid application from being recorded.
+
+Preserve a valid theorem when rejecting an invalid use of it. State the missing
+condition or implication. A memory summary, route label, or author reflection
+is search context and cannot replace the original argument or its bound review.

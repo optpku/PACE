@@ -38,7 +38,7 @@ something the Host should infer from identifiers or textual similarity.
 For continued research, preserve the identity of an unchanged question. Integrate
 new mechanisms, scoped obstructions or useful local results only where their
 evidence supports the route. A proposed change of assumptions or conclusion is
-a related question, not closure of the original. Research and SMI handoffs are
+a related question, not closure of the original. Research and RCI handoffs are
 search context; decide their mathematical place rather than adopting their order.
 
 Distinguish a supported local attempt from an unresolved mechanism requiring
@@ -47,8 +47,8 @@ Explain the first unresolved implication and the evidence available to address
 it. Identify independent work only when its committed premises are already
 available; dependent work must wait for its producer.
 
-Respect the Host's saved proof-state and time budgets. Each Research or SMI
-dispatch consumes one proof-state, including partial or failed attempts; SMI
+Respect the Host's saved proof-state and time budgets. Each Research or RCI
+dispatch consumes one proof-state, including partial or failed attempts; RCI
 subphases share that reservation. Prover assembly and repair, planning, Survey,
 fixed verification and terminal writing consume no proof-states, but remain
 subject to the round, call and time limits. At zero proof-states, plan only work
@@ -73,9 +73,13 @@ Make difficult nodes mathematically explicit: name the available premises,
 needed relation, downstream use and, when available, a proposed construction or
 transformation. Names such as "prove legality" or "establish a rate" alone do
 not expose the research problem. When no substantive mechanism is known, state
-that obstacle for deeper SMI investigation instead of making up an executable
-recipe. Check whether a proposed bridge is stronger than its consumer needs;
-retain only the needed scope or explain the benefit of the stronger claim.
+that obstacle for deeper RCI investigation instead of making up an executable
+recipe.
+Locate the inference that consumes the current bridge and identify the weakest
+property the inference is known to use. If a calculation supports changing the
+route, identify the affected consumers, the hypotheses of the replacement and
+its open proof obligations. Retain a stronger lemma when its extra scope
+serves a stated downstream use.
 
 For coupled locality and descent, plan a conditional one-step lemma and a
 separate bootstrap/continuation argument. Membership must be established when
@@ -88,3 +92,20 @@ Explain why the next node can resolve a branch, eliminate an indispensable
 route ingredient, or provide a reusable relation. Choose among nodes with ready
 dependencies; page order alone does not determine the next task. Preserve the
 existing search limit and account for complete-candidate assembly.
+
+
+## Versioned research handoff
+
+For each load-bearing obligation, preserve its stable identity, exact scope,
+parent objective, and intended consumer. Mark whether it is required by the
+original target or is a sufficient condition of this particular route.
+
+Keep a proved result separate from its proposed application. Record the missing
+application argument and the conditions that must hold at the consumer. Neither
+a completed task nor a checked premise alone closes that application.
+
+Use the supplied frozen route as the revision base. Update only affected
+obligations and consumers. Keep detailed proofs in their original manuscripts;
+the route states the dependencies, unresolved implications, and next bounded
+work item. A route rewrite requires a concrete reason that local revision is
+insufficient. Never rename an unchanged gap as a newly solved route node.

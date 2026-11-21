@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-_OWNED_LOCKS = ContextVar("pace_owned_execution_locks", default=())
+_OWNED_LOCKS: ContextVar[tuple[tuple[int, int, str], ...]] = ContextVar("pace_owned_execution_locks", default=())
 _EXECUTION_FDS = {}
 _EXECUTION_FDS_MUTEX = threading.Lock()
 

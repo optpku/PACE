@@ -48,7 +48,7 @@ def initialize_proof_state(ws, *, max_loops, resource_variant):
 
 
 def run_proof(pipeline, ws, problem):
-    """Resume only the committed phase; no Director or SMI is constructed."""
+    """Resume only the committed phase; no Director or RCI is constructed."""
     ref = ws.work_ref("state/proof_state.json")
     state = json.loads(ws.path(ref).read_text())
 
@@ -104,7 +104,7 @@ def run_proof(pipeline, ws, problem):
                 output,
                 index,
                 f"Proof loop {index}/{state['max_loops']}. Write one complete proof of the same target. "
-                "Use the initial Survey and retrieve additional sources when needed. On later loops revise the current proof "
+                "Use the initial Survey's acquired sources; external retrieval is unavailable to Prover. On later loops revise the current proof "
                 "using its verifier feedback; preserve sound arguments and repair the actual gap. "
                 "Do not produce independent alternatives or a candidate pool.",
                 target_id,
@@ -165,6 +165,8 @@ def _run_task(pipeline, ws, state, agent, output, index, brief, target_id):
                 raise ValueError(f"committed {agent} deliverable is missing: {output}")
             if agent == "survey":
                 _complete_survey_sources(ws, output, result_ref, result)
+            else:
+                _report_progress(pipeline, ws, result_ref)
             state["completed_refs"] = list(
                 dict.fromkeys(
                     (
@@ -175,12 +177,14 @@ def _run_task(pipeline, ws, state, agent, output, index, brief, target_id):
                 )
             )
             ws.write_json(ws.work_ref("state/proof_state.json"), state)
+            from pace.runtime.output.memory import commit_research_memory
+            commit_research_memory(ws.root, (result_ref,))
             publish_progress(ws.root, task_id=task_id, stage=agent, status='completed', round_index=index)
             return
     directory = ws.path(output).parent
     directory.mkdir(parents=True, exist_ok=True)
     # Incomplete files are useful drafts, never committed candidates.
-    if ws.path(output).exists():
+    if ws.path(output).exists() and not (directory / 'author_delivery.json').is_file():
         archive = directory / "interrupted_attempts"
         archive.mkdir(exist_ok=True)
         saved = archive / f"partial-{len(list(archive.iterdir())) + 1:04d}.md"
@@ -236,6 +240,26 @@ def _run_task(pipeline, ws, state, agent, output, index, brief, target_id):
             "output_ref": output,
         },
     )
+    from pace.contracts.research.memory import reporter_owned
+    if agent == 'prover' and reporter_owned(ws.root):
+        from pace.contracts.research.director_protocol import DirectorAction, DirectorDecision
+        from pace.runtime.output.memory import initialize_research_memory
+        from pace.runtime.research_context import freeze_context
+        initialize_research_memory(ws.root)
+        assignment = str(Path(output).parent / 'assignment/task.json')
+        decision = DirectorDecision(DirectorAction.DISPATCH, 'prover', brief, tuple(refs),
+                                    'Fixed proof loop', obligation_ids=('target',), branch_id='b-target',
+                                    next_step_kind='CONTINUE')
+        frozen = freeze_context(ws.root, assignment, decision, refs)
+        ws.write_json(assignment, {'decision': decision.to_json(), 'output_ref': output, 'mode': 'proof'})
+        refs = tuple(frozen['required_refs'])
+        for row in frozen['bindings']:
+            prompt = prompt.replace('`' + row['source_ref'] + '`', '`' + row['ref'] + '`')
+        assembly_ref = str(Path(output).parent / 'prompt_assembly.json')
+        assembly = json.loads(ws.path(assembly_ref).read_text())
+        ws.write_json(assembly_ref, {**assembly, 'input_refs': refs})
+        prompt += ('\nDo not write research_delta.json or a separate progress note. '
+                   'Reporter summarizes this proof after delivery; independent verification follows.\n')
     ws.write_text_atomic(str(Path(output).parent / "final_prompt.md"), prompt)
     publish_progress(ws.root, task_id=task_id, stage=agent, status='started', round_index=index)
     result = run_default_specialist(
@@ -256,12 +280,22 @@ def _run_task(pipeline, ws, state, agent, output, index, brief, target_id):
         )
     if agent == "survey":
         _complete_survey_sources(ws, output, result_ref, result)
+    else:
+        _report_progress(pipeline, ws, result_ref)
     state["completed_refs"] = list(
         dict.fromkeys(
             (*state["completed_refs"], output, *result.get("published_refs", ()))
         )
     )
+    ws.write_json(ws.work_ref('state/proof_state.json'), state)
+    from pace.runtime.output.memory import commit_research_memory
+    commit_research_memory(ws.root, (result_ref,))
     publish_progress(ws.root, task_id=task_id, stage=agent, status='completed', round_index=index)
+
+
+def _report_progress(pipeline, ws, result_ref):
+    from pace.reporting.research_progress import run_research_reporter
+    run_research_reporter(llm=pipeline._llm(), workdir=ws.root, result_ref=result_ref)
 
 
 def _complete_survey_sources(ws, output, result_ref, result):
@@ -278,6 +312,10 @@ def _complete_survey_sources(ws, output, result_ref, result):
 def _finish(pipeline, ws, state, target_id):
     from pace.orchestrator.recovery import _project_terminal_result
     from pace.runtime.output.results import finding_entries, publish_finding
+    from pace.runtime.output.memory import refresh_memory_index, update_research_costs
+
+    update_research_costs(ws.root)
+    refresh_memory_index(ws.root)
 
     report_ref = ws.work_ref("final_report.json")
     policy = json.loads(ws.path(ws.work_ref("state/research_execution_policy.json")).read_text())
@@ -317,17 +355,19 @@ def _finish(pipeline, ws, state, target_id):
             "artifact_refs": {
                 **resolved["artifact_refs"],
                 "target_contract": ws.work_ref("input/target_contract.json"),
+                **({'research_memory': 'memory/research_index.json', 'research_memory_navigation': 'memory/README.md'}
+                   if ws.path('memory/research_index.json').is_file() else {}),
             },
             "publication_status": "NO_PUBLICATION",
         }
         if passed:
             kernel = json.loads(ws.path(report["artifact_refs"]["kernel"]).read_text())
-            publish_finding(
+            published_ref = publish_finding(
                 ws.root, source_ref=report["artifact_refs"]["proof"],
                 verification_ref=report["artifact_refs"]["verification"],
                 round_index=state["loop_index"], publication=kernel["publication"],
             )
-            report["publication_status"] = "PUBLISHED"
+            report["publication_status"] = "PUBLISHED" if published_ref else "NO_PUBLICATION"
         report["artifact_refs"]["findings"] = [row["ref"] for row in finding_entries(ws.root)]
         ws.write_json(report_ref, report)
     report = json.loads(ws.path(report_ref).read_text())

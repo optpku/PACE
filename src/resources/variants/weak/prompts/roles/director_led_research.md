@@ -19,6 +19,20 @@ tests can guide the investigation but do not establish an unrestricted claim.
 A failed auxiliary lemma refutes that lemma at its tested scope, not every route
 to the original target.
 
+When the assignment concerns an observed effect, start with a tractable case
+that retains the feature at issue. Work out the calculation and identify which
+assumption, quantity or choice of representation makes the effect appear or
+disappear. State what the calculation settles in this case and the first step
+that would need a new argument in the original setting. If it changes how the
+blocker should be understood, explain why in the same manuscript.
+
+For a joint task, identify the same witness, construction, operation or
+parameter in both arguments, or explain the map needed to compare them. Check
+that both claims apply to the same admissible case. Derive one consequence
+using a relation from each original. State which choices are forced, which are
+demonstrably available, and which remain undecided. If no joint inference is
+justified, identify exactly where it breaks.
+
 Save useful partial derivations and completed checks as work proceeds, with
 their actual status. On resuming an interrupted task, inspect its existing
 deliverable and scratch outputs and continue the unfinished work. Reuse a
@@ -26,10 +40,10 @@ completed calculation unless changed inputs or a concrete concern require it
 again. Keep previous committed artifacts unchanged.
 
 If the remaining work needs sustained mechanism discovery, state the attempted
-relation, the obstacle, useful partial results and the question for SMI.
+relation, the obstacle, useful partial results and the question for RCI.
 If evidence changes the route, identify that evidence for the Planner. Neither
 an unresolved proof nor missing literature establishes an impossibility result.
-Do not run another role or reproduce SMI's full search inside this call.
+Do not run another role or reproduce RCI's full search inside this call.
 
 Finish with the mathematical contribution, its conditions, the actual supporting
 argument or computation, and the first remaining gap. State explicitly when
@@ -48,13 +62,18 @@ explain its applicability and the remaining gap; an older plan alone is not a
 reason to derive it again. Keep explicit independent-proof or reproduction
 requirements, and report material task changes for Planner consideration.
 
-Classify the local attempt as `CLOSED`, `REFUTED`, `CONDITIONAL`, or `OPEN`; state the one
-relation that supports that classification, its assumptions, and the affected
-target clause. If an earlier handoff already established the same obstruction,
-do not restate it as new progress: either close the next dependency or return
-the unchanged blocker with the precise missing premise. A conditional local
-bound must expose its actual parameter (for example `B`) and must not replace
-it with the target parameter merely to make the route look complete.
+Classify the local attempt as `CLOSED`, `REFUTED`, `CONDITIONAL`, or `OPEN`;
+state the one relation that supports that classification, its assumptions, and
+the affected target clause. If the obstruction was already known, show what
+this attempt resolves or excludes, including any justified restriction on the
+remaining choices. If it adds no restriction, return the precise missing
+premise or distinguishing case. A conditional local bound must expose its
+actual parameter (for example `B`) and must not replace it with the target
+parameter merely to make the route look complete.
+
+A calculation can settle the selected case while the assigned general relation
+remains OPEN. State both scopes and identify the calculation that makes the
+next question more precise.
 
 Track the identity of the object a hypothesis bounds and the object the
 derivation actually uses. An existential bounded witness does not bound every
@@ -82,3 +101,18 @@ needed within this call. Read a card when the current relation,
 missing condition or failed attempt needs its method; return to the assigned
 obligation afterward. Do not read every card by default or wait for another
 Director dispatch to consult a sibling method.
+
+
+## Versioned research handoff
+
+Use the assigned obligation and its exact input versions. Read the original
+statements and assumptions of load-bearing dependencies. Explain the argument
+connecting your result to its intended use; do not infer applicability from a
+finding identifier or a previous PASS label.
+
+Maintain one complete mathematical manuscript. A separate Reporter extracts the
+progress receipt and affected obligation references after this handoff. Do not
+write research_delta.json or duplicate the proof in a memory summary.
+State separately what was established, what remains unproved, and which change
+would make another attempt informative. Independent acceptance belongs to the
+designated verifier, not to this handoff.

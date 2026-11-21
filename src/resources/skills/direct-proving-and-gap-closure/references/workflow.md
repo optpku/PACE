@@ -78,7 +78,7 @@
 - When the missing bridge requires deeper conjecture formation, exploration of
   substantial alternative mechanisms or a nontrivial new construction, report
   the actual attempted relations, their failure and the open research question
-  to Director, explaining why SMI would be useful. An exact statement can still
+  to Director, explaining why RCI would be useful. An exact statement can still
   need this deeper research.
 - Research must not repair the whole route, change the Plan, or decide the theorem verdict.
 

@@ -13,11 +13,11 @@ from pace.orchestrator.recovery import RecoveryError, resume_existing_run
 from pace.reporting.postmortem import postmortem_rescan
 from pace.reporting.research_report import RESEARCH_OUTLINE_REF
 from pace.reporting.theory_paper import PAPER_OUTLINE_REF, paper_artifacts, paper_build_status
-from pace.reporting.writing import active_writing_request
+from pace.reporting.writing import pending_writing_request
 from pace.runtime.output.workspace import RunWorkspace, list_problems
 
 from .pipeline import ProofPipeline
-from .pipeline_types import DEFAULT_CALL_TIMEOUT_SECONDS, PipelineConfig
+from pace.pipeline_types import DEFAULT_CALL_TIMEOUT_SECONDS, PipelineConfig
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -82,7 +82,7 @@ def _main(argv: list[str] | None = None) -> int:
     resume_parser.add_argument("--finalize", action="store_true",
                                help="finish research at a saved Director boundary and deliver current results")
     add_execution_args(resume_parser)
-    resume_parser.set_defaults(model=None, reasoning_effort=None, web_search_mode=None)
+    resume_parser.set_defaults(provider=None, model=None, reasoning_effort=None, web_search_mode=None)
 
     outline_parser = sub.add_parser("outline", help="generate a complete research report outline from an existing run")
     outline_parser.add_argument("--run-dir", required=True, type=Path)
@@ -172,6 +172,8 @@ def _main(argv: list[str] | None = None) -> int:
             problem, run_dir=run_dir, writing_action=args.command,
             outline_ref=getattr(args, "outline", ""), additional_requirements=requirements,
         )
+        if not isinstance(output, Path):
+            raise TypeError(f"{args.command} must return a writing artifact path")
         print_writing_result(output, run_dir=run_dir, action=args.command, machine=args.json)
         return 0
     if args.command == "resume":
@@ -180,10 +182,18 @@ def _main(argv: list[str] | None = None) -> int:
         try:
             ws = RunWorkspace.open_existing(run_dir)
             with ws.execution_lock():
-                writing = active_writing_request(ws.root)
-                args.model = args.model or "gpt-5.6-sol"
-                args.reasoning_effort = args.reasoning_effort or ("high" if writing else "xhigh")
-                args.web_search_mode = args.web_search_mode or "on"
+                writing = pending_writing_request(ws.root)
+                saved_path = ws.path(ws.work_ref('config.json'))
+                saved = json.loads(saved_path.read_text()) if saved_path.is_file() else {}
+                sessions_path = ws.path(ws.work_ref('state/sessions.json'))
+                if sessions_path.is_file():
+                    sessions = json.loads(sessions_path.read_text())
+                    saved = next((row['effective_config'] for row in reversed(sessions)
+                                  if row.get('effective_config')), saved)
+                args.provider = args.provider or saved.get('provider', 'codex')
+                args.model = args.model or saved.get('model', 'gpt-5.6-sol')
+                args.reasoning_effort = args.reasoning_effort or saved.get('reasoning_effort', 'high' if writing else 'xhigh')
+                args.web_search_mode = args.web_search_mode or saved.get('web_search_mode', 'on')
                 pipeline = ProofPipeline(make_config(args, output_root=run_dir.parent))
 
                 def callback(request):
@@ -270,7 +280,7 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
 def add_execution_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--json", action="store_true", help="emit started and completed JSONL records")
     parser.add_argument("--profile", action="store_true", help="include per-step timing events in work/<turn>/events.jsonl")
-    parser.add_argument("--provider", choices=["codex", "newapi", "llmmelon"], default="codex")
+    parser.add_argument("--provider", choices=["codex", "newapi", "llmmelon", "chat-completions"], default="codex")
     parser.add_argument("--model", default="gpt-5.6-sol")
     parser.add_argument(
         "--reasoning-effort", default="xhigh",

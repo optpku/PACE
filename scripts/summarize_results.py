@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 
 from pace.runtime.output.workspace import list_problems
-from pace.reporting.writing import active_writing_request, writing_artifacts, writing_complete
+from pace.reporting.writing import active_writing_request, writing_artifacts, pending_writing_request
 
 
 def read_optional(path: Path) -> dict | None:
@@ -41,7 +41,7 @@ def collect_results(runs_dir: Path) -> list[dict]:
             "transport_attempt_count": calls.get("transport_attempt_count") if calls is not None else None,
             "final_report_ref": final_ref if report is not None else None,
             "writing_action": active_writing_request(root).get("action"),
-            "writing_complete": writing_complete(root),
+            "writing_complete": not pending_writing_request(root),
             "artifact_refs": artifacts,
         })
     return rows

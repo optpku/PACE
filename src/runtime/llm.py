@@ -18,7 +18,6 @@ from typing import Any, Protocol, TextIO, Union
 
 from pace.runtime.output.calls import (
     attempt_directory,
-    begin_call,
     call_directory,
     finish_call,
 )
@@ -212,8 +211,6 @@ class CodexCallError(RuntimeError):
 
 
 class LLM(Protocol):
-    def complete(self, prompt: str, *, workdir: Path, call_name: str) -> str: ...
-
     def complete_unstructured_result(
         self,
         prompt: str,
@@ -242,67 +239,6 @@ class CodexLLM:
     web_search: bool = False
     timeout_seconds: int | None = None
     max_retries: int = MAX_TRANSPORT_RETRIES
-
-    def complete(self, prompt: str, *, workdir: Path, call_name: str) -> str:
-        root = Path(workdir)
-        initialize_events(root)
-        call_id = "SC-UNSTRUCTURED-" + uuid.uuid4().hex
-        call_ref = begin_call(
-            root,
-            call_id=call_id,
-            role="unstructured_model_call",
-            stage=call_name,
-            prompt=prompt,
-        )
-        append_event(
-            root,
-            "SEMANTIC_CALL_STARTED",
-            call_id=call_id,
-            call_name=call_name,
-            role="unstructured_model_call",
-            stage=call_name,
-        )
-        result = self.complete_unstructured_result(
-            prompt,
-            workdir=root,
-            call_name=call_name,
-            ledger_context={
-                "call_id": call_id,
-                "call_ref": call_ref,
-                "role": "unstructured_model_call",
-                "stage": call_name,
-                "input_refs": (),
-            },
-        )
-        append_event(
-            root,
-            "SEMANTIC_CALL_FAILED"
-            if isinstance(result, TransportFailure)
-            else "SEMANTIC_CALL_SUCCEEDED",
-            call_id=call_id,
-            call_name=call_name,
-            role="unstructured_model_call",
-            stage=call_name,
-            invocation_id=result.invocation_id,
-            failure_id=str(getattr(result, "failure_id", "") or ""),
-            root_failure_id=str(getattr(result, "root_failure_id", "") or ""),
-            error_code=str(getattr(result, "error_code", "") or ""),
-            retry_class=str(getattr(result, "retry_class", "NONE") or "NONE"),
-            suppressed=bool(getattr(result, "suppressed", False)),
-        )
-        finish_call(
-            root,
-            call_ref,
-            status="INTERFACE_FAILED"
-            if isinstance(result, TransportFailure)
-            else "SUCCEEDED",
-            response_ref=(result.artifact_dir / "response.txt")
-            .relative_to(root)
-            .as_posix(),
-            invocation_ids=(result.invocation_id,),
-        )
-        write_call_summary(root)
-        return self._unwrap(result, workdir=workdir)
 
     def complete_unstructured_result(
         self,
@@ -439,6 +375,9 @@ class CodexLLM:
                             if agent_home is None or not is_prompt_resource(resolved / ref, workdir=resolved)),
                 output_schema_file=schema_file,
                 role=role,
+                read_scope=str(ledger_context.get("read_scope") or ""),
+                output_refs=ledger_context.get("output_refs", ()),
+                output_dirs=ledger_context.get("output_dirs", ()),
             )
         from pace.runtime.prompts import project_skill_instruction
 
@@ -480,7 +419,9 @@ class CodexLLM:
         protection = protected_inputs(
             resolved,
             (
+                prompt_file.relative_to(resolved).as_posix(),
                 *ledger_context.get("input_refs", ()),
+                *ledger_context.get("archive_refs", ()),
                 *ledger_context.get("protected_input_refs", ()),
             ),
             invocation_dir,
@@ -590,26 +531,24 @@ class CodexLLM:
                             if agent_home is not None:
                                 record_native_session(home=agent_home, role=role, stdout_path=stdout_path,
                                                       record_path=resolved / record_ref)
-                            if (
-                                getattr(self, "profile", False)
-                                or os.environ.get("PACE_PROFILE") == "1"
-                            ):
-                                try:
-                                    append_event(
-                                        resolved,
-                                        "PROFILE_SPAN",
-                                        name=f"transport.{role}",
-                                        elapsed_seconds=time.monotonic() - started,
-                                        metadata={
-                                            "call_id": call_id,
-                                            "attempt_index": attempt,
-                                        },
-                                    )
-                                except Exception:
-                                    logger.warning(
-                                        "Could not persist transport timing",
-                                        exc_info=True,
-                                    )
+                            # Always record a transport's actual active interval. Higher-level
+                            # profiling remains optional and must not be added to this cost.
+                            try:
+                                append_event(
+                                    resolved,
+                                    "TRANSPORT_TIMING",
+                                    name=f"transport.{role}",
+                                    elapsed_seconds=time.monotonic() - started,
+                                    metadata={
+                                        "call_id": call_id,
+                                        "attempt_index": attempt,
+                                    },
+                                )
+                            except Exception:
+                                logger.warning(
+                                    "Could not persist transport timing",
+                                    exc_info=True,
+                                )
             except (OSError, subprocess.TimeoutExpired, InputModifiedError) as exc:
                 missing = isinstance(exc, FileNotFoundError)
                 timed_out = isinstance(exc, subprocess.TimeoutExpired)
@@ -772,13 +711,6 @@ class CodexLLM:
             return result
         raise AssertionError("transport retry loop terminated without a result")
 
-    @staticmethod
-    def _unwrap(result: TransportResult, *, workdir: Path) -> str:
-        if isinstance(result, TransportSuccess):
-            return result.text
-        raise CodexCallError.from_result(result, workdir=workdir)
-
-
 def _record_call_interruption(
     root: Path,
     context: dict[str, Any],
@@ -891,6 +823,16 @@ def build_llm(
     web_search: bool = False,
     timeout_seconds: int | None = None,
 ) -> LLM:
+    if provider == "chat-completions":
+        from .chat_api import ChatCompletionsLLM
+        base_url = os.environ.get("PACE_API_BASE_URL", "").strip()
+        if not base_url or not os.environ.get("PACE_API_KEY"):
+            raise ValueError("chat-completions requires PACE_API_BASE_URL and PACE_API_KEY")
+        max_retries = int(os.environ.get("PACE_CHAT_MAX_RETRIES", ChatCompletionsLLM.max_retries))
+        if not 0 <= max_retries <= 20:
+            raise ValueError("PACE_CHAT_MAX_RETRIES must be between 0 and 20")
+        return ChatCompletionsLLM(model=model, reasoning_effort=reasoning_effort, web_search=web_search,
+                                  timeout_seconds=timeout_seconds, base_url=base_url, max_retries=max_retries)
     if provider in {"newapi", "llmmelon"} and not (
         os.getenv("NL_PROOF_CODEX_AUTH_MODE") == "api_key"
         and os.getenv("NL_PROOF_CODEX_BASE_URL")
@@ -930,7 +872,9 @@ def reduce_codex_event_timeline(text: str) -> CodexEventTimeline:
         event_type = str(row.get("type") or "")
         if event_type in {"turn.completed", "thread.completed", "response.completed"}:
             terminal_events.append((index, "SUCCESS", row))
-            raw_usage = row.get("usage") if isinstance(row.get("usage"), dict) else {}
+            raw_usage = row.get("usage")
+            if not isinstance(raw_usage, dict):
+                raw_usage = {}
             usage["input_tokens"] += int(raw_usage.get("input_tokens") or 0)
             usage["output_tokens"] += int(raw_usage.get("output_tokens") or 0)
         elif event_type in {"turn.failed", "thread.failed", "response.failed"}:
@@ -1181,8 +1125,8 @@ def decide_transport_outcome(
 def _assistant_message_from_event(row: dict[str, Any]) -> str | None:
     event_type = str(row.get("type") or "")
     if event_type == "item.completed":
-        item = row.get("item") if isinstance(row.get("item"), dict) else {}
-        if str(item.get("type") or "") in {"agent_message", "assistant_message"}:
+        item = row.get("item")
+        if isinstance(item, dict) and str(item.get("type") or "") in {"agent_message", "assistant_message"}:
             return str(item.get("text") or item.get("content") or "").strip()
     if event_type in {"agent_message", "assistant_message", "message.completed"}:
         role = str(row.get("role") or "assistant")
@@ -1531,6 +1475,9 @@ def _build_file_driven_cli_instruction(
     input_refs: Iterable[str] = (),
     output_schema_file: Path | None = None,
     role: str = "",
+    read_scope: str = "",
+    output_refs: Iterable[str] = (),
+    output_dirs: Iterable[str] = (),
 ) -> str:
     suggested = tuple(dict.fromkeys(str(ref) for ref in input_refs if str(ref).strip()))
     turn_dir = work_ref(workdir)
@@ -1539,9 +1486,9 @@ def _build_file_driven_cli_instruction(
     # workspace navigation below would invite reading reports and prior proofs,
     # even though the phase prompt explicitly excludes that evidence.
     if role.upper() in {
-        "SMI_BLIND_PROVER_PROBE",
-        "SMI_REFUTE_PROVER_PROBE",
-        "SMI_FRONTIER_REFUTE_PROBE",
+        "RCI_BLIND_PROVER_PROBE",
+        "RCI_REFUTE_PROVER_PROBE",
+        "RCI_FRONTIER_REFUTE_PROBE",
     }:
         base += (
             f"Read `{prompt_file}` for your statement-only probe task. "
@@ -1556,6 +1503,14 @@ def _build_file_driven_cli_instruction(
             "If it is incomplete, report the defect under the phase protocol instead of "
             "recovering context from other files. Write only the artifacts requested by the "
             "phase prompt; you may reread files you create in this invocation to check them.\n\n"
+        )
+    elif read_scope == "declared":
+        base += (
+            f"Read `{prompt_file}` for this bounded correction task. Read only that prompt, "
+            "the output schema if supplied, and the explicit input/output files below. "
+            "Do not browse the workspace, memory, source archives or prior task prompts. "
+            "Input manuscripts are read-only; do not revise mathematical content, plans or verdicts. "
+            "If a mathematical revision is necessary, report it instead of performing it.\n\n"
         )
     else:
         base += (
@@ -1573,6 +1528,12 @@ def _build_file_driven_cli_instruction(
             "Write task artifacts to the assigned output location in the current turn and preserve "
             "earlier turns. Keep full mathematical content in the assigned deliverable.\n\n"
         )
+    outputs = tuple(str(ref) for ref in output_refs if ref)
+    directories = tuple(str(ref) for ref in output_dirs if ref)
+    if outputs or directories or read_scope == "declared":
+        base += ("Writable files: " + json.dumps(outputs, ensure_ascii=False)
+                 + ". Writable directories: " + json.dumps(directories, ensure_ascii=False)
+                 + ". All other task files are read-only.\n\n")
     if suggested:
         base += (
             "Suggested reading paths:\n"

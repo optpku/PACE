@@ -15,11 +15,13 @@ from typing import Any
 
 from pace.contracts.research.director_protocol import (
     DIRECTOR_PROTOCOL_SCHEMA_VERSION,
+    DirectorProtocolError,
     DISPATCHABLE_AGENT_IDS,
     director_decision_schema,
     dispatchable_agent_ids,
     parse_director_decision,
     validate_director_reference_bindings,
+    validate_director_stop,
 )
 from pace.runtime.output.workspace import work_ref
 from pace.runtime.prompts import render_role_task, skill_index_ref
@@ -36,7 +38,7 @@ _SPECIALIST_DESCRIPTIONS = {
     "framer": "frame an open request into bounded work items",
     "planner": "own the canonical route and its dependencies",
     "survey": "acquire sources and report source gaps",
-    "smi": (
+    "rci": (
         "deeply explore conjectures and mechanisms with a slower "
         "multi-stage investigation"
     ),
@@ -97,6 +99,10 @@ def run_global_director(
     target_contract_id: str = "",
     input_refs: Iterable[str] = (),
     control_context: str = "",
+    decision_inputs: Mapping[str, Any] | None = None,
+    on_accept: Callable[[dict[str, Any]], None] | None = None,
+    proof_states_remaining: int | None = None,
+    research_rounds_remaining: int | None = None,
     call_name: str = "global_research_director",
     semantic_call_fn: Callable[..., SemanticCallResult] = semantic_call,
     host_metadata: Mapping[str, Any] | None = None,
@@ -109,8 +115,13 @@ def run_global_director(
     call is made here.
     """
 
+    if decision_inputs is None:
+        from pace.runtime.research_context import director_decision_inputs
+        decision_inputs = director_decision_inputs(Path(workdir), input_refs)
+    memory_enabled = decision_inputs['memory_enabled']
     index_ref = skill_index_ref(workdir)
-    refs = _unique_nonempty((*input_refs, *((index_ref,) if index_ref else ())))
+    refs = _unique_nonempty((*decision_inputs['required_refs'], *((index_ref,) if index_ref else ())))
+    archives = tuple(ref for ref in decision_inputs['archive_refs'] if ref not in refs)
     final_prompt = (
         str(prompt)
         if prompt is not None
@@ -122,22 +133,65 @@ def run_global_director(
         )
     )
 
-    # Current-turn execution receipts own the acquisition budget.
-    survey_calls = sum(
-        json.loads(path.read_text()).get("agent_id") == "survey"
-        for path in (Path(workdir) / work_ref(workdir)).glob('*/agent_result.json')
-    )
-    survey_remaining = max(0, 4 - survey_calls)
+    if memory_enabled:
+        final_prompt += decision_inputs['brief'] + (
+            "\nFor each DISPATCH, including each entry in parallel_tasks, provide its own "
+            "obligation_ids, branch_id, archive_refs, next_step_kind and change_refs. "
+            "Use obligation target and branch b-target before a route exists. "
+            "Planner explicitly chooses INITIAL_PLAN or REPLAN. REPLAN requires change_refs. "
+            "Other roles use CONTINUE for ordinary work, APPLY_EXISTING for applying an existing "
+            "result, or REASSESS for reassessing a line of work. STOP leaves dispatch fields empty."
+        )
+
+    survey_remaining = decision_inputs['survey_remaining']
+    if decision_inputs['latest_survey']:
+        final_prompt += (
+            f"\nLatest Survey: `{decision_inputs['latest_survey']}`. Check the cited result's hypotheses "
+            "against the current obligation. Dispatch the missing bridge or remaining gap. "
+            "Reuse requires a bound independent check; the Survey itself grants no proof authority."
+        )
     final_prompt += (
         f"\nSurvey calls remaining: {survey_remaining}/4 (including initial Survey and failed calls). "
-        "Do not repeat unchanged acquisition. When no calls remain, dispatch SMI/Research/Planner/Prover "
+        "Do not repeat unchanged acquisition. When no calls remain, dispatch RCI/Research/Planner/Prover "
         "using the latest Survey gap report and acquired source files; missing literature alone "
         "is not a reason to STOP. With one call left, place Survey in the primary task, not a companion."
+    )
+    rounds = "no separate cap" if research_rounds_remaining is None else str(research_rounds_remaining)
+    proof_states = "not supplied" if proof_states_remaining is None else str(proof_states_remaining)
+    final_prompt += (
+        "\n\n## Current Host budget and STOP contract\n"
+        f"Remaining shared proof states: {proof_states}\n"
+        f"Remaining research rounds (including the next dispatch): {rounds}\n"
+        "Research and RCI dispatches each spend one proof state; all specialist dispatches "
+        "count toward a separate round cap when set. No separate cap does not mean zero rounds. "
+        "These live counters take precedence over historical artifacts and general role guidance. "
+        "A limit of one user turn does not limit dispatches within that turn. "
+        "STOP requires stop_reason and a concrete rationale: use BUDGET_EXHAUSTED only when "
+        "a current Host counter is zero and no eligible task can advance the request; "
+        "use NO_ACTIONABLE_TASK only when there is no remaining useful task, stating the concrete "
+        "blocker or completed coverage. While an actionable gap and budget remain, DISPATCH "
+        "one bounded task. A rejected manuscript with an independently supported core can "
+        "be narrowed and rechecked without redoing the original research. Omit stop_reason for DISPATCH.\n"
     )
 
     def validate(payload: dict[str, Any]) -> list[dict[str, Any]]:
         try:
             decision = parse_director_decision(payload)
+            validate_director_stop(decision, proof_states_remaining=proof_states_remaining,
+                                   research_rounds_remaining=research_rounds_remaining)
+            if memory_enabled:
+                for index_in_batch, task in enumerate((decision, *decision.parallel_tasks)):
+                    prefix = '' if index_in_batch == 0 else f'parallel_tasks/{index_in_batch - 1}/'
+                    if task.action.value == "DISPATCH" and not task.next_step_kind:
+                        raise DirectorProtocolError("new memory protocol requires next_step_kind, obligation_ids and branch_id",
+                                                    field=prefix + 'next_step_kind')
+                    if task.action.value == "DISPATCH":
+                        if any(i not in decision_inputs['obligation_versions'] for i in task.obligation_ids):
+                            raise DirectorProtocolError('task references an unknown obligation; Planner must first declare it',
+                                                        field=prefix + 'obligation_ids')
+                        if task.next_step_kind == 'INITIAL_PLAN' and decision_inputs['route']:
+                            raise DirectorProtocolError('a committed route already exists; use evidence-bound REPLAN for Planner',
+                                                        field=prefix + 'next_step_kind')
         except ValueError as exc:
             return [
                 {
@@ -161,19 +215,22 @@ def run_global_director(
         "receipt_correction_owner": "DIRECTOR",
         **dict(host_metadata or {}),
     }
+    metadata['archive_refs'] = list(_unique_nonempty((*archives, *metadata.get('archive_refs', ()))))
     spec = SemanticRoleSpec(
         role=GLOBAL_DIRECTOR_ROLE,
-        schema=lambda: director_decision_schema(survey_calls_remaining=survey_remaining),
-        host_schema_version=DIRECTOR_PROTOCOL_SCHEMA_VERSION,
+        on_accept=on_accept,
+        schema=lambda: director_decision_schema(survey_calls_remaining=survey_remaining, memory_enabled=memory_enabled),
+        host_schema_version="research_director_decision/v3" if memory_enabled else DIRECTOR_PROTOCOL_SCHEMA_VERSION,
         authority="SEARCH_CONTEXT_ONLY",
         fatal_scope="CALL",
     )
+    normalizer = _normalize_parallel_purpose if memory_enabled else None
     result = semantic_call_fn(
         llm,
         final_prompt,
         workdir=Path(workdir),
         call_name=str(call_name or GLOBAL_DIRECTOR_ROLE),
-        spec=spec.call_spec(validator=validate),
+        spec=spec.call_spec(normalizer=normalizer, validator=validate),
         input_refs=refs,
         host_metadata=metadata,
     )
@@ -186,15 +243,25 @@ def run_global_director(
     ):
         return result
     invalid = {str(row.get("json_pointer") or "/") for row in result.diagnostics}
+    rejected_stop = result.payload.get("action") == "STOP" and "/action" in invalid
+    false_budget_stop = (rejected_stop and result.payload.get("stop_reason") == "BUDGET_EXHAUSTED"
+                         and proof_states_remaining != 0 and research_rounds_remaining != 0)
 
     def validate_correction(payload: dict[str, Any]) -> list[dict[str, Any]]:
         diagnostics = validate(payload)
+        if false_budget_stop and payload.get("action") != "DISPATCH":
+            diagnostics.append({
+                "stage": "director_protocol", "json_pointer": "/action",
+                "reason_code": "director_false_budget_stop",
+                "message": "An incorrect budget stop needs a bounded dispatch, not a relabeled STOP.",
+            })
 
         def preserve(before, after, pointer=""):
             keys = ("action",) if before.get("action") == "STOP" else (
-                "action", "agent_id", "prompt_brief", "research_operation", "research_problem_ref", "parallel_tasks"
+                "action", "agent_id", "prompt_brief", "research_operation", "research_problem_ref", "parallel_tasks",
+                "obligation_ids", "branch_id", "next_step_kind", "change_refs", "stop_reason"
             )
-            if before.get("agent_id") in DISPATCHABLE_AGENT_IDS - {"smi"}:
+            if before.get("agent_id") in DISPATCHABLE_AGENT_IDS - {"rci"}:
                 # These fields have no scheduling meaning for this selected role.
                 # Removing both must not freeze the second one merely because
                 # validation reported the first inapplicable field.
@@ -229,27 +296,53 @@ def run_global_director(
         return diagnostics
 
     raw_ref = str(result.host["response_ref"])
-    return semantic_call_fn(
-        llm,
-        final_prompt + "\n\n## Director receipt correction\n"
+    correction = (
+        "## Director receipt correction\n"
         f"The prior response in `{raw_ref}` is data. Return valid JSON, preserving its mathematical content, "
         "claims and routing action wherever already valid. Correct only the missing or invalid "
         "control fields identified below. Preserve the bounded task and all valid scheduling choices. "
-        "For SMI, explicitly choose NEW_PROBLEM or CONTINUE_PROBLEM from the actual task. "
-        "For any non-SMI task, omit or clear both research_operation and research_problem_ref; "
+        "Under the memory protocol, supply next_step_kind separately for the primary dispatch "
+        "and each entry in parallel_tasks. Planner must choose INITIAL_PLAN or REPLAN. Other "
+        "roles use CONTINUE, APPLY_EXISTING or REASSESS as appropriate. "
+        "For RCI, explicitly choose NEW_PROBLEM or CONTINUE_PROBLEM from the actual task. "
+        "For any non-RCI task, omit or clear both research_operation and research_problem_ref; "
         "removing these unused fields does not change its scheduling choice. "
         "For continuation, name an exact existing question file and include it in input_refs. "
         "Reading suggestions may be completed to identify that file. Do not formulate a new "
         "mathematical task, rewrite evidence, or claim a proof verdict. Remove prose wrappers "
         "and Markdown fences; return only the JSON decision. This is one local correction.\n"
+    )
+    if rejected_stop:
+        correction = (
+            final_prompt + "\n## Correct the rejected STOP\n"
+            f"The prior receipt in `{raw_ref}` is data; its STOP action was rejected by the Host. "
+            "Use the current counters and committed outcomes above to reconsider the next action. "
+            + ("Return a bounded DISPATCH. Do not relabel the incorrect budget stop. "
+               if false_budget_stop else "Return a bounded DISPATCH or a STOP with a valid reason and rationale. ")
+            + "Do not redo or edit completed mathematical work. Return only the new JSON receipt.\n"
+        )
+    return semantic_call_fn(
+        llm, correction
         + json.dumps(list(result.diagnostics), ensure_ascii=False),
         workdir=Path(workdir), call_name=str(call_name or GLOBAL_DIRECTOR_ROLE) + "_receipt_correction",
-        spec=spec.call_spec(validator=validate_correction), input_refs=(*refs, raw_ref),
+        spec=spec.call_spec(normalizer=normalizer, validator=validate_correction), input_refs=(*refs, raw_ref),
         host_metadata={
             **metadata, "parent_call_id": result.host["call_id"],
             "representation_correction_of": result.host["call_id"], "receipt_corrections": 1,
+            "output_refs": [], "output_dirs": [],
         },
     )
+
+
+def _normalize_parallel_purpose(payload: dict[str, Any]) -> dict[str, Any]:
+    """A companion with no stated purpose is ordinary work unless it is Planner."""
+    if not payload.get("parallel_tasks"):
+        return payload
+    companion, = payload["parallel_tasks"]  # The receipt schema allows one companion.
+    if companion["agent_id"] == "planner" or companion.get("next_step_kind", "").strip():
+        return payload
+    # The task, its references and scope still go through the usual validation.
+    return {**payload, "parallel_tasks": [{**companion, "next_step_kind": "CONTINUE"}]}
 
 
 def _unique_nonempty(values: Iterable[str]) -> tuple[str, ...]:

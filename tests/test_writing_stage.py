@@ -8,6 +8,7 @@ import pytest
 
 from pace import cli
 from pace.runtime.llm import TransportSuccess
+from pace.runtime.chat_api import WorkspaceTools
 from pace.runtime.output.calls import attempt_directory
 from pace.runtime.output.events import read_updates
 from test_terminal_result import ResearchTransport
@@ -24,10 +25,11 @@ class WritingTransport(ResearchTransport):
         output = root / re.search(r"## Deliverable\nWrite `([^`]+)`", prompt)[1]
         output.parent.mkdir(parents=True, exist_ok=True)
         if call_name != self.failed_action:
-            output.write_text(
+            WorkspaceTools(root, ledger_context).execute('write_file', {
+                'path': output.relative_to(root).as_posix(), 'content':
                 r"\documentclass{article}\begin{document}An open target.\end{document}"
                 if output.suffix == ".tex" else "# Writing result\n\nThe original target remains open.\n"
-            )
+            })
         folder = attempt_directory(root, ledger_context["call_ref"], 1)
         (folder / "response.txt").write_text("The writing task returned.")
         return TransportSuccess(
@@ -36,6 +38,36 @@ class WritingTransport(ResearchTransport):
             accepted_output_source="file", output_schema_valid=True, attempt_count=1,
             artifact_dir=folder,
         )
+
+
+def test_writing_role_uses_its_request_resource_snapshot(tmp_path):
+    from pace.reporting.research_report import ResearchReportOutliner, outline_state_ref
+    from pace.runtime.agent_environment import prepare_agent_environments, role_home
+    from pace.runtime.output.workspace import RunWorkspace
+    from pace.runtime.prompts import materialize_run_resources, prompt_root
+
+    ws = RunWorkspace.create(tmp_path, "writing")
+    materialize_run_resources(ws.root, resource_variant="standard")
+    prepare_agent_environments(ws.root, mode="research")
+    marker = "Follow the resource snapshot selected for this writing request."
+
+    class RequestTransport(WritingTransport):
+        def complete_unstructured_result(self, prompt, *, workdir, ledger_context, **kwargs):
+            record = json.loads((Path(workdir) / ledger_context["call_ref"]).read_text())
+            assert marker in (Path(record["agent_home"]) / "AGENTS.md").read_text()
+            return super().complete_unstructured_result(
+                prompt, workdir=workdir, ledger_context=ledger_context, **kwargs,
+            )
+
+    transport = RequestTransport()
+    writer = ResearchReportOutliner(llm=transport, composer_llm=transport, workdir=ws.root)
+    writer.request("Explain the current research and its open questions.", resource_variant="weak")
+    state = json.loads(ws.path(outline_state_ref(ws.root)).read_text())
+    template = ws.path(state["resources_ref"]) / "prompts/roles/research_report_outline.md"
+    template.write_text(template.read_text() + "\n" + marker)
+    assert writer.update()
+    assert marker in (role_home(ws.root, "RESEARCH_REPORT_OUTLINE") / "AGENTS.md").read_text()
+    assert marker not in (prompt_root(ws.root) / "roles/research_report_outline.md").read_text()
 
 
 @pytest.mark.parametrize("failed_action", [
@@ -85,3 +117,43 @@ def test_cli_keeps_writing_progress_out_of_orientation(tmp_path, monkeypatch, fa
     assert all(not event["terminal"] for event in updates)
     assert updates[-1]["status"] == ("failed" if failed_action else "completed")
     assert final_report.read_bytes() == original
+
+
+@pytest.mark.parametrize("mode", ["proof", "research"])
+def test_completed_outline_yields_to_interrupted_math(tmp_path, monkeypatch, mode):
+    from test_research_round_limit import RoundLimitTransport
+
+    from test_finding_publication import ProofPublicationTransport
+
+    class InterruptedVerifier(RoundLimitTransport):
+        interrupted = False
+
+        def complete_structured_result(self, prompt, *, call_name, **kwargs):
+            if "proof_contract_auditor" in call_name and not self.interrupted:
+                self.interrupted = True
+                raise KeyboardInterrupt
+            if mode == "proof":
+                return ProofPublicationTransport.complete_structured_result(
+                    self, prompt, call_name=call_name, **kwargs)
+            return super().complete_structured_result(prompt, call_name=call_name, **kwargs)
+
+    transport = InterruptedVerifier("prover")
+    monkeypatch.setattr("pace.orchestrator.pipeline.build_llm", lambda **_: transport)
+    source = tmp_path / "problem.md"
+    source.write_text("Prove 2+2=4.\n")
+    root = tmp_path / "example"
+    assert cli.main(["run", "--problem", str(source), "--problem-id", root.name,
+                     "--output", str(tmp_path), "--mode", mode, "--json"]) == 130
+    turn = root / "work/turn001"
+    state = turn / "state" / ("proof_state.json" if mode == "proof" else "director_state.json")
+    assert json.loads(state.read_text())["phase"] == "VERIFY"
+    with monkeypatch.context() as scoped:
+        writer = WritingTransport()
+        scoped.setattr("pace.orchestrator.pipeline.build_llm", lambda **_: writer)
+        assert cli.main(["outline", "--run-dir", str(root), "--message", str(source), "--json"]) == 0
+    before = list(transport.calls)
+    outline = (root / "results/outline.md").read_bytes()
+    assert cli.main(["resume", "--run-dir", str(root), "--json"]) == 0
+    assert json.loads((turn / "final_report.json").read_text())["result"] == "PASS"
+    assert set(before).isdisjoint(transport.calls[len(before):])
+    assert (root / "results/outline.md").read_bytes() == outline

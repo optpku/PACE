@@ -17,7 +17,7 @@ from pace.reporting.research_report import (
     outline_state_ref, report_state_ref,
 )
 from pace.reporting.theory_paper import paper_outline_state_ref, paper_state_ref
-from pace.reporting.writing import active_writing_request, writing_artifacts, writing_task_ref
+from pace.reporting.writing import pending_writing_request, writing_task_ref
 from pace.reporting.terminal_report import (
     FinalReportEnvelope,
     FinalReportEnvelopeError,
@@ -25,8 +25,6 @@ from pace.reporting.terminal_report import (
 
 from pace.runtime.output.workspace import RunWorkspace, is_call_path, work_ref, path_has_symlink_component
 from pace.runtime.output.setup import load_setup
-from pace.runtime.output.delivery_pause import delivery_pause
-from pace.orchestrator.finding_publication import pending_finding_checks
 
 _FINAL_PROOF_ARTIFACT_FIELDS = {
     "proof",
@@ -103,17 +101,23 @@ def resume_existing_run(
             raise RecoveryError("continuation_hook_unavailable", "initialization recovery requires a pipeline continuation")
         return continue_pipeline(RecoveryRequest(workspace=workspace, checkpoint=setup, continuation_action="SETUP"))
 
-    writing = active_writing_request(workspace.root)
+    writing = pending_writing_request(workspace.root)
     if writing:
         if continue_pipeline is not None:
             return continue_pipeline(RecoveryRequest(workspace=workspace, checkpoint=writing,
                                                       continuation_action="WRITING"))
-        key = {"outline": "research_outline", "report": "research_report",
-               "paper-outline": "paper_outline", "paper": "paper_source"}[writing["action"]]
-        artifacts = writing_artifacts(workspace.root)
-        if key in artifacts:
-            return workspace.root / artifacts[key]
         raise RecoveryError("continuation_hook_unavailable", "the requested writing task needs a pipeline continuation")
+
+    # Restore derived records before terminal shortcuts or publication checks.
+    # Only parent-committed handoffs are replayed; this never calls a model.
+    from pace.contracts.research.memory import enabled
+    if enabled(workspace.root):
+        from pace.runtime.output.memory import commit_research_memory, refresh_memory_index
+        try:
+            commit_research_memory(workspace.root)
+            refresh_memory_index(workspace.root)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise RecoveryError('invalid_research_memory', str(exc)) from exc
 
     proof_state = workspace.path(work_ref(workspace.root, "state/proof_state.json"))
     if proof_state.is_file():
@@ -128,50 +132,8 @@ def resume_existing_run(
             raise RecoveryError("continuation_hook_unavailable", "proof recovery requires a pipeline")
         return continue_pipeline(RecoveryRequest(workspace, state, "PROOF"))
 
-    terminal = workspace.path(work_ref(workspace.root, 'final_report.json'))
-    if terminal.is_symlink():
-        raise RecoveryError(
-            "invalid_final_report",
-            "final_report.json must be a regular file, not a symlink",
-        )
-    if terminal.is_file():
-        report = _read_json_object(terminal)
-        result = _project_terminal_result(workspace, report)
-        if report["result"] == "FAILED" and continue_pipeline is not None:
-            state = load_director_checkpoint(workspace)
-            restored = _restore_operational_checkpoint(workspace, state)
-            if restored is not None:
-                return continue_pipeline(RecoveryRequest(
-                    workspace=workspace, checkpoint=restored,
-                    continuation_action=restored["phase"],
-                ))
-
-        if continue_pipeline is None or (not delivery_pause(workspace.root) and not pending_finding_checks(workspace.root)):
-            return result
-        # The mathematical binding has already been checked. Resume only its
-        # committed terminal phase to finish result publication.
-        state = load_director_checkpoint(workspace)
-        if state["phase"] not in {"FINALIZE", "STOPPED", "FAILED"}:
-            raise RecoveryError("invalid_director_checkpoint", "terminal result requires a terminal checkpoint")
-        return continue_pipeline(RecoveryRequest(
-            workspace=workspace, checkpoint=state,
-            continuation_action=state["phase"],
-        ))
-
-    state = load_director_checkpoint(workspace)
-    if continue_pipeline is None:
-        raise RecoveryError(
-            "continuation_hook_unavailable",
-            "the run is nonterminal, but no pipeline continuation hook was supplied",
-        )
-    state = _restore_operational_checkpoint(workspace, state) or state
-    return continue_pipeline(
-        RecoveryRequest(
-            workspace=workspace,
-            checkpoint=state,
-            continuation_action=state["phase"],
-        )
-    )
+    from pace.orchestrator.director_workflow import resume_research_checkpoint
+    return resume_research_checkpoint(workspace, continue_pipeline)
 
 
 def load_operational_checkpoint(

@@ -38,19 +38,15 @@ VERIFICATION_AUTHORITY_SCHEMA_VERSION = "verification_authority/v1"
 @dataclass(frozen=True)
 class VerificationContext:
     proof_md: str
-    problem_text: str
-    source_cards: list[dict[str, Any]] | dict[str, Any]
+    workdir: Path
+    contract_audit_runner: Callable[[], dict[str, Any]]
+    math_kernel_llm: Any
+    canonical_target: dict[str, Any]
     proof_id: str = ""
-    target_contract_id: str = ""
-    source_bundle: dict[str, Any] = field(default_factory=dict)
     previous_math_verifier_kernel: dict[str, Any] = field(default_factory=dict)
     previous_proof_md: str = ""
     previous_proof_id: str = ""
     proof_search_state: dict[str, Any] = field(default_factory=dict)
-    contract_audit_runner: Callable[[], Any] | None = None
-    math_kernel_runner: Callable[[], Any] | None = None
-    math_kernel_llm: Any | None = None
-    workdir: Path | None = None
     round_index: int = 1
     proof_artifact_ref: str = ""
     plan_artifact_ref: str = "proof_plan.json"
@@ -67,24 +63,12 @@ def run_verification_round(ctx: VerificationContext) -> dict[str, Any]:
 
     proof_id = _require_binding_value(ctx.proof_id, "proof_id")
     proof_ref = _require_binding_value(ctx.proof_artifact_ref, "proof_ref")
-    canonical_target = _read_canonical_target(ctx)
-    canonical_target_id = str(canonical_target.get("contract_id") or "").strip()
-    requested_target_id = str(ctx.target_contract_id or "").strip()
-    if (
-        canonical_target_id
-        and requested_target_id
-        and requested_target_id != canonical_target_id
-    ):
-        raise ValueError(
-            "verification target_contract_id does not match canonical target"
-        )
-    target_contract_id = _require_binding_value(
-        canonical_target_id or requested_target_id, "target_contract_id"
-    )
+    canonical_target = ctx.canonical_target
+    target_contract_id = canonical_target["contract_id"]
     report_ref = _require_binding_value(ctx.report_artifact_ref, "report_artifact_ref")
     prefix = Path(report_ref).parent.as_posix()
     authority_projection = _source_catalog(ctx, target_contract_id=target_contract_id)
-    if ctx.workdir is not None and ctx.authority_artifact_ref:
+    if ctx.authority_artifact_ref:
         _write_workspace_json(
             Path(ctx.workdir),
             ctx.authority_artifact_ref,
@@ -130,7 +114,6 @@ def run_verification_round(ctx: VerificationContext) -> dict[str, Any]:
                 return report
         return None
 
-    audit_runner = ctx.contract_audit_runner or _audit_runner()
     progress_context = {
         "round_index": ctx.round_index,
         "parent_task_id": f"round-{ctx.round_index:04d}",
@@ -140,14 +123,14 @@ def run_verification_round(ctx: VerificationContext) -> dict[str, Any]:
     publish_progress(ctx.workdir, **progress_context, task_id=audit_task, stage='auditor', status='started')
     auditor = attach_proof_contract_audit_metadata(
         saved_report(ctx.auditor_artifact_ref, "contract_status", {"PASS", "FAIL"})
-        or audit_runner(),
+        or ctx.contract_audit_runner(),
         proof_id=proof_id,
         proof_ref=proof_ref,
         literal_target=target_contract_text(canonical_target),
         target_contract_id=target_contract_id,
     )
     audit_status = str(auditor.get("contract_status") or "VERIFIER_ERROR").upper()
-    if ctx.workdir is not None and ctx.auditor_artifact_ref:
+    if ctx.auditor_artifact_ref:
         _write_workspace_json(
             Path(ctx.workdir),
             ctx.auditor_artifact_ref,
@@ -160,19 +143,15 @@ def run_verification_round(ctx: VerificationContext) -> dict[str, Any]:
             artifact_ref=ctx.auditor_artifact_ref,
         )
         publish_progress(ctx.workdir, **progress_context, task_id=audit_task, stage='auditor', status='completed' if audit_status == 'PASS' else 'needs_work')
-    kernel_runner = ctx.math_kernel_runner or _kernel_runner(
-        ctx,
-        target_contract_id=target_contract_id,
-    )
     publish_progress(ctx.workdir, **progress_context, task_id=kernel_task, stage='kernel', status='started')
     kernel = attach_math_verifier_metadata(
         saved_report(ctx.kernel_artifact_ref, "stage_status", {"PASS", "MATH_FAIL"})
-        or kernel_runner(),
+        or _run_kernel(ctx, target_contract_id=target_contract_id),
         proof_id=proof_id,
         proof_ref=proof_ref,
         target_contract_id=target_contract_id,
     )
-    if ctx.workdir is not None and ctx.kernel_artifact_ref:
+    if ctx.kernel_artifact_ref:
         _write_workspace_json(
             Path(ctx.workdir), ctx.kernel_artifact_ref, kernel, "kernel_artifact_ref"
         )
@@ -228,7 +207,7 @@ def _update_agent_call_output(
     artifact_ref: str,
 ) -> None:
     call_id = str(ctx.agent_call_ids.get(role_key) or "").strip()
-    if not call_id or ctx.workdir is None:
+    if not call_id:
         return
     update_agent_call_deliverable(
         Path(ctx.workdir),
@@ -237,20 +216,13 @@ def _update_agent_call_output(
     )
 
 
-def _audit_runner() -> Callable[[], dict[str, Any]]:
-    return lambda: {
-        "contract_status": "VERIFIER_ERROR",
-        "interface_failure": {"reason": "proof_contract_auditor_runner_required"},
-    }
-
-
-def _kernel_runner(
+def _run_kernel(
     ctx: VerificationContext,
     *,
     target_contract_id: str,
-) -> Callable[[], dict[str, Any]]:
+) -> dict[str, Any]:
     brief_ref = work_ref(ctx.workdir, "input/problem_brief.md")
-    return lambda: run_math_verifier_kernel(
+    return run_math_verifier_kernel(
         proof_id=ctx.proof_id,
         proof_ref=ctx.proof_artifact_ref,
         target_contract_id=target_contract_id,
@@ -272,37 +244,16 @@ def _kernel_runner(
     )
 
 
-def _read_canonical_target(ctx: VerificationContext) -> dict[str, Any]:
-    """Read the run's target identity without validating model-owned fields."""
-
-    if ctx.workdir is None:
-        return {}
-    path = Path(ctx.workdir) / work_ref(ctx.workdir, "input/target_contract.json")
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError, TypeError):
-        return {}
-    return value if isinstance(value, dict) else {}
-
-
 def _source_catalog(
     ctx: VerificationContext,
     *,
-    target_contract_id: str = "",
+    target_contract_id: str,
 ) -> dict[str, Any]:
     search_state = _as_dict(ctx.proof_search_state)
-    catalog = _as_dict(search_state.get("source_lemma_catalog")) or _as_dict(
-        ctx.source_cards
-    )
     verified_progress = _as_dict(search_state.get("verified_progress"))
-    target_contract_id = str(
-        target_contract_id
-        or ctx.target_contract_id
-        or ""
-    )
     inherited: list[dict[str, Any]] = []
     proof_bound: list[dict[str, Any]] = []
-    current_target_ref = work_ref(ctx.workdir, "input/target_contract.json") if ctx.workdir is not None else ""
+    current_target_ref = work_ref(ctx.workdir, "input/target_contract.json")
     for relation in _rows(verified_progress.get("verified_relations")):
         dependency = _as_dict(relation.get("verified_dependency"))
         if (
@@ -322,40 +273,12 @@ def _source_catalog(
             proof_bound.append(row)
     return {
         "schema_version": VERIFICATION_AUTHORITY_SCHEMA_VERSION,
-        "source_snapshot_id": str(
-            _as_dict(ctx.source_bundle).get("source_snapshot_id") or ""
-        ),
+        "source_snapshot_id": "",
         "target_contract_id": target_contract_id,
-        "items": [_external_authority_row(row) for row in _rows(catalog.get("items"))],
+        "items": [],
         "inherited_authorities": inherited,
         "proof_bound_relations": proof_bound,
     }
-
-
-def _external_authority_row(row: dict[str, Any]) -> dict[str, Any]:
-    audit = _as_dict(row.get("independent_evidence_audit"))
-    compiled = _as_dict(row.get("compiled_locator")) or _as_dict(
-        audit.get("compiled_locator")
-    )
-    projected = dict(row)
-    projected.update(
-        {
-            "source_claim_id": str(
-                row.get("source_claim_id") or row.get("source_id") or ""
-            ),
-            "source_id": str(
-                row.get("source_id") or row.get("source_claim_id") or ""
-            ),
-            "compiled_locator": compiled,
-            "locator_status": str(
-                compiled.get("resolution_status")
-                or row.get("locator_status")
-                or audit.get("locator_status")
-                or ""
-            ),
-        }
-    )
-    return projected
 
 
 def build_repair_progress(

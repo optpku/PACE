@@ -11,6 +11,10 @@ together with these role-specific instructions.
 For `survey`, name one bounded prior-result check or source need and request
 the relevant sources, their coverage and remaining applicability gaps.
 
+A bounded source need may be phrased by its use in the argument. Identify the
+effect requested and ask for a proof passage, its assumptions and the first
+transfer gap.
+
 Comparing the assumptions, conclusions and coverage of supplied lectures or
 papers is also Survey work, including when external retrieval is disabled.
 There need not be a missing document. Distinguish that comparison from a new

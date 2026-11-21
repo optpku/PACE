@@ -27,3 +27,6 @@ assumptions, and preserve the original target reference. A follow-up can change
 the target while retaining the same problem identifier. Old approval never
 grants approval to a new candidate. Record a later correction as a new note with
 a link to the earlier one; leave earlier notes unchanged.
+
+
+Keep stable obligation identities, scope, exact manuscript references, attempted methods and reopening conditions. Separate claimed changes from independently checked applications. Memory is SEARCH_CONTEXT_ONLY: it cannot authorize reuse or replace a complete proof. Update only the affected entries.

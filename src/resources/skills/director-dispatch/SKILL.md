@@ -19,7 +19,7 @@ unclear; an adequate brief or existing framework does not need to be recreated.
 - [`framer`](../dispatch-framer/SKILL.md): Choose Framer to turn an open research request into bounded work items.
 - [`planner`](../dispatch-planner/SKILL.md): Choose Planner to create, revise, or rewrite the mathematical route.
 - [`survey`](../dispatch-survey/SKILL.md): Analyze or compare supplied sources, check prior results, or acquire missing evidence.
-- [`smi`](../dispatch-smi/SKILL.md): Choose SMI for deep research on one bounded unresolved question.
+- [`rci`](../dispatch-rci/SKILL.md): Choose RCI for deep research on one bounded unresolved question.
 - [`research`](../dispatch-research/SKILL.md): Choose Research for a lightweight local question, route node, or repair.
 - [`prover`](../dispatch-prover/SKILL.md): Choose Prover to assemble a complete literal-target candidate.
 
@@ -40,7 +40,7 @@ source-only task.
 
 Survey also analyzes and compares material already in the workspace; external
 retrieval is not a prerequisite. Organizing or comparing supplied statements
-belongs to Survey even when they contain formulas. Use Research or SMI when
+belongs to Survey even when they contain formulas. Use Research or RCI when
 the requested work needs mathematical derivation or discovery beyond that
 source analysis.
 
@@ -60,7 +60,7 @@ Choose specialists by the work required and its research depth:
   results, and acquire missing source evidence with
   exact statements, locators and applicability gaps. Its report guides later
   mathematical work; it does not accept a proof or own the route.
-- `smi`: investigate a bounded research problem deeply through conjecture and
+- `rci`: investigate a bounded research problem deeply through conjecture and
   mechanism discovery, criticism, construction and focused probes. This richer
   multi-stage investigation is typically slower than Research. It can develop a
   new conjecture or investigate an already precise statement or route node.
@@ -71,11 +71,11 @@ Choose specialists by the work required and its research depth:
   verification. The Host's writers handle report and manuscript presentation.
 
 An existing route node or precise formula does not establish that its mechanism
-is understood. Choose SMI when finding or comparing substantive mechanisms,
+is understood. Choose RCI when finding or comparing substantive mechanisms,
 conjectures or constructions warrants deeper investigation; choose Research
 when a bounded local attempt is appropriate. Use the committed attempts and
 blockers to judge that need, rather than treating route membership as readiness.
-SMI may be selected directly or after Research; no opening order, call quota or
+RCI may be selected directly or after Research; no opening order, call quota or
 fixed number of failed attempts is required. Its longer running time is a cost
 whose value should be justified by the unresolved mathematical work.
 
@@ -84,6 +84,22 @@ whose value should be justified by the unresolved mathematical work.
 Every DISPATCH `prompt_brief` must name one bounded operation, why it is needed
 now, and the requested deliverable. It must not contain a mathematical plan.
 
+When an observation motivates a ticket, cite the committed original containing
+the calculation. If the next step concerns transfer from a source, also pass
+the acquired passage when available. Identify the decision the requested work
+can inform and let the specialist choose the mathematics.
+
+Start from the active obstacle and consult an earlier branch when its work
+bears on that obstacle. Prefer a pair whose interaction can settle a bounded
+decision, such as whether two requirements admit the same witness or which
+case separates two proposed explanations. Use `input_refs` for the originals
+and put passage locators in the brief. If the claimed interaction depends on
+an unproved hypothesis, identify it as open. A further dispatch should use the
+last joint result to narrow the question, test an extension, or decide when to
+set this pairing aside. If the result repeats an existing restriction and no
+new test could change the decision, record what would reopen the pairing and
+move to other work.
+
 When returning to the same objective, use the concrete outcome of the previous
 attempt to explain what further work is warranted. An unfinished node alone
 does not justify repeating the same assignment. A failed sufficient lemma may
@@ -91,7 +107,7 @@ call for a route revision; it is not automatically a refutation of the target.
 Leave that mathematical assessment to the assigned specialist and Planner.
 
 For example, filling a concrete summation step can fit Research; discovering a
-usable invariant for a precise conjecture can warrant SMI. State the scheduling
+usable invariant for a precise conjecture can warrant RCI. State the scheduling
 reason from the supplied evidence without developing the mathematics yourself.
 
 The Host executes explicit outline, report, paper-outline and paper writing tasks
@@ -110,11 +126,11 @@ At most one independent companion task may be added. Both tasks must use only
 committed inputs and must not depend on each other's pending output. Explain
 their independence in `rationale`; otherwise leave `parallel_tasks` empty.
 Use the Host's current proof-state balance and upper bound rather than total
-model-call counts. One Research or SMI dispatch consumes one proof-state when
-reserved, even if it returns partial work or fails. SMI's internal phases share
+model-call counts. One Research or RCI dispatch consumes one proof-state when
+reserved, even if it returns partial work or fails. RCI's internal phases share
 that single reservation. Prover, Director, Framer, Planner, Survey, Reporter,
 finding-verifier calls and fixed Auditor/Kernel checks consume no proof-states.
-At zero remaining proof-states, do not request new Research or SMI work. Prover
+At zero remaining proof-states, do not request new Research or RCI work. Prover
 may still assemble or repair a complete candidate from existing evidence;
 otherwise STOP with the unresolved gap. Every task remains subject to the
 research-round limit and the shared call and time budgets.
@@ -153,7 +169,7 @@ work. Earlier tasks are historical context, not work dispatched in this turn.
 The current literal target and independent verification remain final authority.
 
 For each decision, set research_operation to NEW_PROBLEM or CONTINUE_PROBLEM only
-for SMI. For continuation, research_problem_ref must be the exact existing
+for RCI. For continuation, research_problem_ref must be the exact existing
 run-relative question file listed in input_refs, with no added question text,
 colon, fragment or Markdown link. Put the question and requested contribution in
 prompt_brief. For other specialists and STOP, return empty strings for both fields.
@@ -165,8 +181,8 @@ Do not reuse a rejected claim as verified; a revised manuscript needs fresh
 independent checking, while already approved findings keep their scope.
 
 Only `action` is always required. DISPATCH additionally needs `agent_id` and
-`prompt_brief`; SMI additionally needs its explicit operation and, for continuation,
-the existing question reference. Omit unused SMI fields and an unused parallel
+`prompt_brief`; RCI additionally needs its explicit operation and, for continuation,
+the existing question reference. Omit unused RCI fields and an unused parallel
 list. `rationale` is explanatory and `input_refs` supplies optional reading
 suggestions; continuation must list its selected question there.
 
@@ -175,3 +191,26 @@ For a coherent improvement, request a complete replacement manuscript for the
 existing R entry; preserve the useful earlier cases and exact work-source
 citations. Supporting checks and final report assembly need no new identifier.
 Consult the thematic overview, current catalog and immutable manuscript archive.
+
+
+## Versioned task continuity
+
+Read the current target obligations, proposed applications, and relevant attempt
+records before choosing the next task. Distinguish a new checked local result
+from a checked implication that advances an obligation of the original target.
+Keep the remaining connection to the original target explicit.
+
+Continue an existing route when its dependencies remain valid. Completion of a
+planned node does not by itself require a Planner call. Request replanning only
+when committed evidence changes the route's assumptions, dependencies, or
+feasibility, or when no usable route exists. Cite the specific change.
+
+Before requesting a new mechanism, check whether an existing result can be
+applied to the current obligation. An application proposed in a research review
+still requires the designated independent mathematical check; do not treat that
+review as proof authority or send another author merely to repeat the review.
+
+When reassessment is due, identify a concrete change, a discriminating test, or
+an alternative route. A new task name or another local lemma is not evidence
+that the bottleneck has moved. Do not stop the whole study merely because this
+route needs reassessment, and do not discard checked results.

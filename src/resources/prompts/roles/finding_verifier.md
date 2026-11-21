@@ -40,3 +40,15 @@ Manuscript to read completely: `{{draft_ref}}`
 
 Files available:
 {{input_files}}
+
+
+## Application requests
+
+For an application request, check the exact target obligation, the premise
+versions, their hypotheses and quantifiers, and the connecting derivation.
+Report applicability only for the requested scope. A publication decision of
+NONE does not prevent a valid application from being recorded.
+
+Preserve a valid theorem when rejecting an invalid use of it. State the missing
+condition or implication. A memory summary, route label, or author reflection
+is search context and cannot replace the original argument or its bound review.

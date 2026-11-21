@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -25,12 +26,10 @@ from pace.reporting.writing import (
 )
 from pace.runtime.output.workspace import CURRENT_TURN_REF
 from pace.agents.orientation import (
-    proof_assessment_schema,
     run_problem_orientation,
 )
 from pace.agents.research.global_director import run_global_director
 from pace.contracts.problem.loader import Problem
-from pace.contracts.proof.binding import load_active_target
 from pace.orchestrator.director_led import (
     DirectorLedEngine,
     DirectorLedEngineError,
@@ -40,20 +39,12 @@ from pace.orchestrator.director_led_adapters import (
     build_default_composer,
     build_default_specialist_handlers,
 )
-from pace.orchestrator.director_led_finalization import (
-    finalize_director_led,
-)
+from pace.orchestrator.director_workflow import finalize_engine_failure, initialize_research_turn, run_research_turn
 from pace.orchestrator.director_verifier import build_default_verifier
 from pace.orchestrator.finding_publication import publish_stage_findings
 from pace.pipeline_types import (
-    MAX_PROOF_STATES,
     PipelineConfig,
     PipelineResult,
-)
-from pace.runtime.context_state import build_context_manifest
-from pace.runtime.output.memory import (
-    initialize_memory,
-    refresh_memory_index,
 )
 from pace.runtime.output.profiling import ProfileRecorder
 from pace.runtime.output.workspace import RunWorkspace, work_ref
@@ -63,15 +54,8 @@ from pace.runtime.prompts import (
     validate_resource_snapshot,
 )
 from pace.runtime.output.setup import load_setup, save_setup, setup_ref
-from pace.runtime.output.delivery_pause import (
-    DeliveryPaused,
-    delivery_pause,
-    pause_delivery,
-    clear_delivery_pause,
-)
 from pace.runtime.semantic import StructuredSemanticResult
 from pace.runtime.llm import build_llm
-from pace.runtime.schema import validate_json_instance
 
 
 __all__ = ["ProofPipeline"]
@@ -131,14 +115,12 @@ def _canonical_problem_text(value: Any) -> str:
 
 def _director_control_context(
     *,
-    allow_research_continuation: bool,
     research_context: dict[str, Any] | None,
-    mode: str,
+    mode: str | None,
 ) -> str:
     """Expose only scheduling metadata to the Director prompt."""
 
     rows = [
-        f"allow_research_continuation={bool(allow_research_continuation)}",
         f"mode={str(mode or '').strip()}",
     ]
     if isinstance(research_context, dict):
@@ -148,28 +130,6 @@ def _director_control_context(
             if visible:
                 rows.append("inherited_input_refs=" + ",".join(visible))
     return "\n".join(rows)
-
-
-def _proof_budget_from_assessment(assessment: dict[str, Any]) -> dict[str, Any]:
-    errors = validate_json_instance(assessment, proof_assessment_schema())
-    if errors:
-        raise ValueError(
-            "invalid proof assessment: " + json.dumps(errors, ensure_ascii=False)
-        )
-    difficulty = assessment["difficulty"]
-    complexity = max(
-        assessment["plan_node_level"], assessment["dependency_depth_level"]
-    )
-    if difficulty == "research":
-        total = 10 + 3 * (complexity - 1)
-    elif difficulty == "routine":
-        total = 2
-    else:
-        total = 3 * complexity
-    return {
-        "max_total_proof_states": min(MAX_PROOF_STATES, total),
-        "cap_origin": "ORIENTATION_SCHEMA",
-    }
 
 
 class ProofPipeline:
@@ -192,7 +152,7 @@ class ProofPipeline:
                 provider=self.config.provider,
                 model=self.config.model,
                 reasoning_effort=self.config.reasoning_effort,
-                web_search=self.config.web_search_mode != "off",
+                web_search=False,
                 timeout_seconds=self.config.timeout_seconds,
             )
         self._core_llm_instance.profile = self.config.profile
@@ -218,7 +178,7 @@ class ProofPipeline:
                 reasoning_effort="none"
                 if self.config.reasoning_effort == "none"
                 else "low",
-                web_search=self.config.web_search_mode != "off",
+                web_search=False,
                 timeout_seconds=self.config.timeout_seconds,
             )
         self._director_llm_instance.profile = self.config.profile
@@ -230,7 +190,6 @@ class ProofPipeline:
         *,
         run_dir: Path | None = None,
         on_started=None,
-        allow_research_continuation: bool = True,
         research_context: dict[str, Any] | None = None,
         writing_action: str = "",
         outline_ref: str = "",
@@ -242,12 +201,15 @@ class ProofPipeline:
             else RunWorkspace.create(self.output_root, problem.problem_id)
         )
         with ws.execution_lock():
+            variant = self.config.resource_variant
+            assert variant is not None  # PipelineConfig resolves the model default at construction.
+            selected_state = ""
             if writing_action == "outline":
                 outliner = self._outliner(ws)
                 outliner.request(
                     problem.text,
                     requirements=additional_requirements,
-                    resource_variant=self.config.resource_variant,
+                    resource_variant=variant,
                 )
                 selected_state = outline_state_ref(ws.root)
             elif writing_action == "report":
@@ -256,14 +218,14 @@ class ProofPipeline:
                     outline=outline_ref or RESEARCH_OUTLINE_REF,
                     message=problem.text,
                     requirements=additional_requirements,
-                    resource_variant=self.config.resource_variant,
+                    resource_variant=variant,
                 )
                 selected_state = report_state_ref(ws.root)
             elif writing_action == "paper-outline":
                 self._paper_writer(ws).request_outline(
                     problem.text,
                     requirements=additional_requirements,
-                    resource_variant=self.config.resource_variant,
+                    resource_variant=variant,
                 )
                 selected_state = paper_outline_state_ref(ws.root)
             elif writing_action == "paper":
@@ -271,12 +233,12 @@ class ProofPipeline:
                     outline=outline_ref or PAPER_OUTLINE_REF,
                     message=problem.text,
                     requirements=additional_requirements,
-                    resource_variant=self.config.resource_variant,
+                    resource_variant=variant,
                 )
                 selected_state = paper_state_ref(ws.root)
             elif writing_action:
                 raise ValueError(f"Unknown writing action: {writing_action}")
-            if writing_action:
+            if selected_state:
                 from pace.runtime.sessions import run_session
 
                 select_writing_task(ws.root, writing_action, selected_state)
@@ -319,8 +281,8 @@ class ProofPipeline:
             ws.write_text(
                 ws.work_ref("input/problem.md"), _canonical_problem_text(problem.text)
             )
-            self._prepare_setup(
-                ws, problem, allow_research_continuation=allow_research_continuation,
+            setup = self._prepare_setup(
+                ws, problem,
                 research_context=research_context, source_turn_id=source_turn_id,
             )
             if on_started is not None:
@@ -333,10 +295,7 @@ class ProofPipeline:
 
             try:
                 with run_session(ws.root, profile=self.config.profile, config=self.config):
-                    result = self._run_initialized(
-                        ws, problem, allow_research_continuation=allow_research_continuation,
-                        research_context=research_context,
-                    )
+                    result = self._run_initialized(ws, problem, setup)
             except BaseException:
                 ws.finish_turn("interrupted")
                 raise
@@ -406,6 +365,9 @@ class ProofPipeline:
             ws.work_ref("state/research_execution_policy.json"),
             {
                 "schema_version": "research_execution_policy/v1",
+                **({"research_memory_version": 1, "reassessment_after_attempts": 3}
+                   if policy.get("research_memory_version") == 1 else {}),
+                **({"research_delta_owner": "reporter"} if policy.get("research_delta_owner") == "reporter" else {}),
                 "resource_variant": policy["resource_variant"],
                 "mode": policy["mode"],
                 "requested_mode": policy["requested_mode"],
@@ -423,7 +385,6 @@ class ProofPipeline:
         ws: RunWorkspace,
         problem: Problem,
         *,
-        allow_research_continuation: bool = True,
         research_context: dict[str, Any] | None = None,
         source_turn_id: str = "",
     ) -> dict[str, Any]:
@@ -436,6 +397,8 @@ class ProofPipeline:
                 "problem_text": _canonical_problem_text(problem.text),
                 "phase": "RESOURCES",
                 "policy": {
+                    "research_memory_version": 1,
+                    "research_delta_owner": "reporter",
                     "resource_variant": self.config.resource_variant,
                     "max_proof_states": self.config.max_proof_states,
                     "max_calls": self.config.max_calls,
@@ -444,7 +407,6 @@ class ProofPipeline:
                     "mode": self.config.mode,
                     "requested_mode": self.config.mode,
                     "control_context": _director_control_context(
-                        allow_research_continuation=allow_research_continuation,
                         research_context=research_context,
                         mode=self.config.mode,
                     ),
@@ -456,19 +418,13 @@ class ProofPipeline:
         return state
 
     def _run_initialized(
-        self, ws: RunWorkspace, problem: Problem, *,
-        allow_research_continuation: bool = True,
-        research_context: dict[str, Any] | None = None,
+        self, ws: RunWorkspace, problem: Problem, state: dict[str, Any],
     ) -> PipelineResult:
         """Finish shared initialization, then hand off to the saved engine."""
         profiler = ProfileRecorder(
             enabled=self.config.profile,
             workdir=ws.root,
             path=ws.path(ws.work_ref("events.jsonl")) if self.config.profile else None,
-        )
-        state = self._prepare_setup(
-            ws, problem, allow_research_continuation=allow_research_continuation,
-            research_context=research_context,
         )
         from pace.runtime.output.events import publish_progress
 
@@ -537,36 +493,7 @@ class ProofPipeline:
                         resource_variant=state["policy"]["resource_variant"],
                     )
                 else:
-                    target = load_active_target(ws.root)
-                    state_path = ws.path(ws.work_ref("state/director_state.json"))
-                    if state_path.exists():
-                        initial = DirectorLedState.from_json(
-                            json.loads(state_path.read_text(encoding="utf-8"))
-                        )
-                        if (
-                            initial.phase != "DIRECTOR"
-                            or initial.round_index != 0
-                            or initial.proof_states_used != 0
-                            or initial.target_contract_id != target["contract_id"]
-                        ):
-                            raise ValueError(
-                                "initialization cannot overwrite an active Director checkpoint"
-                            )
-                    else:
-                        cap = self._initialize_director_led_context(
-                            ws,
-                            target_contract=target,
-                            orientation_result=state["orientation"],
-                            configured_cap=state["policy"]["max_proof_states"],
-                        )
-                        initial = DirectorLedState(
-                            target_contract_id=target["contract_id"],
-                            max_proof_states=cap,
-                            phase="DIRECTOR",
-                        )
-                        ws.write_json(
-                            ws.work_ref("state/director_state.json"), initial.to_json()
-                        )
+                    initialize_research_turn(ws, state["orientation"], state["policy"]["max_proof_states"])
                 state["phase"] = "READY"
                 save_setup(ws.root, state)
         except Exception as exc:
@@ -609,24 +536,10 @@ class ProofPipeline:
             raise ValueError(
                 "initialization handoff must use the pristine Director checkpoint"
             )
-        target_id = load_active_target(ws.root)["contract_id"]
-        try:
-            policy_ref = work_ref(ws.root, "state/research_execution_policy.json")
-            policy = json.loads(ws.path(policy_ref).read_text(encoding="utf-8"))
-            engine = self._build_director_led_engine(ws, target_contract_id=target_id)
-            run_result = engine.run(
-                control_context=policy["control_context"],
-                # The bootstrap state is deliberately committed above.  Using
-                # the recovery entry avoids a second implicit state creation.
-                resume=True,
-            )
-        except DeliveryPaused:
-            return self._paused_delivery_result(ws, problem, profiler)
-        except DirectorLedEngineError as exc:
-            return self._finalize_director_led_engine_failure(ws, problem, profiler, target_contract_id=target_id, error=exc)
-        return self._finish_delivery(ws, problem, run_result.state, profiler)
+        return run_research_turn(ws, problem, profiler, initial, self._build_director_led_engine)
 
-    def resume(self, workspace, checkpoint, continuation_action, **kwargs):
+    def resume(self, workspace: RunWorkspace, checkpoint: dict[str, Any],
+               continuation_action: str, *, finalize: bool = False) -> PipelineResult | Path:
         from pace.runtime.input_protection import recover_open_input_snapshots
         from pace.runtime.sessions import run_session
 
@@ -634,7 +547,7 @@ class ProofPipeline:
             if continuation_action == "WRITING":
                 recover_open_input_snapshots(workspace.root)
                 with run_session(workspace.root, profile=self.config.profile, config=self.config):
-                    return self._resume(workspace, checkpoint, continuation_action, **kwargs)
+                    return self._resume(workspace, checkpoint, continuation_action, finalize=finalize)
             workspace.finish_turn("running")
             try:
                 recover_open_input_snapshots(workspace.root)
@@ -642,7 +555,7 @@ class ProofPipeline:
                     workspace.root, profile=self.config.profile, config=self.config
                 ):
                     result = self._resume(
-                        workspace, checkpoint, continuation_action, **kwargs
+                        workspace, checkpoint, continuation_action, finalize=finalize
                     )
             except BaseException:
                 workspace.finish_turn("interrupted")
@@ -656,9 +569,8 @@ class ProofPipeline:
         checkpoint: dict[str, Any],
         continuation_action: str,
         *,
-        allow_research_continuation: bool = True,
         finalize: bool = False,
-    ) -> PipelineResult:
+    ) -> PipelineResult | Path:
         if finalize and continuation_action in {"WRITING", "PROOF", "SETUP"}:
             from pace.orchestrator.recovery import RecoveryError
 
@@ -736,6 +648,7 @@ class ProofPipeline:
                     text=saved["problem_text"],
                     source=str(workspace.path(workspace.work_ref("input/problem.md"))),
                 ),
+                saved,
             )
         if (
             not prompt_root(workspace.root).is_dir()
@@ -771,7 +684,6 @@ class ProofPipeline:
             checkpoint,
             continuation_action,
             committed_state=load_director_checkpoint(workspace),
-            allow_research_continuation=allow_research_continuation,
             finalize=finalize,
         )
 
@@ -782,7 +694,6 @@ class ProofPipeline:
         continuation_action: str,
         *,
         committed_state: dict[str, Any],
-        allow_research_continuation: bool = True,
         finalize: bool = False,
     ) -> PipelineResult:
         """Continue a Director-led state without replaying Orientation."""
@@ -803,191 +714,15 @@ class ProofPipeline:
             raise DirectorLedEngineError(
                 "continuation action does not match Director-led state phase"
             )
-        # All committed run artifacts are Host inputs.  Keep their reads and
-        # validation inside one operational boundary so malformed bytes or
-        # state types become a terminal diagnostic rather than escaping the
-        # public resume API.
-        problem_path = workspace.path(work_ref(workspace.root, "input/problem.md"))
-        problem = Problem(
-            problem_id=workspace.problem_id,
-            text="",
-            source=str(problem_path),
-        )
-        if finalize and state.phase not in {"DIRECTOR", "FINALIZE", "STOPPED"}:
-            from pace.orchestrator.recovery import RecoveryError
-
-            raise RecoveryError(
-                "finalization_requires_research_boundary",
-                "complete the pending task or verification before --finalize",
-            )
+        problem_path = workspace.path(workspace.work_ref("input/problem.md"))
+        problem = Problem(problem_id=workspace.problem_id, text="", source=str(problem_path))
         try:
-            problem_text = problem_path.read_text(encoding="utf-8")
-            problem = Problem(
-                problem_id=workspace.problem_id,
-                text=problem_text,
-                source=str(problem_path),
-            )
-
-            if finalize and state.phase == "DIRECTOR":
-                from dataclasses import replace
-                from pace.runtime.output.events import append_event
-
-                target = load_active_target(workspace.root)
-                if target["contract_id"] != state.target_contract_id:
-                    raise DirectorLedEngineError(
-                        "finalization target differs from the saved checkpoint"
-                    )
-                state = replace(
-                    state,
-                    phase="FINALIZE",
-                    terminal_result="FAILED",
-                    stop_reason="USER_REQUESTED_FINALIZATION",
-                )
-                workspace.write_json(
-                    work_ref(workspace.root, "state/director_state.json"),
-                    state.to_json(),
-                )
-                append_event(
-                    workspace.root,
-                    "RESEARCH_FINALIZATION_REQUESTED",
-                    round_index=state.round_index,
-                    target_contract_id=state.target_contract_id,
-                    proof_states_used=state.proof_states_used,
-                    max_proof_states=state.max_proof_states,
-                )
-            if state.phase != "FAILED":
-                paused = delivery_pause(workspace.root)
-                self._update_publication(workspace, state, trigger=str(paused.get('trigger') or 'recovery-findings'), retry_errors=True)
-
-            # Terminal phases have no mathematical scheduling left. Editorial
-            # model work may remain, so resume the same finalization boundary.
-            if state.phase in {"FINALIZE", "STOPPED", "FAILED"}:
-                return self._finish_delivery(workspace, problem, state, profiler, findings_checked=True)
-
-            target_contract = load_active_target(workspace.root)
-            target_id = target_contract["contract_id"]
-            if target_id != state.target_contract_id:
-                raise DirectorLedEngineError(
-                    "committed Director-led target is invalid or changed"
-                )
-            engine = self._build_director_led_engine(workspace, target_contract_id=target_id)
-            run_result = engine.run(
-                control_context=json.loads(
-                    workspace.path(
-                        work_ref(workspace.root, "state/research_execution_policy.json")
-                    ).read_text(encoding="utf-8")
-                )["control_context"],
-                resume=True,
-            )
-        except DeliveryPaused:
-            return self._paused_delivery_result(workspace, problem, profiler)
-        except DirectorLedEngineError as exc:
-            return self._finalize_director_led_engine_failure(workspace, problem, profiler, target_contract_id=state.target_contract_id, error=exc)
-        except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
-            return self._finalize_director_led_engine_failure(workspace, problem, profiler, target_contract_id=state.target_contract_id, error=DirectorLedEngineError(str(exc)))
-        except Exception as exc:  # noqa: BLE001 - committed Host inputs
-            return self._finalize_director_led_engine_failure(workspace, problem, profiler, target_contract_id=state.target_contract_id, error=DirectorLedEngineError(str(exc)))
-        return self._finish_delivery(workspace, problem, run_result.state, profiler)
-
-    def _update_publication(self, ws, state, *, trigger, retry_errors=False):
-        if state.phase == "FAILED":
-            return
-        complete = publish_stage_findings(llm=self._llm(), workdir=ws.root,
-            completed_result_refs=state.completed_result_refs,
-            accepted_candidate_ref=state.candidate_ref if state.terminal_result == "PASS" else "",
-            retry_errors=retry_errors)
-        if complete is False:
-            pause_delivery(ws.root, trigger=trigger, round_index=state.round_index, stage="findings")
-            raise DeliveryPaused("Finding verification is incomplete; resume the saved task")
-        refresh_memory_index(ws.root)
-        clear_delivery_pause(ws.root)
-
-    def _paused_delivery_result(
-        self,
-        ws: RunWorkspace,
-        problem: Problem,
-        profiler: ProfileRecorder,
-    ) -> PipelineResult:
-        state = DirectorLedState.from_json(
-            json.loads(ws.path(ws.work_ref("state/director_state.json")).read_text())
-        )
-        if state.phase not in {"FINALIZE", "STOPPED", "FAILED"}:
-            raise DeliveryPaused(
-                "Publication paused at the saved research checkpoint; use nl-proof-agent resume"
-            )
-        return finalize_director_led(
-            workspace=ws,
-            problem=problem,
-            run_result=state,
-            profiler=profiler,
-            defer_delivery=True,
-        )
-
-    def _finish_delivery(self, ws, problem, state, profiler, *, findings_checked=False):
-        try:
-            if not findings_checked:
-                self._update_publication(ws, state, trigger='final-findings')
-        except DeliveryPaused:
-            return self._paused_delivery_result(ws, problem, profiler)
-        return finalize_director_led(workspace=ws, problem=problem, run_result=state, profiler=profiler)
-
-    def _initialize_director_led_context(
-        self,
-        ws: RunWorkspace,
-        *,
-        target_contract: dict[str, Any],
-        orientation_result: dict[str, Any],
-        configured_cap: int | None = None,
-    ) -> int:
-        """Write the small canonical context set shared by all Director roles."""
-
-        initialize_memory(
-            ws,
-            context_manifest=build_context_manifest(
-                target_contract=target_contract,
-                problem_ref=ws.work_ref("input/problem.md"),
-                target_contract_ref=ws.work_ref("input/target_contract.json"),
-                problem_brief_ref=orientation_result.get("problem_brief_ref", ""),
-                orientation_ref=ws.work_ref(
-                    "orientation/problem_orientation_result.json"
-                ),
-            ),
-        )
-
-        assessment_ref = orientation_result.get("assessment_ref", "")
-        if assessment_ref:
-            assessment = json.loads(ws.path(assessment_ref).read_text(encoding="utf-8"))
-            proof_budget = _proof_budget_from_assessment(assessment["proof_assessment"])
-        else:
-            proof_budget = {
-                "max_total_proof_states": MAX_PROOF_STATES,
-                "cap_origin": "DEFAULT_PROOF_STATES",
-            }
-        # The caller's optional upper bound can reduce, never expand, the
-        # analysis-derived shared proof-state budget.
-        max_proof_states = int(proof_budget["max_total_proof_states"])
-        if configured_cap is None and load_setup(ws.root) is None:
-            configured_cap = self.config.max_proof_states
-        if configured_cap is not None:
-            max_proof_states = min(max_proof_states, configured_cap)
-            proof_budget["configured_upper_bound"] = configured_cap
-            if max_proof_states < proof_budget["max_total_proof_states"]:
-                proof_budget["cap_origin"] = "CONFIGURED_UPPER_BOUND"
-            proof_budget["max_total_proof_states"] = max_proof_states
-        policy = json.loads(
-            ws.path(
-                work_ref(ws.root, "state/research_execution_policy.json")
-            ).read_text(encoding="utf-8")
-        )
-        policy.update(
-            max_proof_states=max_proof_states,
-            budget_origin=proof_budget["cap_origin"],
-            mode=policy.get("mode", (self.config.mode or "research")),
-        )
-        ws.write_json(work_ref(ws.root, "state/research_execution_policy.json"), policy)
-        ws.write_json(work_ref(ws.root, "state/proof_loop_budget.json"), proof_budget)
-
-        return max_proof_states
+            problem = Problem(problem_id=workspace.problem_id, text=problem_path.read_text(encoding="utf-8"),
+                              source=str(problem_path))
+        except (OSError, UnicodeError) as exc:
+            return finalize_engine_failure(workspace, problem, profiler, error=exc)
+        return run_research_turn(workspace, problem, profiler, state, self._build_director_led_engine,
+                                 finalize=finalize)
 
     def _build_director_led_engine(
         self,
@@ -1009,13 +744,11 @@ class ProofPipeline:
                 workdir=ws.root,
                 target_contract_id=target_contract_id,
                 input_refs=kwargs.get("input_refs") or (),
-                control_context=(
-                    str(kwargs.get("control_context") or "")
-                    + "\nRemaining shared proof states: "
-                    + str(kwargs["proof_states_remaining"])
-                    + "\nRemaining research rounds (including the next dispatch): "
-                    + str(kwargs["research_rounds_remaining"])
-                ),
+                decision_inputs=kwargs["decision_inputs"],
+                on_accept=kwargs["on_accept"],
+                control_context=str(kwargs.get("control_context") or ""),
+                proof_states_remaining=kwargs["proof_states_remaining"],
+                research_rounds_remaining=kwargs["research_rounds_remaining"],
                 host_metadata={
                     "round_index": int(kwargs["round_index"]),
                     "agent_id": "director",
@@ -1040,9 +773,7 @@ class ProofPipeline:
             llm=self._survey_llm(), workdir=ws.root
         )["survey"]
 
-        def publish_results(**kwargs: Any):
-            state = kwargs.get("state")
-            return self._update_publication(ws, state, trigger=str(kwargs.get('trigger_id') or 'round'))
+        from pace.reporting.research_progress import run_research_reporter
 
         return DirectorLedEngine(
             workdir=ws.root,
@@ -1057,7 +788,9 @@ class ProofPipeline:
             target_contract_id=target_contract_id,
             max_proof_states=max_proof_states,
             max_rounds=policy.get("max_rounds"),
-            on_round_committed=publish_results,
+            review_findings=partial(publish_stage_findings, llm=llm),
+            reporter=lambda result_ref: run_research_reporter(
+                llm=llm, workdir=ws.root, result_ref=result_ref),
         )
 
     def _finalize_director_led_setup_failure(
@@ -1128,83 +861,4 @@ class ProofPipeline:
             proof_file=None,
             report_file=ws.path(note),
             final_report_file=ws.path(report_ref),
-        )
-
-    def _finalize_director_led_engine_failure(
-        self,
-        ws: RunWorkspace,
-        problem: Problem,
-        profiler: ProfileRecorder,
-        *,
-        target_contract_id: str,
-        error: Exception,
-    ) -> PipelineResult:
-        diagnostic_ref = work_ref(
-            ws.root, "state/diagnostics/director_led_engine_failure.json"
-        )
-        ws.write_json(
-            diagnostic_ref,
-            {
-                "schema_version": "operational_diagnostic/v1",
-                "stage": "DIRECTOR_LED_ENGINE",
-                "error_type": type(error).__name__,
-                "message": str(error),
-            },
-        )
-        try:
-            state = DirectorLedState.from_json(
-                json.loads(
-                    ws.path(work_ref(ws.root, "state/director_state.json")).read_text(
-                        encoding="utf-8"
-                    )
-                )
-            )
-        except (
-            DirectorLedEngineError,
-            OSError,
-            UnicodeError,
-            json.JSONDecodeError,
-            ValueError,
-        ):
-            raise DirectorLedEngineError(
-                "Director checkpoint is unavailable; preserve its diagnostics"
-            ) from error
-        if state.phase in {"DIRECTOR", "PENDING_SPECIALIST", "PENDING_BATCH", "VERIFY"}:
-            diagnostic = json.loads(ws.path(diagnostic_ref).read_text(encoding="utf-8"))
-            diagnostic["resume_checkpoint"] = state.to_json()
-            ws.write_json(diagnostic_ref, diagnostic)
-        # Reconstruct through the explicit fields to keep the state protocol
-        # closed; ``schema_version`` is emitted only by ``to_json``.
-        failed = DirectorLedState(
-            target_contract_id=state.target_contract_id,
-            # Round zero is reserved for the pristine DIRECTOR checkpoint.
-            # Any engine exception is a terminal Host event, so promote an
-            # untouched bootstrap state to the first terminal round rather
-            # than constructing the invalid FAILED/round-0 combination.
-            round_index=max(1, state.round_index),
-            max_proof_states=state.max_proof_states,
-            proof_states_used=state.proof_states_used,
-            phase="FAILED",
-            pending_dispatch_ref=state.pending_dispatch_ref,
-            pending_prompt_ref=state.pending_prompt_ref,
-            pending_assignment_ref=state.pending_assignment_ref,
-            pending_verifier_request_ref=state.pending_verifier_request_ref,
-            last_assignment_ref=state.last_assignment_ref,
-            completed_result_refs=state.completed_result_refs,
-            last_directive_ref=state.last_directive_ref,
-            last_composer_manifest_ref=state.last_composer_manifest_ref,
-            last_specialist_result_ref=state.last_specialist_result_ref,
-            last_verification_ref=state.last_verification_ref,
-            diagnostics_ref=diagnostic_ref,
-            stop_reason="director_led_engine_failed",
-            terminal_result="FAILED",
-            candidate_ref=state.candidate_ref,
-        )
-        ws.write_json(work_ref(ws.root, "state/director_state.json"), failed.to_json())
-        return finalize_director_led(
-            workspace=ws,
-            problem=problem,
-            run_result=failed,
-            profiler=profiler,
-            reason_code="director_led_engine_failed",
         )
