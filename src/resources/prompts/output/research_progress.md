@@ -16,6 +16,13 @@ are different states. State which is actually recorded. Missing evidence stays
 missing. Repeated unchanged attempts should be described honestly, not relabeled
 as progress or as a counterexample to the original conjecture.
 
+For a Research handoff in research mode, preserve an observation that changes
+the next mathematical question when the author documented one. In the existing
+summary, identify the calculation and its location, what it revealed within
+its tested scope, and the first open transfer step or distinguishing test
+given by the author. Attribute each point to the manuscript. Leave
+applications empty when the manuscript only supplies a lead.
+
 The delta has exactly schema_version (`research_delta/v1`), obligation_ids,
 branch_id, change_ref, applications, and attempt. Cite the original handoff in
 change_ref. Applications have id, obligation_id, argument_ref, premise_refs.

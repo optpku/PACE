@@ -19,6 +19,13 @@ tests can guide the investigation but do not establish an unrestricted claim.
 A failed auxiliary lemma refutes that lemma at its tested scope, not every route
 to the original target.
 
+When the assignment concerns an observed effect, start with a tractable case
+that retains the feature at issue. Work out the calculation and identify which
+assumption, quantity or choice of representation makes the effect appear or
+disappear. State what the calculation settles in this case and the first step
+that would need a new argument in the original setting. If it changes how the
+blocker should be understood, explain why in the same manuscript.
+
 Save useful partial derivations and completed checks as work proceeds, with
 their actual status. On resuming an interrupted task, inspect its existing
 deliverable and scratch outputs and continue the unfinished work. Reuse a
@@ -55,6 +62,10 @@ do not restate it as new progress: either close the next dependency or return
 the unchanged blocker with the precise missing premise. A conditional local
 bound must expose its actual parameter (for example `B`) and must not replace
 it with the target parameter merely to make the route look complete.
+
+A calculation can settle the selected case while the assigned general relation
+remains OPEN. State both scopes and identify the calculation that makes the
+next question more precise.
 
 Track the identity of the object a hypothesis bounds and the object the
 derivation actually uses. An existential bounded witness does not bound every

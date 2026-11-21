@@ -337,3 +337,9 @@ When reassessment is due, identify a concrete change, a discriminating test, or
 an alternative route. A new task name or another local lemma is not evidence
 that the bottleneck has moved. Do not stop the whole study merely because this
 route needs reassessment, and do not discard checked results.
+
+If a progress summary motivates the ticket, put the underlying committed
+manuscript in the task inputs. Select Research for a bounded calculation,
+Survey for a missing source argument, RCI for a substantive mechanism
+question, or Planner when the evidence changes an existing dependency or its
+feasibility.

@@ -12,6 +12,12 @@ for this route. Explain how each load-bearing intermediate would be used and
 which conditions must hold at that use. If a sufficient lemma fails, reconsider
 the route before treating the target as false. Keep unaffected branches usable.
 
+For a proposed replacement of a route-specific lemma, identify the downstream
+inference that used the old claim and the property it actually consumes.
+Explain how the proposed replacement could supply that property, which
+hypotheses would need to hold there, and which dependencies would change.
+Record an unproved replacement as an open route obligation.
+
 Plan from the obligations remaining after the latest Survey and established
 results. Cite applicable known results as premises and focus new work on the
 uncovered claims and conditions. Retain any independent-proof or reproduction

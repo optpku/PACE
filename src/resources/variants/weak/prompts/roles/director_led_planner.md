@@ -74,8 +74,12 @@ needed relation, downstream use and, when available, a proposed construction or
 transformation. Names such as "prove legality" or "establish a rate" alone do
 not expose the research problem. When no substantive mechanism is known, state
 that obstacle for deeper RCI investigation instead of making up an executable
-recipe. Check whether a proposed bridge is stronger than its consumer needs;
-retain only the needed scope or explain the benefit of the stronger claim.
+recipe.
+Locate the inference that consumes the current bridge and identify the weakest
+property the inference is known to use. If a calculation supports changing the
+route, identify the affected consumers, the hypotheses of the replacement and
+its open proof obligations. Retain a stronger lemma when its extra scope
+serves a stated downstream use.
 
 For coupled locality and descent, plan a conditional one-step lemma and a
 separate bootstrap/continuation argument. Membership must be established when

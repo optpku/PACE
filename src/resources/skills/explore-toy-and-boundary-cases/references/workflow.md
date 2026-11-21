@@ -2,7 +2,8 @@
 
 # Input Contract
 
-- Read the active relation, target assumptions, parameter ranges, and current blocker.
+- Read the active relation or the documented observation, the target assumptions,
+  parameter ranges and the current blocker.
 - Identify which uncertainty concerns structure, indexing, constants, signs, or scope.
 - Use only examples that respect the active domain and explicitly record any relaxed condition.
 - Treat finite calculations, symbolic examples, and numerical witnesses as search evidence.
@@ -15,7 +16,8 @@
 
 # Procedure
 
-1. Write the exact candidate relation or construction property being screened.
+1. State the relation under test or the observed effect to explain. Identify which
+   simplifying choices preserve the relevant feature.
 2. List the assumptions that every admissible test must satisfy.
 3. Choose the smallest meaningful dimension, horizon, or canonical special form.
 4. Include degenerate and boundary values that exercise quantifiers and conventions.
@@ -25,8 +27,11 @@
 8. Separate a violation of the active relation from failure of the full target conclusion.
 9. If a numerical witness is verifier backed, reproduce its exact values independently.
 10. Extract the symbolic identity, missing hypothesis, or corrected parameter range it suggests.
-11. Formulate the resulting bridge or obstruction as an exact mathematical statement.
-12. Return to theoretical derivation and prove the general relation from authorized premises.
+11. If the calculation identifies a general claim, state it and isolate the first
+    unproved implication. If it reveals a better object or a distinction between
+    explanations, report the calculation and suggest the next discriminating case.
+12. Continue to a general derivation from authorized premises when the assigned
+    scope and evidence support it.
 13. Check that the proposed correction does not reintroduce a removed condition implicitly.
 14. Retest the corrected relation on the cases that exposed the original weakness.
 15. Record unexplored regions instead of claiming global sharpness from a finite screen.

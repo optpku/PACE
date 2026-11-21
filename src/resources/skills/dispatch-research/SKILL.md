@@ -11,7 +11,10 @@ together with these role-specific instructions.
 For `research`, begin with `EXECUTE_LOCAL_TASK`. Select one bounded question,
 existing route node or local repair and preserve its assigned objective,
 assumptions, scope and expected output. Allow local creative attempts and a
-complete proof when feasible. After an unsuccessful attempt, read the concrete
+complete proof when feasible. A bounded task may ask what explains a documented
+observation. Cite the originating manuscript and request one calculation that
+can distinguish the live explanations, or clarify which feature matters when
+the explanation is still unknown. After an unsuccessful attempt, read the concrete
 blocker: a focused derivation or repair may merit Research, unresolved mechanism
 or conjecture search may merit RCI, and evidence changing route dependencies may
 merit Planner. Do not ask Research to redesign the whole route or automatically

@@ -84,6 +84,11 @@ whose value should be justified by the unresolved mathematical work.
 Every DISPATCH `prompt_brief` must name one bounded operation, why it is needed
 now, and the requested deliverable. It must not contain a mathematical plan.
 
+When an observation motivates a ticket, cite the committed original containing
+the calculation. If the next step concerns transfer from a source, also pass
+the acquired passage when available. Identify the decision the requested work
+can inform and let the specialist choose the mathematics.
+
 When returning to the same objective, use the concrete outcome of the previous
 attempt to explain what further work is warranted. An unfinished node alone
 does not justify repeating the same assignment. A failed sufficient lemma may

@@ -26,6 +26,10 @@ main approach is invalidated or the impact cannot be kept local. Ask the Planner
 to determine the mathematical changes and their downstream effects. Do not
 prescribe the replacement lemmas, dependencies or proof order.
 
+A calculation may justify reconsidering a dependency before the replacement
+has been proved. Provide the frozen route and the original calculation. Ask
+Planner to identify the affected use and the remaining proof obligations.
+
 
 ## Versioned task continuity
 

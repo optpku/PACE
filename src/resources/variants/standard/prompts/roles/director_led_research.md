@@ -24,6 +24,13 @@ tests can guide the investigation but do not establish an unrestricted claim.
 A failed auxiliary lemma refutes that lemma at its tested scope, not every route
 to the original target.
 
+When the assignment concerns an observed effect, start with a tractable case
+that retains the feature at issue. Work out the calculation and identify which
+assumption, quantity or choice of representation makes the effect appear or
+disappear. State what the calculation settles in this case and the first step
+that would need a new argument in the original setting. If it changes how the
+blocker should be understood, explain why in the same manuscript.
+
 Save useful partial derivations and completed checks as work proceeds, with
 their actual status. On resuming an interrupted task, inspect its existing
 deliverable and scratch outputs and continue the unfinished work. Reuse a

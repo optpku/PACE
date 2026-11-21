@@ -113,3 +113,12 @@ When reassessment is due, identify a concrete change, a discriminating test, or
 an alternative route. A new task name or another local lemma is not evidence
 that the bottleneck has moved. Do not stop the whole study merely because this
 route needs reassessment, and do not discard checked results.
+
+When a committed calculation changes how a blocker is understood, use the
+original manuscript as an input to the next assignment. Choose the smallest
+useful next task. A distinguishing calculation fits Research, a source
+question about a needed mathematical effect fits Survey, and a substantive
+mechanism or transfer problem fits RCI. Ask Planner to reconsider a dependency
+when the evidence changes its use or feasibility. Use the author's evidence to
+explain the choice and leave the mathematical construction and route design to
+their owners.
