@@ -7,8 +7,8 @@ import argparse
 import json
 from pathlib import Path
 
-from pace.runtime.output.workspace import list_problems
-from pace.reporting.writing import active_writing_request, writing_artifacts, pending_writing_request
+from pace.artifacts.workspace import list_problems
+from pace.orchestrator.writing.tasks import active_writing_request, writing_artifacts, pending_writing_request
 
 
 def read_optional(path: Path) -> dict | None:

@@ -16,7 +16,7 @@ class protected_inputs:
     def __init__(self, root, refs, invocation):
         self.root = Path(root)
         fixed = [self.root / str(ref) for ref in refs if str(ref)]
-        from pace.runtime.output.workspace import work_ref
+        from pace.artifacts.workspace import work_ref
 
         critical = list(
             self.root / work_ref(root, f"input/{name}")
@@ -24,24 +24,37 @@ class protected_inputs:
         )
         # These immutable originals may be reached through a catalogue link
         # rather than explicitly named in this call's suggested input list.
-        from pace.runtime.output.results import finding_entries
+        from pace.artifacts.results import finding_entries
 
         for row in finding_entries(self.root):
             # The publisher can replace the current reading view between calls.
             # Its bound manuscript and verification remain immutable originals.
             fixed.append(self.root / row["ref"])
-            critical.extend(self.root / row[key] for key in ("source_ref", "verification_ref"))
+            critical.extend(
+                self.root / row[key] for key in ("source_ref", "verification_ref")
+            )
         terminal = self.root / work_ref(root, "final_report.json")
         if terminal.is_file():
             report = json.loads(terminal.read_text(encoding="utf-8"))
             evidence = report.get("artifact_refs", {})
-            for name in ("proof", "candidate", "proof_manifest", "verification_binding",
-                         "verification", "auditor", "kernel", "source_authority"):
+            for name in (
+                "proof",
+                "candidate",
+                "proof_manifest",
+                "verification_binding",
+                "verification",
+                "auditor",
+                "kernel",
+                "source_authority",
+            ):
                 if evidence.get(name):
                     critical.append(self.root / evidence[name])
             if evidence.get("verification"):
                 directory = (self.root / evidence["verification"]).parent
-                critical.extend(directory / name for name in ("verification_inputs.json", "final_result.json"))
+                critical.extend(
+                    directory / name
+                    for name in ("verification_inputs.json", "final_result.json")
+                )
         self.originals = {
             path.resolve(): path.read_bytes() for path in fixed if path.is_file()
         }
@@ -62,7 +75,7 @@ class protected_inputs:
                     (directory / name).write_bytes(path.read_bytes())
                     index[key] = name
                 self.originals[path] = (directory / index[key]).read_bytes()
-            from pace.runtime.output.workspace import _write_json_atomic
+            from pace.artifacts.workspace import _write_json_atomic
 
             _write_json_atomic(manifest, index)
         self.invocation = invocation
@@ -76,7 +89,7 @@ class protected_inputs:
         self._save()
 
     def _save(self):
-        from pace.runtime.output.workspace import _write_json_atomic
+        from pace.artifacts.workspace import _write_json_atomic
 
         _write_json_atomic(self.snapshot / "manifest.json", self.manifest)
 
@@ -87,7 +100,11 @@ class protected_inputs:
     def check(self, attempt):
         changed = []
         for path, original in self.originals.items():
-            if not path.is_symlink() and path.is_file() and path.read_bytes() == original:
+            if (
+                not path.is_symlink()
+                and path.is_file()
+                and path.read_bytes() == original
+            ):
                 continue
             saved = Path(attempt) / "modified_inputs" / str(len(changed))
             saved.parent.mkdir(parents=True, exist_ok=True)
@@ -97,15 +114,32 @@ class protected_inputs:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(original)
             saved.write_bytes(modified)
-            saved.with_suffix(".diff").write_text("".join(difflib.unified_diff(
-                original.decode("utf-8", errors="backslashreplace").splitlines(keepends=True),
-                modified.decode("utf-8", errors="backslashreplace").splitlines(keepends=True),
-                fromfile=str(path), tofile="rejected modified input",
-            )), encoding="utf-8")
-            saved.with_suffix(".json").write_text(json.dumps({
-                "original_path": str(path), "invocation_id": str(self.invocation),
-                "action": "rejected and restored original bytes",
-            }, ensure_ascii=False), encoding="utf-8")
+            saved.with_suffix(".diff").write_text(
+                "".join(
+                    difflib.unified_diff(
+                        original.decode("utf-8", errors="backslashreplace").splitlines(
+                            keepends=True
+                        ),
+                        modified.decode("utf-8", errors="backslashreplace").splitlines(
+                            keepends=True
+                        ),
+                        fromfile=str(path),
+                        tofile="rejected modified input",
+                    )
+                ),
+                encoding="utf-8",
+            )
+            saved.with_suffix(".json").write_text(
+                json.dumps(
+                    {
+                        "original_path": str(path),
+                        "invocation_id": str(self.invocation),
+                        "action": "rejected and restored original bytes",
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
             changed.append(str(path))
         self.manifest.update(status="CLOSED", restored_paths=changed)
         self._save()
@@ -117,7 +151,7 @@ class protected_inputs:
 
 def recover_open_input_snapshots(root: Path) -> None:
     """Restore only unfinished calls found through the existing event index."""
-    from pace.runtime.output.events import read_events, append_event
+    from pace.artifacts.events import append_event, read_events
 
     seen = set()
     for event in reversed(read_events(root)):
@@ -142,6 +176,10 @@ def recover_open_input_snapshots(root: Path) -> None:
         try:
             protector.check(directory / "input_recovery")
         except InputModifiedError:
-            append_event(root, "INPUTS_RESTORED", call_ref=ref,
-                         paths=protector.manifest["restored_paths"],
-                         reason="unfinished call's original bytes restored before checkpoint recovery")
+            append_event(
+                root,
+                "INPUTS_RESTORED",
+                call_ref=ref,
+                paths=protector.manifest["restored_paths"],
+                reason="unfinished call's original bytes restored before checkpoint recovery",
+            )

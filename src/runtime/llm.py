@@ -7,41 +7,41 @@ import os
 import random
 import re
 import subprocess
+import tempfile
 import time
 import uuid
-import tempfile
 from collections.abc import Iterable
 from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Protocol, TextIO, Union
 
-from pace.runtime.output.calls import (
+from pace.artifacts.calls import (
     attempt_directory,
     call_directory,
     finish_call,
+)
+from pace.artifacts.events import (
+    append_event,
+    initialize_events,
+    read_events,
+    record_transport_attempt_finished,
+    record_transport_attempt_started,
+    write_call_summary,
+)
+from pace.artifacts.workspace import (
+    _write_json_atomic,
+    _write_text_atomic,
+    work_ref,
 )
 from pace.runtime.codex_config import (
     isolated_codex_args,
     isolated_codex_environment,
     retry_codex_args,
 )
-from pace.runtime.output.events import (
-    append_event,
-    initialize_events,
-    record_transport_attempt_finished,
-    record_transport_attempt_started,
-    read_events,
-    write_call_summary,
-)
-from pace.runtime.output.workspace import (
-    _write_json_atomic,
-    _write_text_atomic,
-    work_ref,
-)
+from pace.runtime.json_values import load_model_json
 from pace.runtime.processes import run_owned_process
 from pace.runtime.schema import validate_json_instance
-from pace.runtime.json_values import load_model_json
 
 RETRY_DETERMINISTIC_HOST = "DETERMINISTIC_HOST_CONTRACT"
 RETRY_CONFIGURATION = "NON_RETRYABLE_CONFIGURATION"
@@ -198,15 +198,26 @@ class CodexCallError(RuntimeError):
     @classmethod
     def from_result(cls, result: TransportFailure, *, workdir: Path, stage=""):
         return cls(
-            call_name=result.call_name, exit_code=result.exit_code,
-            workdir=workdir, calls_dir=result.artifact_dir,
-            stdout_path=result.artifact_dir / "stdout.jsonl" if result.attempt_count else None,
-            stderr_path=result.artifact_dir / "stderr.txt" if result.attempt_count else None,
-            transient_classification=result.retry_class, error_code=result.error_code,
-            retryable=result.retryable, invocation_id=result.invocation_id,
-            message=result.diagnostics[0].get("message") or json.dumps(result.diagnostics[0], ensure_ascii=False)
-            if result.diagnostics else result.error_code,
-            stage=stage, attempt_count=result.attempt_count,
+            call_name=result.call_name,
+            exit_code=result.exit_code,
+            workdir=workdir,
+            calls_dir=result.artifact_dir,
+            stdout_path=result.artifact_dir / "stdout.jsonl"
+            if result.attempt_count
+            else None,
+            stderr_path=result.artifact_dir / "stderr.txt"
+            if result.attempt_count
+            else None,
+            transient_classification=result.retry_class,
+            error_code=result.error_code,
+            retryable=result.retryable,
+            invocation_id=result.invocation_id,
+            message=result.diagnostics[0].get("message")
+            or json.dumps(result.diagnostics[0], ensure_ascii=False)
+            if result.diagnostics
+            else result.error_code,
+            stage=stage,
+            attempt_count=result.attempt_count,
         )
 
 
@@ -299,13 +310,21 @@ class CodexLLM:
         if failure is not None:
             # A caller may try another role after handling a failed result.
             # Close its already-started record without starting another process.
-            finish_call(workdir, ledger_context["call_ref"], status="INTERFACE_FAILED",
-                        error=failure.to_json())
+            finish_call(
+                workdir,
+                ledger_context["call_ref"],
+                status="INTERFACE_FAILED",
+                error=failure.to_json(),
+            )
             append_event(
-                workdir, "SEMANTIC_CALL_FAILED", call_id=ledger_context["call_id"],
-                call_name=call_name, role=ledger_context.get("role", "model_call"),
+                workdir,
+                "SEMANTIC_CALL_FAILED",
+                call_id=ledger_context["call_id"],
+                call_name=call_name,
+                role=ledger_context.get("role", "model_call"),
                 stage=ledger_context.get("stage", call_name),
-                error_code=failure.error_code, suppressed=True,
+                error_code=failure.error_code,
+                suppressed=True,
             )
             write_call_summary(workdir)
             raise failure
@@ -329,12 +348,19 @@ class CodexLLM:
             except Exception:
                 logger.warning("Could not persist interrupted call", exc_info=True)
             raise
-        if (isinstance(result, TransportFailure)
-                and result.retry_class != RETRY_MODEL_REPRESENTATION
-                and result.error_code != "interrupted"):
-            record_model_failure(workdir, CodexCallError.from_result(
-                result, workdir=workdir, stage=str(ledger_context.get("stage") or call_name),
-            ))
+        if (
+            isinstance(result, TransportFailure)
+            and result.retry_class != RETRY_MODEL_REPRESENTATION
+            and result.error_code != "interrupted"
+        ):
+            record_model_failure(
+                workdir,
+                CodexCallError.from_result(
+                    result,
+                    workdir=workdir,
+                    stage=str(ledger_context.get("stage") or call_name),
+                ),
+            )
         return result
 
     def _complete_transport_owned(
@@ -353,7 +379,10 @@ class CodexLLM:
         record_ref = str(ledger_context["call_ref"])
         invocation_dir = call_directory(resolved, record_ref)
         record = json.loads((resolved / record_ref).read_text(encoding="utf-8"))
-        from pace.runtime.agent_environment import director_thread, record_native_session
+        from pace.runtime.agent_environment import (
+            director_thread,
+            record_native_session,
+        )
 
         agent_home = Path(record["agent_home"]) if record["agent_home"] else None
         prompt_file = resolved / record["prompt_ref"]
@@ -371,20 +400,18 @@ class CodexLLM:
                 call_name=call_name,
                 workdir=resolved,
                 prompt_file=prompt_file,
-                input_refs=(ref for ref in ledger_context.get("input_refs", ())
-                            if agent_home is None or not is_prompt_resource(resolved / ref, workdir=resolved)),
+                input_refs=(
+                    ref
+                    for ref in ledger_context.get("input_refs", ())
+                    if agent_home is None
+                    or not is_prompt_resource(resolved / ref, workdir=resolved)
+                ),
                 output_schema_file=schema_file,
                 role=role,
                 read_scope=str(ledger_context.get("read_scope") or ""),
                 output_refs=ledger_context.get("output_refs", ()),
                 output_dirs=ledger_context.get("output_dirs", ()),
             )
-        from pace.runtime.prompts import project_skill_instruction
-
-        instruction += (
-            project_skill_instruction(resolved, role=role)
-            or "\nUse only this task's saved PACE role resources and Skills. "
-        )
         instruction += (
             "Do not discover or read personal AGENTS, Skills or memories in the user's home. "
             "Authentication files are not research inputs.\n"
@@ -412,8 +439,8 @@ class CodexLLM:
         # Exclude it from Codex's nested shell snapshot, including Unicode paths.
         environment.pop("_", None)
         from pace.runtime.input_protection import (
-            protected_inputs,
             InputModifiedError,
+            protected_inputs,
         )
 
         protection = protected_inputs(
@@ -433,7 +460,11 @@ class CodexLLM:
             response_file = attempt_dir / "response.txt"
             stdout_path = attempt_dir / "stdout.jsonl"
             stderr_path = attempt_dir / "stderr.txt"
-            thread_id = director_thread(agent_home) if agent_home and role.upper() == "GLOBAL_RESEARCH_DIRECTOR" else ""
+            thread_id = (
+                director_thread(agent_home)
+                if agent_home and role.upper() == "GLOBAL_RESEARCH_DIRECTOR"
+                else ""
+            )
             cmd = [self.cli_path, "exec"]
             if thread_id:
                 cmd.extend(["resume", thread_id])
@@ -499,8 +530,13 @@ class CodexLLM:
                             environment.get("CODEX_HOME") or Path.home() / ".codex"
                         )
                         config_root.mkdir(parents=True, exist_ok=True)
-                        home_context = (nullcontext(agent_home) if agent_home else
-                                        tempfile.TemporaryDirectory(prefix="pace-call-", dir=config_root))
+                        home_context = (
+                            nullcontext(agent_home)
+                            if agent_home
+                            else tempfile.TemporaryDirectory(
+                                prefix="pace-call-", dir=config_root
+                            )
+                        )
                         with home_context as config_home:
                             with isolated_codex_environment(
                                 environment, Path(config_home)
@@ -529,8 +565,12 @@ class CodexLLM:
                             )
                         finally:
                             if agent_home is not None:
-                                record_native_session(home=agent_home, role=role, stdout_path=stdout_path,
-                                                      record_path=resolved / record_ref)
+                                record_native_session(
+                                    home=agent_home,
+                                    role=role,
+                                    stdout_path=stdout_path,
+                                    record_path=resolved / record_ref,
+                                )
                             # Always record a transport's actual active interval. Higher-level
                             # profiling remains optional and must not be added to this cost.
                             try:
@@ -553,8 +593,11 @@ class CodexLLM:
                 missing = isinstance(exc, FileNotFoundError)
                 timed_out = isinstance(exc, subprocess.TimeoutExpired)
                 modified = isinstance(exc, InputModifiedError)
-                environment_error = isinstance(exc, PermissionError) or getattr(exc, "errno", None) in {
-                    errno.ENOSPC, errno.EROFS,
+                environment_error = isinstance(exc, PermissionError) or getattr(
+                    exc, "errno", None
+                ) in {
+                    errno.ENOSPC,
+                    errno.EROFS,
                 }
                 result: TransportResult = TransportFailure(
                     invocation_id=invocation_id,
@@ -575,7 +618,9 @@ class CodexLLM:
                         if timed_out
                         else RETRY_TRANSIENT
                     ),
-                    retryable=not (missing or timed_out or modified or environment_error),
+                    retryable=not (
+                        missing or timed_out or modified or environment_error
+                    ),
                     exit_code=None,
                     terminal_event_type="process.not_started"
                     if missing
@@ -711,6 +756,7 @@ class CodexLLM:
             return result
         raise AssertionError("transport retry loop terminated without a result")
 
+
 def _record_call_interruption(
     root: Path,
     context: dict[str, Any],
@@ -825,14 +871,25 @@ def build_llm(
 ) -> LLM:
     if provider == "chat-completions":
         from .chat_api import ChatCompletionsLLM
+
         base_url = os.environ.get("PACE_API_BASE_URL", "").strip()
         if not base_url or not os.environ.get("PACE_API_KEY"):
-            raise ValueError("chat-completions requires PACE_API_BASE_URL and PACE_API_KEY")
-        max_retries = int(os.environ.get("PACE_CHAT_MAX_RETRIES", ChatCompletionsLLM.max_retries))
+            raise ValueError(
+                "chat-completions requires PACE_API_BASE_URL and PACE_API_KEY"
+            )
+        max_retries = int(
+            os.environ.get("PACE_CHAT_MAX_RETRIES", ChatCompletionsLLM.max_retries)
+        )
         if not 0 <= max_retries <= 20:
             raise ValueError("PACE_CHAT_MAX_RETRIES must be between 0 and 20")
-        return ChatCompletionsLLM(model=model, reasoning_effort=reasoning_effort, web_search=web_search,
-                                  timeout_seconds=timeout_seconds, base_url=base_url, max_retries=max_retries)
+        return ChatCompletionsLLM(
+            model=model,
+            reasoning_effort=reasoning_effort,
+            web_search=web_search,
+            timeout_seconds=timeout_seconds,
+            base_url=base_url,
+            max_retries=max_retries,
+        )
     if provider in {"newapi", "llmmelon"} and not (
         os.getenv("NL_PROOF_CODEX_AUTH_MODE") == "api_key"
         and os.getenv("NL_PROOF_CODEX_BASE_URL")
@@ -1126,7 +1183,10 @@ def _assistant_message_from_event(row: dict[str, Any]) -> str | None:
     event_type = str(row.get("type") or "")
     if event_type == "item.completed":
         item = row.get("item")
-        if isinstance(item, dict) and str(item.get("type") or "") in {"agent_message", "assistant_message"}:
+        if isinstance(item, dict) and str(item.get("type") or "") in {
+            "agent_message",
+            "assistant_message",
+        }:
             return str(item.get("text") or item.get("content") or "").strip()
     if event_type in {"agent_message", "assistant_message", "message.completed"}:
         role = str(row.get("role") or "assistant")
@@ -1318,7 +1378,10 @@ def _transport_payload(result: TransportResult) -> dict[str, Any]:
 
 
 def classify_model_error(
-    code: str, message: str, *, http_status: int | None = None,
+    code: str,
+    message: str,
+    *,
+    http_status: int | None = None,
 ) -> tuple[str, str, bool]:
     """One classification for provider replies and the completed CLI timeline."""
     code = code.lower()
@@ -1327,62 +1390,145 @@ def classify_model_error(
         status = re.search(r"\b(?:http(?: status)?|status)\s*[:=]?\s*(\d{3})\b", text)
         if status:
             http_status = int(status.group(1))
-    if any(marker in text for marker in (
-        "insufficient_quota", "insufficient quota", "insufficient account balance",
-        "insufficient balance", "credit balance", "quota_exceeded", "quota exhausted",
-        "exceeded your current quota", "billing_hard_limit", "余额不足", "额度不足", "配额不足",
-    )):
+    if any(
+        marker in text
+        for marker in (
+            "insufficient_quota",
+            "insufficient quota",
+            "insufficient account balance",
+            "insufficient balance",
+            "credit balance",
+            "quota_exceeded",
+            "quota exhausted",
+            "exceeded your current quota",
+            "billing_hard_limit",
+            "余额不足",
+            "额度不足",
+            "配额不足",
+        )
+    ):
         return "insufficient_quota", RETRY_CONFIGURATION, False
-    if code == "invalid_json_schema" or any(marker in text for marker in (
-        "invalid schema for response_format", "missing required schema field",
-        "additionalproperties is required",
-    )):
+    if code == "invalid_json_schema" or any(
+        marker in text
+        for marker in (
+            "invalid schema for response_format",
+            "missing required schema field",
+            "additionalproperties is required",
+        )
+    ):
         return "invalid_json_schema", RETRY_DETERMINISTIC_HOST, False
     if code in {"authentication_error", "invalid_api_key", "permission_denied"} or any(
-        marker in text for marker in (
-            "invalid api key", "incorrect api key", "permission denied", "unauthorized",
+        marker in text
+        for marker in (
+            "invalid api key",
+            "incorrect api key",
+            "permission denied",
+            "unauthorized",
         )
     ):
         return code or "authentication_error", RETRY_CONFIGURATION, False
-    if code == "model_not_found" or any(marker in text for marker in (
-        "model not found", "model access", "unsupported model", "unknown model",
-    )):
+    if code == "model_not_found" or any(
+        marker in text
+        for marker in (
+            "model not found",
+            "model access",
+            "unsupported model",
+            "unknown model",
+        )
+    ):
         return "model_not_found", RETRY_CONFIGURATION, False
-    if code in {"context_length_exceeded", "context_window_exceeded", "prompt_too_long"} or any(
-        marker in text for marker in (
-            "context length exceeded", "maximum context length", "context window exceeded",
-            "prompt is too long", "too many tokens",
+    if code in {
+        "context_length_exceeded",
+        "context_window_exceeded",
+        "prompt_too_long",
+    } or any(
+        marker in text
+        for marker in (
+            "context length exceeded",
+            "maximum context length",
+            "context window exceeded",
+            "prompt is too long",
+            "too many tokens",
         )
     ):
         return "context_overflow", RETRY_NON_TRANSIENT, False
     if code in {
-        "invalid_parameter", "unsupported_parameter", "unsupported_value", "invalid_request_error",
-    } or any(marker in text for marker in (
-        "invalidparameter", "this text.format type is unavailable", "unsupported parameter",
-        "unsupported value", "not supported with this model", "does not support", "unknown variant",
-    )):
+        "invalid_parameter",
+        "unsupported_parameter",
+        "unsupported_value",
+        "invalid_request_error",
+    } or any(
+        marker in text
+        for marker in (
+            "invalidparameter",
+            "this text.format type is unavailable",
+            "unsupported parameter",
+            "unsupported value",
+            "not supported with this model",
+            "does not support",
+            "unknown variant",
+        )
+    ):
         return "unsupported_request_parameter", RETRY_CONFIGURATION, False
-    if any(marker in text for marker in (
-        "certificate verify failed", "certificate_verify_failed", "hostname mismatch",
-        "name or service not known", "nodename nor servname provided",
-    )):
+    if any(
+        marker in text
+        for marker in (
+            "certificate verify failed",
+            "certificate_verify_failed",
+            "hostname mismatch",
+            "name or service not known",
+            "nodename nor servname provided",
+        )
+    ):
         return code or "connection_configuration_error", RETRY_CONFIGURATION, False
     if http_status in {401, 403, 407}:
         return code or "permission_denied", RETRY_CONFIGURATION, False
-    if http_status is not None and 400 <= http_status < 500 and http_status not in {408, 429}:
+    if (
+        http_status is not None
+        and 400 <= http_status < 500
+        and http_status not in {408, 429}
+    ):
         return code or f"http_{http_status}", RETRY_CONFIGURATION, False
-    if http_status in {408, 429, 500, 502, 503, 504} or code in {
-        "rate_limit_exceeded", "too_many_requests", "server_error", "overloaded_error",
-    } or any(marker in text for marker in (
-        "selected model is at capacity", "model is at capacity", "temporarily unavailable",
-        "please try again", "rate limit", "rate_limit_exceeded", "too_many_requests",
-        "concurrency limit exceeded", "502 bad gateway", "503 service unavailable",
-        "504 gateway timeout", "timeout", "timed out", "overloaded", "stream disconnected",
-        "upstream response stream was interrupted",
-        "connection reset", "connection refused", "connection closed", "connection aborted",
-        "connection failed", "broken pipe", "temporary failure in name resolution",
-        "missing field in models response", "json stream truncation",
-    )):
+    if (
+        http_status in {408, 429, 500, 502, 503, 504}
+        or code
+        in {
+            "rate_limit_exceeded",
+            "too_many_requests",
+            "server_error",
+            "overloaded_error",
+        }
+        or any(
+            marker in text
+            for marker in (
+                "selected model is at capacity",
+                "model is at capacity",
+                "temporarily unavailable",
+                "please try again",
+                "rate limit",
+                "rate_limit_exceeded",
+                "too_many_requests",
+                "concurrency limit exceeded",
+                "502 bad gateway",
+                "503 service unavailable",
+                "504 gateway timeout",
+                "timeout",
+                "timed out",
+                "overloaded",
+                "stream disconnected",
+                "upstream response stream was interrupted",
+                "connection reset",
+                "connection refused",
+                "connection closed",
+                "connection aborted",
+                "connection failed",
+                "broken pipe",
+                "temporary failure in name resolution",
+                "missing field in models response",
+                "json stream truncation",
+            )
+        )
+    ):
         return code or "transient_execution_error", RETRY_TRANSIENT, True
     return code or "transport_failed", RETRY_NON_TRANSIENT, False
 
@@ -1393,16 +1539,29 @@ def _classify_transport_failure(
     events: CodexEventTimeline,
 ) -> tuple[str, str, bool]:
     terminal_code, terminal_message = (
-        _error_from_event(events.final_terminal_event) if events.terminal_error else ("", "")
+        _error_from_event(events.final_terminal_event)
+        if events.terminal_error
+        else ("", "")
     )
-    latest = events.recoverable_error_events[-1] if events.recoverable_error_events else {}
+    latest = (
+        events.recoverable_error_events[-1] if events.recoverable_error_events else {}
+    )
     generic_code, generic_message = _error_from_event(latest)
     result = classify_model_error(
         terminal_code or generic_code,
-        "\n".join((terminal_message, generic_message,
-                   completed.stderr if not events.terminal_success else "")),
+        "\n".join(
+            (
+                terminal_message,
+                generic_message,
+                completed.stderr if not events.terminal_success else "",
+            )
+        ),
     )
-    if result[0] == "transport_failed" and not events.terminal_error and completed.returncode == 0:
+    if (
+        result[0] == "transport_failed"
+        and not events.terminal_error
+        and completed.returncode == 0
+    ):
         return "missing_terminal_success", RETRY_NON_TRANSIENT, False
     return result
 
@@ -1531,9 +1690,13 @@ def _build_file_driven_cli_instruction(
     outputs = tuple(str(ref) for ref in output_refs if ref)
     directories = tuple(str(ref) for ref in output_dirs if ref)
     if outputs or directories or read_scope == "declared":
-        base += ("Writable files: " + json.dumps(outputs, ensure_ascii=False)
-                 + ". Writable directories: " + json.dumps(directories, ensure_ascii=False)
-                 + ". All other task files are read-only.\n\n")
+        base += (
+            "Writable files: "
+            + json.dumps(outputs, ensure_ascii=False)
+            + ". Writable directories: "
+            + json.dumps(directories, ensure_ascii=False)
+            + ". All other task files are read-only.\n\n"
+        )
     if suggested:
         base += (
             "Suggested reading paths:\n"

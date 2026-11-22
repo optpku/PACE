@@ -5,10 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from pace.agents.research.rci.phase_runner import RciPhaseError, RciPhaseRunner
+from pace.agents.rci.phase_runner import RciPhaseError, RciPhaseRunner
 from pace.runtime.llm import TransportSuccess
-from pace.runtime.output.calls import attempt_directory
-from pace.runtime.output.workspace import RunWorkspace
+from pace.artifacts.calls import attempt_directory
+from pace.artifacts.workspace import RunWorkspace
 from pace.runtime.prompts import materialize_run_resources
 
 

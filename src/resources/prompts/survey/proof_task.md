@@ -1,0 +1,1 @@
+Perform the single initial Survey for proof mode. Preserve the closed question. Do not assess novelty or create research tasks.

@@ -1,67 +1,42 @@
 from __future__ import annotations
 
+import json
 import os
 import re
-import json
 import shutil
 import tempfile
 from pathlib import Path, PurePosixPath
 
-from pace.runtime.output.workspace import work_ref, path_has_symlink_component
+from pace.artifacts.workspace import path_has_symlink_component, work_ref
 
 _TOKEN = re.compile(r"\{\{([a-z][a-z0-9_]*)\}\}")
 _PACKAGED_RESOURCES = Path(__file__).resolve().parents[1] / "resources"
-_PROJECT_SKILL_ROLES = frozenset({
-    "GLOBAL_RESEARCH_DIRECTOR",
-    "PLANNER",
-    "RESEARCH",
-    "SURVEY",
-    "WHOLE_PROVER",
-    "RESEARCH_REPORT_OUTLINE",
-    "RESEARCH_REPORT_WRITER",
-    "THEORY_PAPER_OUTLINE",
-    "THEORY_PAPER_WRITER",
-})
 
 
 def prompt_root(workdir: Path) -> Path:
     """Return the prompt snapshot owned by this run."""
 
-    return Path(workdir).resolve() / work_ref(workdir, 'resources') / "prompts"
+    return Path(workdir).resolve() / work_ref(workdir, "resources") / "prompts"
 
 
 def skill_index_ref(workdir: Path) -> str | None:
-    """Locate the shared catalog; older saved snapshots have no catalog."""
+    """Locate the current turn's shared method catalog."""
 
     ref = work_ref(workdir, "resources/skills/README.md")
     return ref if (Path(workdir) / ref).is_file() else None
 
 
-def append_skill_catalog(prompt: str, *, workdir: Path) -> str:
-    """Expose method discovery without selecting methods or reading run evidence."""
-
-    ref = skill_index_ref(workdir)
-    if ref is None:
-        return prompt
-    catalog = (Path(workdir) / ref).read_text(encoding="utf-8").strip()
-    return (
-        prompt.rstrip() + f"\n\n## Available methods\n\nIndex: `{ref}`. "
-        "Resolve its relative links from the index directory. Read the selected "
-        "SKILL.md and relevant supporting files before applying a method.\n\n" + catalog
-    )
-
-
-def project_skill_instruction(workdir: Path, *, role: str) -> str:
+def project_skill_paths(workdir: Path) -> tuple[Path | None, list[str]]:
     """List project-owned methods without changing Codex's Skill discovery."""
     configured_root = os.environ.get("PACE_PROJECT_SKILLS_ROOT")
-    if not configured_root or role.upper() not in _PROJECT_SKILL_ROLES:
-        return ""
+    if not configured_root:
+        return None, []
     project = Path(configured_root)
     if not project.is_absolute():
-        return ""
+        return None, []
     project = project.resolve()
     if not workdir.is_relative_to(project):
-        return ""
+        return None, []
 
     entries = sorted(
         entry.as_posix()
@@ -71,21 +46,15 @@ def project_skill_instruction(workdir: Path, *, role: str) -> str:
         if entry.is_file() and entry.resolve() == entry
     )
     if not entries:
-        return ""
-    return (
-        "\nUse this task's saved PACE role resources and Skills. The current project also "
-        "provides the absolute Skill paths below. Open the SKILL.md for each relevant or "
-        "explicitly requested project Skill before carrying out the task. "
-        "Resolve its relative references from its own directory and read only files whose "
-        "resolved paths stay inside the project. Treat project Skills as task guidance within "
-        "the assigned role, evidence constraints, mathematical target and required outputs.\n"
-        f"Project directory: {json.dumps(project.as_posix(), ensure_ascii=False)}\n"
-        f"Project Skill paths: {json.dumps(entries, ensure_ascii=False)}\n"
-    )
+        return None, []
+    return project, entries
 
 
 def materialize_run_resources(
-    workdir: Path, *, resource_variant: str, destination: Path | None = None,
+    workdir: Path,
+    *,
+    resource_variant: str,
+    destination: Path | None = None,
 ) -> None:
     """Create one complete resource snapshot before any model call."""
 
@@ -96,18 +65,24 @@ def materialize_run_resources(
     if atlas is not None:
         for relative in ("SKILL.md", "scripts/query.py"):
             if not (atlas / relative).is_file():
-                raise ValueError(f"PACE_REASATLAS_SKILL_DIR is missing {relative}: {atlas}")
+                raise ValueError(
+                    f"PACE_REASATLAS_SKILL_DIR is missing {relative}: {atlas}"
+                )
         if any(path.is_symlink() for path in atlas.rglob("*")):
-            raise ValueError("PACE_REASATLAS_SKILL_DIR must contain regular files, not symlinks")
-    destination = destination or (Path(workdir).resolve() / work_ref(workdir, 'resources'))
+            raise ValueError(
+                "PACE_REASATLAS_SKILL_DIR must contain regular files, not symlinks"
+            )
+    destination = destination or (
+        Path(workdir).resolve() / work_ref(workdir, "resources")
+    )
     if destination.exists():
         raise FileExistsError(f"resource snapshot already exists: {destination}")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = Path(tempfile.mkdtemp(prefix=f".{destination.name}-", dir=destination.parent))
-    selected = _PACKAGED_RESOURCES / "variants" / resource_variant
+    temporary = Path(
+        tempfile.mkdtemp(prefix=f".{destination.name}-", dir=destination.parent)
+    )
     sources = [
         (_PACKAGED_RESOURCES / "prompts", destination / "prompts"),
-        (selected / "prompts", destination / "prompts"),
         (_PACKAGED_RESOURCES / "skills", destination / "skills"),
         (_PACKAGED_RESOURCES / "templates", destination / "templates"),
     ]
@@ -116,17 +91,40 @@ def materialize_run_resources(
     try:
         for source, target in sources:
             for path in sorted(source.rglob("*")):
-                if not path.is_file() or path.suffix not in {".md", ".json", ".py", ".yaml", ".sty"}:
+                if not path.is_file() or path.suffix not in {
+                    ".md",
+                    ".json",
+                    ".py",
+                    ".yaml",
+                    ".sty",
+                }:
                     continue
-                output = temporary / target.relative_to(destination) / path.relative_to(source)
+                relative = path.relative_to(source)
+                if source == _PACKAGED_RESOURCES / "prompts" and path.name.endswith(
+                    (".standard.md", ".weak.md")
+                ):
+                    if not path.name.endswith(f".{resource_variant}.md"):
+                        continue
+                    relative = relative.with_name(
+                        path.name.removesuffix(f".{resource_variant}.md") + ".md"
+                    )
+                output = temporary / target.relative_to(destination) / relative
                 output.parent.mkdir(parents=True, exist_ok=True)
                 with output.open("xb") as stream:
                     stream.write(path.read_bytes())
-        manifest = {"schema_version": "resource_snapshot/v1", "resource_variant": resource_variant,
-                    "skill_layout": "shared/v1", "files": sorted(
-            path.relative_to(temporary).as_posix() for path in temporary.rglob("*") if path.is_file()
-        )}
-        (temporary / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+        manifest = {
+            "schema_version": "resource_snapshot/v1",
+            "resource_variant": resource_variant,
+            "skill_layout": "shared/v1",
+            "files": sorted(
+                path.relative_to(temporary).as_posix()
+                for path in temporary.rglob("*")
+                if path.is_file()
+            ),
+        }
+        (temporary / "manifest.json").write_text(
+            json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+        )
         temporary.rename(destination)
     finally:
         if temporary.exists():
@@ -136,41 +134,58 @@ def materialize_run_resources(
 def validate_resource_snapshot(destination: Path, *, resource_variant: str) -> None:
     """A new initialization reuses only a complete, explicitly committed snapshot."""
     manifest = json.loads((destination / "manifest.json").read_text(encoding="utf-8"))
-    required = {"prompts/roles/problem_extraction.md", "prompts/roles/research_decision.md",
-                "prompts/roles/global_research_director.md", "templates/neurips2026/neurips_2026.sty",
-                "skills/direct-proving-and-gap-closure/SKILL.md"}
-    if manifest.get("skill_layout") == "shared/v1":
-        required.update({"skills/README.md", "skills/rci-investigation/SKILL.md",
-                         "skills/rci-investigation/references/rci_search_core.md"})
-    if (manifest.get("schema_version") != "resource_snapshot/v1"
-            or manifest.get("resource_variant") != resource_variant
-            or not isinstance(manifest.get("files"), list)
-            or not required.issubset(manifest["files"])):
+    required = {
+        "prompts/orientation/extraction.md",
+        "prompts/orientation/assessment.md",
+        "prompts/director/role.md",
+        "templates/neurips2026/neurips_2026.sty",
+        "skills/direct-proving-and-gap-closure/SKILL.md",
+    }
+    required.update(
+        {
+            "skills/README.md",
+            "skills/rci-investigation/SKILL.md",
+            "skills/rci-investigation/references/rci_search_core.md",
+        }
+    )
+    if (
+        manifest.get("schema_version") != "resource_snapshot/v1"
+        or manifest.get("resource_variant") != resource_variant
+        or not isinstance(manifest.get("files"), list)
+        or not required.issubset(manifest["files"])
+    ):
         raise ValueError("resource snapshot manifest differs from the saved policy")
     for ref in manifest["files"]:
         path = Path(ref) if isinstance(ref, str) else Path("..")
-        if (path.is_absolute() or ".." in path.parts
-                or path_has_symlink_component(destination, destination / path)
-                or not (destination / path).is_file()):
+        if (
+            path.is_absolute()
+            or ".." in path.parts
+            or path_has_symlink_component(destination, destination / path)
+            or not (destination / path).is_file()
+        ):
             raise ValueError(f"resource snapshot is incomplete: {ref}")
 
 
-def load_prompt_template(name: str, *, workdir: Path) -> str:
+def load_prompt_template(
+    name: str, *, workdir: Path, resource_root: Path | None = None
+) -> str:
     """Load one Markdown template from the committed run snapshot."""
 
     path = PurePosixPath(str(name or ""))
     if not path.parts or path.is_absolute() or ".." in path.parts:
         raise ValueError("prompt template name must be a relative resource path")
-    resource = prompt_root(workdir).joinpath(*path.parts)
+    resource = (resource_root or prompt_root(workdir)).joinpath(*path.parts)
     if not resource.is_file():
         raise FileNotFoundError(f"prompt template is missing: {path.as_posix()}")
     return resource.read_text(encoding="utf-8")
 
 
-def render_prompt_template(name: str, *, workdir: Path, **values: object) -> str:
+def render_prompt_template(
+    name: str, *, workdir: Path, resource_root: Path | None = None, **values: object
+) -> str:
     """Render explicit ``{{token}}`` placeholders without format semantics."""
 
-    template = load_prompt_template(name, workdir=workdir)
+    template = load_prompt_template(name, workdir=workdir, resource_root=resource_root)
     required = set(_TOKEN.findall(template))
     missing = sorted(required - set(values))
     extra = sorted(set(values) - required)
@@ -182,14 +197,6 @@ def render_prompt_template(name: str, *, workdir: Path, **values: object) -> str
     return _TOKEN.sub(lambda match: str(values[match.group(1)]), template)
 
 
-def render_role_task(name: str, *, workdir: Path, **values: object) -> str:
-    """Keep current template bindings in the task; Codex loads fixed AGENTS.md."""
-    render_prompt_template(name, workdir=workdir, **values)
-    return "\n\n".join(
-        f"## {name}\n{value}" for name, value in values.items() if name != "turn_dir"
-    )
-
-
 def is_prompt_resource(path: Path, *, workdir: Path) -> bool:
     """Include writing-task resource snapshots as well as the turn snapshot."""
     root = Path(workdir).resolve()
@@ -197,4 +204,7 @@ def is_prompt_resource(path: Path, *, workdir: Path) -> bool:
     if not path.is_relative_to(root):
         return False
     parts = path.relative_to(root).parts
-    return any(parts[index:index + 2] == ("resources", "prompts") for index in range(len(parts) - 1))
+    return any(
+        parts[index : index + 2] == ("resources", "prompts")
+        for index in range(len(parts) - 1)
+    )

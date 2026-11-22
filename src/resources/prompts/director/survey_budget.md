@@ -1,0 +1,2 @@
+
+Survey calls remaining: {{remaining}}/4 (including initial Survey and failed calls). Do not repeat unchanged acquisition. When no calls remain, dispatch RCI/Research/Planner/Prover using the latest Survey gap report and acquired source files; missing literature alone is not a reason to STOP. With one call left, place Survey in the primary task, not a companion.

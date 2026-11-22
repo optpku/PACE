@@ -1,4 +1,9 @@
 """Research authority, committed replay and independent application checks."""
+
+from pace.orchestrator import memory as memory_owner
+
+from pace.orchestrator.memory import commit_round_memory
+from pace.orchestrator.results import publish_stage_findings
 import json
 from pathlib import Path
 
@@ -6,14 +11,14 @@ import pytest
 
 from pace.contracts.research.director_protocol import parse_director_decision
 from pace.contracts.research.memory import binding, digest, prepare_delta, prepare_route, public_file, repair_route_references
-from pace.orchestrator.director_led import DirectorLedEngine
-from pace.orchestrator.finding_publication import publish_applications
-from pace.runtime.output.events import read_events
-from pace.runtime.output.memory import (initialize_research_memory, commit_research_memory,
+from pace.agents.director.loop import DirectorLedEngine
+from pace.agents.director.findings import check_applications
+from pace.artifacts.events import read_events
+from pace.orchestrator.memory import (initialize_research_memory, commit_research_memory,
     rebuild_research_index, research_brief, refresh_application_memory)
-from pace.runtime.output.workspace import RunWorkspace, work_ref
-from pace.runtime.prompt_composer import PromptComposerResult
-from pace.runtime.research_context import director_archive_refs, freeze_context, load_index
+from pace.artifacts.workspace import RunWorkspace, work_ref
+from pace.agents.prompt_composer import PromptComposerResult
+from pace.agents.director.context import director_archive_refs, freeze_context, load_index
 from pace.runtime.semantic import StructuredSemanticResult
 
 
@@ -27,7 +32,7 @@ def ws(tmp_path):
     ws.write_json(ws.work_ref('state/proof_loop_budget.json'), {'max_total_proof_states':3})
     from pace.runtime.prompts import materialize_run_resources
     materialize_run_resources(ws.root, resource_variant="standard")
-    from pace.runtime.agent_environment import prepare_agent_environments
+    from pace.agents.director.harness import prepare_agent_environments
     prepare_agent_environments(ws.root, mode="research")
     initialize_research_memory(ws.root)
     return ws
@@ -116,9 +121,11 @@ def test_application_acceptance_is_independent_of_publication(ws, monkeypatch, v
         return StructuredSemanticResult({'stage_status':verdict,'reuse_authorized':verdict=='PASS',
             'publication':{'action':'NONE'},'application_checks':[{'obligation_id':r['obligation_id'],
             'obligation_version':r['obligation_version'],'status':status,'review_ref':r['review_ref']}]},{})
-    monkeypatch.setattr('pace.orchestrator.finding_publication.verify_finding',verify)
-    assert publish_applications(llm=object(),root=ws.root)
-    assert publish_applications(llm=object(),root=ws.root)
+    monkeypatch.setattr('pace.agents.director.findings.verify_finding',verify)
+    assert check_applications(llm=object(),root=ws.root)
+    memory_owner.refresh_application_memory(ws.root)
+    assert check_applications(llm=object(),root=ws.root)
+    memory_owner.refresh_application_memory(ws.root)
     assert len(calls)==1
     assert next(iter(load_index(ws.root)['applications'].values()))['status']==status
     assert not ws.path('work/state/findings.json').exists()
@@ -198,7 +205,7 @@ def test_resume_after_author_commit_does_not_repeat_author(ws):
         raise KeyboardInterrupt()
     engine=DirectorLedEngine(workdir=ws.root,director=lambda **_:task('planner'),
         composer=lambda **_:PromptComposerResult('Fixed instructions',''),specialists={'planner':author},
-        target_contract_id='TARGET',max_rounds=1)
+        target_contract_id='TARGET',max_rounds=1, commit_memory=commit_round_memory, commit_results=publish_stage_findings)
     with pytest.raises(KeyboardInterrupt):engine.run()
     assert not ws.path(ws.work_ref('state/current_route.json')).exists()
     assert engine.resume().phase=='FINALIZE'
@@ -256,7 +263,7 @@ def test_json_route_locator_resolves_a_unique_record_without_editing_source(ws, 
 
 
 def test_interrupted_handoff_repair_reuses_original_author(ws):
-    from pace.orchestrator.director_led_adapters import run_default_specialist
+    from pace.agents.director.dispatch import run_specialist
     from test_finding_publication import ProofPublicationTransport
     from test_research_round_limit import write_delta
     output = ws.work_ref('round1/research.md')
@@ -277,10 +284,10 @@ def test_interrupted_handoff_repair_reuses_original_author(ws):
     llm=Writer()
     kwargs=dict(llm=llm,workdir=ws.root,prompt='Deliver the original argument.',agent_id='research',
         input_refs=tuple(context['required_refs']),output_ref=output,round_index=1,context={'target_contract_id':'TARGET'})
-    with pytest.raises(KeyboardInterrupt):run_default_specialist(**kwargs)
+    with pytest.raises(KeyboardInterrupt):run_specialist(**kwargs)
     before=ws.path(output).read_bytes()
     assert ws.path(str(Path(output).with_name('author_delivery.json'))).is_file()
-    result=run_default_specialist(**kwargs)
+    result=run_specialist(**kwargs)
     assert result['status']=='SUCCEEDED' and llm.authors==1 and llm.repairs==2
     assert ws.path(output).read_bytes()==before
 

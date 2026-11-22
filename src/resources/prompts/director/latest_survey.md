@@ -1,0 +1,2 @@
+
+Latest Survey: `{{latest_survey}}`. Check the cited result's hypotheses against the current obligation. Dispatch the missing bridge or remaining gap. Reuse requires a bound independent check; the Survey itself grants no proof authority.

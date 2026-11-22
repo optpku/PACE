@@ -1,0 +1,1 @@
+Return the routing fields and any caller-owned file references requested by your role. Reuse the supplied candidate_ref for an unchanged task; write a new file for a revision. Keep candidate task manuscripts free of mechanism derivations, source leads and review judgments.

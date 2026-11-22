@@ -13,12 +13,12 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from pace.artifacts.workspace import path_has_symlink_component, work_ref
 from pace.contracts.problem.target import (
     target_contract_text,
     validate_target_contract,
 )
 from pace.contracts.verification.decision import decide_final_result
-from pace.runtime.output.workspace import path_has_symlink_component, work_ref
 
 MISSING_AUTHORITY_ARTIFACT = "MISSING_AUTHORITY_ARTIFACT"
 MALFORMED_AUTHORITY_ARTIFACT = "MALFORMED_AUTHORITY_ARTIFACT"
@@ -58,14 +58,14 @@ def load_active_target(root: Path) -> dict[str, Any]:
     """
 
     root_path = Path(root).resolve()
-    target_path = root_path / work_ref(root, 'input/target_contract.json')
+    target_path = root_path / work_ref(root, "input/target_contract.json")
     if path_has_symlink_component(root_path, target_path):
         raise ProofBindingError(
             "canonical target contract must not contain a symlink",
             code=REF_MISMATCH,
         )
     value = _read_object(target_path, "canonical target contract")
-    problem_path = root_path / work_ref(root, 'input/problem.md')
+    problem_path = root_path / work_ref(root, "input/problem.md")
     if path_has_symlink_component(root_path, problem_path):
         raise ProofBindingError(
             "canonical problem statement must not contain a symlink",
@@ -156,7 +156,7 @@ def write_proof_manifest(
     manifest_ref = str(manifest_path.relative_to(Path(root).resolve()))
     manifest = {
         "target_contract_id": target_id,
-        "target_contract_ref": work_ref(root, 'input/target_contract.json'),
+        "target_contract_ref": work_ref(root, "input/target_contract.json"),
         "proof_id": proof_identifier,
         "proof_ref": proof_reference,
     }
@@ -195,11 +195,14 @@ def resolve_proof_binding(
     ):
         if not expected or manifest.get(field) != expected:
             raise ProofBindingError(
-                f"proof manifest {field} is inconsistent", code=_binding_mismatch_code(field),
+                f"proof manifest {field} is inconsistent",
+                code=_binding_mismatch_code(field),
             )
     proof_path = _resolve_relative_path(root, proof_ref, "proof_ref")
     if not proof_path.is_file():
-        raise ProofBindingError("proof_ref does not point to a file", code=MISSING_AUTHORITY_ARTIFACT)
+        raise ProofBindingError(
+            "proof_ref does not point to a file", code=MISSING_AUTHORITY_ARTIFACT
+        )
     return {**manifest, "proof_manifest_ref": proof_manifest_ref}
 
 
@@ -215,91 +218,174 @@ def resolve_verification_binding(
     """Use one persisted identity and acceptance check in every lifecycle phase."""
 
     binding = _read_object(
-        _resolve_relative_path(root, verification_binding_ref, "verification_binding_ref"),
+        _resolve_relative_path(
+            root, verification_binding_ref, "verification_binding_ref"
+        ),
         "verification binding",
     )
-    if binding.get("target_contract_ref") != work_ref(root, "input/target_contract.json"):
-        raise ProofBindingError("verification binding target_contract_ref is not canonical", code=REF_MISMATCH)
+    if binding.get("target_contract_ref") != work_ref(
+        root, "input/target_contract.json"
+    ):
+        raise ProofBindingError(
+            "verification binding target_contract_ref is not canonical",
+            code=REF_MISMATCH,
+        )
     for field, requested in (
-        ("proof_id", proof_id), ("proof_ref", proof_ref),
-        ("target_contract_id", target_contract_id), ("verification_ref", verification_ref),
+        ("proof_id", proof_id),
+        ("proof_ref", proof_ref),
+        ("target_contract_id", target_contract_id),
+        ("verification_ref", verification_ref),
     ):
         if requested and binding.get(field) != requested:
             raise ProofBindingError(
-                f"verification binding {field} is inconsistent", code=_binding_mismatch_code(field),
+                f"verification binding {field} is inconsistent",
+                code=_binding_mismatch_code(field),
             )
     manifest = resolve_proof_binding(
-        root, proof_manifest_ref=binding["proof_manifest_ref"],
-        proof_id=binding["proof_id"], proof_ref=binding["proof_ref"],
+        root,
+        proof_manifest_ref=binding["proof_manifest_ref"],
+        proof_id=binding["proof_id"],
+        proof_ref=binding["proof_ref"],
     )
     if binding.get("target_contract_id") != manifest["target_contract_id"]:
-        raise ProofBindingError("verification binding target_contract_id is inconsistent", code=IDENTITY_MISMATCH)
+        raise ProofBindingError(
+            "verification binding target_contract_id is inconsistent",
+            code=IDENTITY_MISMATCH,
+        )
     verification = read_verification_report(root, binding["verification_ref"])
-    for field in ("proof_id", "proof_ref", "target_contract_id", "source_authority_ref", "auditor_ref", "kernel_ref"):
+    for field in (
+        "proof_id",
+        "proof_ref",
+        "target_contract_id",
+        "source_authority_ref",
+        "auditor_ref",
+        "kernel_ref",
+    ):
         if verification.get(field) != binding.get(field):
             raise ProofBindingError(
-                f"verification report {field} is inconsistent", code=_binding_mismatch_code(field),
+                f"verification report {field} is inconsistent",
+                code=_binding_mismatch_code(field),
             )
-    auditor = _read_object(_resolve_relative_path(root, binding["auditor_ref"], "auditor_ref"), "Auditor report")
-    kernel = _read_object(_resolve_relative_path(root, binding["kernel_ref"], "kernel_ref"), "Kernel report")
+    auditor = _read_object(
+        _resolve_relative_path(root, binding["auditor_ref"], "auditor_ref"),
+        "Auditor report",
+    )
+    kernel = _read_object(
+        _resolve_relative_path(root, binding["kernel_ref"], "kernel_ref"),
+        "Kernel report",
+    )
     _validate_verifier_bindings(
-        auditor=auditor, kernel=kernel, proof_id=binding["proof_id"],
-        proof_ref=binding["proof_ref"], target_contract_id=binding["target_contract_id"],
+        auditor=auditor,
+        kernel=kernel,
+        proof_id=binding["proof_id"],
+        proof_ref=binding["proof_ref"],
+        target_contract_id=binding["target_contract_id"],
     )
     final_result = _read_object(
-        _resolve_relative_path(root, verification["final_result_ref"], "final_result_ref"), "final result",
+        _resolve_relative_path(
+            root, verification["final_result_ref"], "final_result_ref"
+        ),
+        "final result",
     )
     expected = decide_final_result(auditor=auditor, kernel=kernel)
-    if expected["verification_interface_failures"] or expected["failure_owner"] == "INTERFACE":
-        raise ProofBindingError("verifier interface failure cannot form a mathematical binding")
+    if (
+        expected["verification_interface_failures"]
+        or expected["failure_owner"] == "INTERFACE"
+    ):
+        raise ProofBindingError(
+            "verifier interface failure cannot form a mathematical binding"
+        )
     if final_result != expected:
-        raise ProofBindingError("persisted final result disagrees with Auditor and Kernel")
+        raise ProofBindingError(
+            "persisted final result disagrees with Auditor and Kernel"
+        )
     status = expected["result"]
     binding_status = "VERIFIED" if status == "PASS" else "MATH_FAIL"
     if binding.get("binding_status") != binding_status:
-        raise ProofBindingError("verification binding disagrees with the explicit verdicts")
+        raise ProofBindingError(
+            "verification binding disagrees with the explicit verdicts"
+        )
     blockers = final_result["canonical_blockers"]
     blocker_ref = binding.get("blocker_ref", "")
     if bool(blockers) != bool(blocker_ref):
-        raise ProofBindingError("verification binding blocker_ref disagrees with delivered evidence")
+        raise ProofBindingError(
+            "verification binding blocker_ref disagrees with delivered evidence"
+        )
     if blocker_ref and _resolve_json_pointer(root, blocker_ref) != blockers[0]:
-        raise ProofBindingError("blocker_ref does not resolve to the canonical blocker", code=REF_MISMATCH)
+        raise ProofBindingError(
+            "blocker_ref does not resolve to the canonical blocker", code=REF_MISMATCH
+        )
     source = _read_object(
-        _resolve_relative_path(root, binding["source_authority_ref"], "source_authority_ref"), "source authority",
+        _resolve_relative_path(
+            root, binding["source_authority_ref"], "source_authority_ref"
+        ),
+        "source authority",
     )
-    input_ref = binding.get("verification_inputs_ref") or str(Path(binding["verification_ref"]).with_name("verification_inputs.json"))
+    input_ref = binding.get("verification_inputs_ref") or str(
+        Path(binding["verification_ref"]).with_name("verification_inputs.json")
+    )
     if binding.get("verification_inputs_ref") or (Path(root) / input_ref).is_file():
-        frozen = _read_object(_resolve_relative_path(root, input_ref, "verification_inputs_ref"), "verification input snapshot")
-        proof_text = _resolve_relative_path(root, binding["proof_ref"], "proof_ref").read_text(encoding="utf-8")
-        if (frozen.get("proof_id") != binding["proof_id"] or frozen.get("proof_ref") != binding["proof_ref"]
-                or frozen.get("proof_text") != proof_text or frozen.get("target") != load_active_target(root)
-                or frozen.get("authority") != source):
-            raise ProofBindingError("current proof, target or dependencies differ from the verified input version", code=IDENTITY_MISMATCH)
+        frozen = _read_object(
+            _resolve_relative_path(root, input_ref, "verification_inputs_ref"),
+            "verification input snapshot",
+        )
+        proof_text = _resolve_relative_path(
+            root, binding["proof_ref"], "proof_ref"
+        ).read_text(encoding="utf-8")
+        if (
+            frozen.get("proof_id") != binding["proof_id"]
+            or frozen.get("proof_ref") != binding["proof_ref"]
+            or frozen.get("proof_text") != proof_text
+            or frozen.get("target") != load_active_target(root)
+            or frozen.get("authority") != source
+        ):
+            raise ProofBindingError(
+                "current proof, target or dependencies differ from the verified input version",
+                code=IDENTITY_MISMATCH,
+            )
     proof_binding = {
-        name: binding[name] for name in (
-            "proof_id", "proof_ref", "proof_manifest_ref", "target_contract_id",
-            "target_contract_ref", "verification_ref", "source_authority_ref",
+        name: binding[name]
+        for name in (
+            "proof_id",
+            "proof_ref",
+            "proof_manifest_ref",
+            "target_contract_id",
+            "target_contract_ref",
+            "verification_ref",
+            "source_authority_ref",
         )
     }
     proof_binding["verification_binding_ref"] = verification_binding_ref
     artifact_refs = {
-        "proof": binding["proof_ref"], "proof_manifest": binding["proof_manifest_ref"],
-        "verification_binding": verification_binding_ref, "verification": binding["verification_ref"],
-        "auditor": binding["auditor_ref"], "kernel": binding["kernel_ref"],
+        "proof": binding["proof_ref"],
+        "proof_manifest": binding["proof_manifest_ref"],
+        "verification_binding": verification_binding_ref,
+        "verification": binding["verification_ref"],
+        "auditor": binding["auditor_ref"],
+        "kernel": binding["kernel_ref"],
         "source_authority": binding["source_authority_ref"],
     }
     return {
-        "status": status, "binding": binding, "manifest": manifest,
-        "verification_report": verification, "final_result": final_result,
-        "auditor": auditor, "kernel": kernel, "source_authority": source,
-        "proof_binding": proof_binding, "artifact_refs": artifact_refs,
+        "status": status,
+        "binding": binding,
+        "manifest": manifest,
+        "verification_report": verification,
+        "final_result": final_result,
+        "auditor": auditor,
+        "kernel": kernel,
+        "source_authority": source,
+        "proof_binding": proof_binding,
+        "artifact_refs": artifact_refs,
     }
 
 
 def read_verification_report(root: Path, reference: str) -> dict[str, Any]:
     """Read the Host's reference index, never a second copy of the reports."""
 
-    return _read_object(_resolve_relative_path(root, reference, "verification_ref"), "verification report")
+    return _read_object(
+        _resolve_relative_path(root, reference, "verification_ref"),
+        "verification report",
+    )
 
 
 def resolve_verification(
@@ -316,33 +402,57 @@ def resolve_verification(
         raise ProofBindingError("verifier delivery has an invalid status")
     if status != "VERIFIER_ERROR":
         resolved = resolve_verification_binding(
-            root, verification_binding_ref=receipt["verification_binding_ref"],
-            proof_ref=candidate_ref, target_contract_id=target_contract_id,
+            root,
+            verification_binding_ref=receipt["verification_binding_ref"],
+            proof_ref=candidate_ref,
+            target_contract_id=target_contract_id,
             verification_ref=receipt["verification_ref"],
         )
         if resolved["status"] != status:
-            raise ProofBindingError("verifier delivery disagrees with the persisted binding")
+            raise ProofBindingError(
+                "verifier delivery disagrees with the persisted binding"
+            )
         return resolved
     if receipt["verification_binding_ref"]:
-        raise ProofBindingError("an interface error cannot claim a mathematical binding")
+        raise ProofBindingError(
+            "an interface error cannot claim a mathematical binding"
+        )
     report = read_verification_report(root, receipt["verification_ref"])
-    for field, expected in (("target_contract_id", target_contract_id), ("proof_ref", candidate_ref)):
+    for field, expected in (
+        ("target_contract_id", target_contract_id),
+        ("proof_ref", candidate_ref),
+    ):
         if report.get(field) and report[field] != expected:
-            raise ProofBindingError(f"failed verifier {field} is inconsistent", code=_binding_mismatch_code(field))
+            raise ProofBindingError(
+                f"failed verifier {field} is inconsistent",
+                code=_binding_mismatch_code(field),
+            )
     reports = {}
     for role in ("auditor", "kernel"):
         reference = report.get(f"{role}_ref")
-        reports[role] = _read_object(_resolve_relative_path(root, reference, f"{role}_ref"), role) if reference else {}
+        reports[role] = (
+            _read_object(_resolve_relative_path(root, reference, f"{role}_ref"), role)
+            if reference
+            else {}
+        )
     if reports["kernel"]:
         _validate_verifier_bindings(
-            auditor=reports["auditor"], kernel=reports["kernel"],
-            proof_id=report["proof_id"], proof_ref=report["proof_ref"],
+            auditor=reports["auditor"],
+            kernel=reports["kernel"],
+            proof_id=report["proof_id"],
+            proof_ref=report["proof_ref"],
             target_contract_id=report["target_contract_id"],
         )
     final = _read_object(
-        _resolve_relative_path(root, report["final_result_ref"], "final_result_ref"), "final result",
+        _resolve_relative_path(root, report["final_result_ref"], "final_result_ref"),
+        "final result",
     )
-    return {"status": status, "verification_report": report, "final_result": final, **reports}
+    return {
+        "status": status,
+        "verification_report": report,
+        "final_result": final,
+        **reports,
+    }
 
 
 def _validate_verifier_bindings(

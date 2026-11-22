@@ -210,6 +210,18 @@ The core's reader layout keeps each public `work/turnNNN/roundN/` directory limi
 
 Reports and papers preserve the original hypotheses, proof scope and open gaps. Read [writing instructions](docs/user-guide.md#write-a-report-or-paper) for the two writing paths and [recorded result summaries](docs/user-guide.md#summarize-recorded-results) for batch inspection. Mathematical acceptance is separate from writing completion and Web delivery.
 
+## Source layout
+
+The production entry is `pace.cli → pace.pipeline.ProofPipeline.run`. The implementation in `src/pipeline.py` selects, continues and resumes turns and wires their execution services.
+
+- `src/orchestrator/` owns cumulative problem memory, finding publication and versions, historical handoffs, reports and papers. Shared records can be committed after each round; interrupted publication reuses completed authors and verification receipts.
+- `src/agents/director/` owns one turn's initialization, Orientation, scheduling, task execution, budgets, parallel work, verification coordination and checkpoints. The Director model selects tasks; the harness executes them; independent verifiers retain mathematical authority.
+- Each ordinary `src/agents/<role>.py` selects and composes its own fixed `AGENTS.md` instructions, current task and local correction prompts. `prompt_composer.py` supplies common assembly operations.
+- Role text lives in `src/resources/prompts/<role>/`, with common guidance under `shared/`. Standard and weak files live beside each other; a run snapshot selects one version. Resume keeps that snapshot and a new turn selects resources again.
+- `src/runtime/` provides model, tool, process, native-session, resource and build capabilities. `src/artifacts/` persists originals, state, commit receipts, calls and events.
+
+The outer orchestrator owns the run's `memory/` and `results/`. Turn-local drafts, frozen context and checkpoints stay under `work/turnNNN/`. Historical memory and findings retain their original targets and verification references; reuse still requires checking the current target's scope and conditions.
+
 ## License
 
 PACE is released under the [Apache License 2.0](LICENSE). Inherited license notices are preserved in [NOTICE](NOTICE) and [LICENSES](LICENSES).

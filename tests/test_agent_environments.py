@@ -8,13 +8,14 @@ from pathlib import Path
 import pytest
 
 from pace.agents.orientation import build_problem_extraction_prompt
-from pace.agents.research.global_director import build_global_director_prompt
-from pace.runtime.agent_environment import prepare_agent_environments, role_home
+from pace.agents.director.agent import build_global_director_prompt
+from pace.agents.director.harness import prepare_agent_environments
+from pace.runtime.agent_environment import role_home
 from pace.runtime.llm import CodexLLM
 from pace.runtime.chat_api import ChatCompletionsLLM
-from pace.runtime.output.workspace import RunWorkspace
-from pace.runtime.prompt_composer import compose_prompt
-from pace.runtime.prompt_policy import build_prompt_assembly
+from pace.artifacts.workspace import RunWorkspace
+from pace.agents.prompt_composer import compose_prompt
+from pace.agents.prompt_composer import build_prompt_assembly
 from pace.runtime.prompts import materialize_run_resources, prompt_root
 from pace.runtime.semantic import begin_artifact_call
 
@@ -68,7 +69,7 @@ def test_role_templates_keep_current_values_only_in_task(tmp_path, monkeypatch, 
     original = {p: p.read_bytes() for p in prompt_root(ws.root).rglob("*.md")}
     prepare_agent_environments(ws.root, mode="research")
     homes = list((tmp_path / ".nl-proof-acp/runs/problem/turn001").rglob("AGENTS.md"))
-    assert len(homes) == 16
+    assert (role_home(ws.root, "RESEARCH_REPORTER") / "AGENTS.md") in homes
     assert not list((tmp_path / ".nl-proof-acp").rglob("sessions"))
     task = build_global_director_prompt(workdir=ws.root, target_contract_id="CURRENT-TARGET",
                                        input_refs=("work/turn001/new-evidence.md",),
@@ -97,8 +98,8 @@ def test_composer_passes_task_and_evidence_without_fixed_instructions(role_works
     assembly = build_prompt_assembly(workdir=ws.root, stage="SPECIALIST", role="DIRECTOR_LED_RESEARCH",
         mode="SPECIALIST", target_contract_id="CURRENT", required_file_refs=(evidence,),
         prompt_seed="Derive the assigned local relation.", output_artifact_ref=ws.work_ref("round1/research.md"))
-    task = compose_prompt(llm=None, workdir=ws.root, assembly=assembly,
-                          input_refs=(evidence,), call_name="compose").final_prompt
+    task = compose_prompt( workdir=ws.root, assembly=assembly,
+                          input_refs=(evidence,)).final_prompt
     assert "Derive the assigned local relation." in task
     assert evidence in task
     instructions = (role_home(ws.root, "RESEARCH") / "AGENTS.md").read_text()

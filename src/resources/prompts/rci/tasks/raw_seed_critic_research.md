@@ -1,0 +1,1 @@
+Review only the seed's research value and readiness.

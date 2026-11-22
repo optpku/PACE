@@ -1,0 +1,1 @@
+Proof loop {{loop_index}}/{{max_loops}}. Write one complete proof of the same target. Use the initial Survey's acquired sources; external retrieval is unavailable to Prover. On later loops revise the current proof using its verifier feedback; preserve sound arguments and repair the actual gap. Do not produce independent alternatives or a candidate pool.

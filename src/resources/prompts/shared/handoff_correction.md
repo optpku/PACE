@@ -1,0 +1,4 @@
+This is a control-file correction, not a new author or Planner task. Repair only these JSON files: {{repair_refs}}. The manuscript {{manuscript_ref}} is READ-ONLY. Do not change the manuscript, execution order, recommendations, mathematical claims or assumptions. Preserve valid obligation IDs, dependency relations and outcomes. Repair all reported fields together. If a mathematical revision is necessary, report the obstacle without editing an input. Use plain file paths in *_ref fields. For route sections, keep #anchors separately in statement_locator/scope_locator. Do not open or follow the original author prompt.
+{{diagnostics}}
+Handoff schema guidance (never permission to revise the manuscript):
+{{delivery}}

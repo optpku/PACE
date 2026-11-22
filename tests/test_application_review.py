@@ -1,4 +1,6 @@
 """Replay durable applications and account for work without promoting author claims."""
+
+from pace.orchestrator import memory as memory_owner
 import json
 from pathlib import Path
 
@@ -6,11 +8,11 @@ import pytest
 
 from test_research_memory import ws, deliver, task
 from pace.contracts.research.memory import prepare_route
-from pace.orchestrator.finding_publication import publish_applications, pending_finding_checks
-from pace.runtime.output.memory import commit_research_memory, rebuild_research_index, research_brief, update_research_costs
-from pace.runtime.research_context import load_index
-from pace.runtime.output.events import append_event
-from pace.runtime.output.calls import begin_call
+from pace.agents.director.findings import check_applications, pending_finding_checks
+from pace.orchestrator.memory import commit_research_memory, rebuild_research_index, research_brief, update_research_costs
+from pace.agents.director.context import load_index
+from pace.artifacts.events import append_event
+from pace.artifacts.calls import begin_call
 from pace.runtime.semantic import StructuredSemanticResult
 
 
@@ -27,7 +29,7 @@ def accepted_review(ws, monkeypatch):
                 'obligation_id': request['obligation_id'], 'obligation_version': request['obligation_version'],
                 'status': 'APPLICABLE', 'review_ref': request['review_ref']}]}, {})
 
-    monkeypatch.setattr('pace.orchestrator.finding_publication.verify_finding', verify)
+    monkeypatch.setattr('pace.agents.director.findings.verify_finding', verify)
     return requests
 
 
@@ -60,14 +62,16 @@ def test_one_review_per_argument_and_obligation_in_a_handoff(ws, accepted_review
     assert len(load_index(ws.root)['applications']) == 2
     app = next(app for app in load_index(ws.root)['applications'].values() if app['argument_ref'] == argument)
     assert app['proposal_ids'] == ['high-dimensional', 'fixed-dimensional']
-    assert publish_applications(llm=object(), root=ws.root)
+    assert check_applications(llm=object(), root=ws.root)
+    memory_owner.refresh_application_memory(ws.root)
     assert len(accepted_review) == 2
     merged = next(request for request in accepted_review if request['argument_ref'] == argument)
     assert [row['ref'] for row in merged['bindings']].count(first) == 1
     assert [row['ref'] for row in merged['bindings']].count(second) == 1
     assert all(ws.path(ref).read_bytes() == content for ref, content in original.items())
     assert rebuild_research_index(ws.root)['obligations']['target']['status'] == 'CLOSED'
-    assert publish_applications(llm=object(), root=ws.root)
+    assert check_applications(llm=object(), root=ws.root)
+    memory_owner.refresh_application_memory(ws.root)
     assert len(accepted_review) == 2
 
 
@@ -80,43 +84,18 @@ def test_application_reuse_ignores_labels_and_order_but_not_new_evidence(ws, acc
     for number, premises in enumerate(([first, second], [second, target, first], [first, second, extra]), 1):
         result, _ = application_handoff(ws, number, [(f'proposal-{number}', argument, premises)])
         commit_research_memory(ws.root, [result])
-        assert publish_applications(llm=object(), root=ws.root)
+        assert check_applications(llm=object(), root=ws.root)
+        memory_owner.refresh_application_memory(ws.root)
         assert len(accepted_review) == (1 if number < 3 else 2)
     assert len({request['application_key'] for request in accepted_review}) == 2
     assert extra in [row['ref'] for row in accepted_review[-1]['bindings']]
 
 
-def test_equivalent_new_proposal_reuses_existing_legacy_receipt(ws, accepted_review, monkeypatch):
-    from pace.contracts.research import memory
-
-    prepare = memory.prepare_delta
-
-    def legacy_delta(*args, **kwargs):
-        delta = prepare(*args, **kwargs)
-        for app in delta['applications']:
-            del app['proposal_ids']
-        return delta
-
-    argument = ws.work_ref('round1/research.md')
-    old, _ = application_handoff(ws, 1, [('legacy-label', argument, [])])
-    with monkeypatch.context() as scoped:
-        scoped.setattr(memory, 'prepare_delta', legacy_delta)
-        commit_research_memory(ws.root, [old])
-    assert publish_applications(llm=object(), root=ws.root)
-    record_ref = next(iter(load_index(ws.root)['applications'].values()))['review_ref']
-    receipt_path = ws.path(record_ref)
-    receipt = receipt_path.read_bytes()
-    new, _ = application_handoff(ws, 2, [('different-new-label', argument, [])])
-    commit_research_memory(ws.root, [new])
-    assert publish_applications(llm=object(), root=ws.root)
-    assert len(accepted_review) == 1 and receipt_path.read_bytes() == receipt
-    assert rebuild_research_index(ws.root)['obligations']['target']['status'] == 'CLOSED'
-    assert not pending_finding_checks(ws.root)
 
 
 def test_replay_commit_before_index_without_repeating_author(ws, monkeypatch):
     ref = deliver(ws, 1)
-    import pace.runtime.output.workspace as persistence
+    import pace.artifacts.workspace as persistence
     write = persistence._write_json_atomic
     def interrupt(path, value):
         if path.name == 'research_index.json' and value['commits']:
@@ -141,18 +120,23 @@ def test_application_receipt_survives_interruption_before_index(ws, monkeypatch)
             'publication': {'action': 'NONE'}, 'application_checks': [{
                 'obligation_id': r['obligation_id'], 'obligation_version': r['obligation_version'],
                 'status': 'APPLICABLE', 'review_ref': r['review_ref']}]}, {})
-    monkeypatch.setattr('pace.orchestrator.finding_publication.verify_finding', verify)
+    monkeypatch.setattr('pace.agents.director.findings.verify_finding', verify)
     with monkeypatch.context() as scoped:
         def interrupt(*args): raise KeyboardInterrupt()
-        scoped.setattr('pace.runtime.output.memory.refresh_application_memory', interrupt)
-        with pytest.raises(KeyboardInterrupt): publish_applications(llm=object(), root=ws.root)
+        scoped.setattr('pace.orchestrator.memory.refresh_application_memory', interrupt)
+        with pytest.raises(KeyboardInterrupt):
+            check_applications(llm=object(), root=ws.root)
+            memory_owner.refresh_application_memory(ws.root)
     assert pending_finding_checks(ws.root)
-    assert publish_applications(llm=object(), root=ws.root)
+    assert check_applications(llm=object(), root=ws.root)
+    memory_owner.refresh_application_memory(ws.root)
     assert len(calls) == 1 and not pending_finding_checks(ws.root)
     app = next(iter(load_index(ws.root)['applications'].values()))
     record = json.loads(ws.path(app['review_ref']).read_text())
     ws.write_text(record['review_binding']['ref'], 'Altered review')
-    with pytest.raises(ValueError, match='version changed'): publish_applications(llm=object(), root=ws.root)
+    with pytest.raises(ValueError, match='version changed'):
+        check_applications(llm=object(), root=ws.root)
+        memory_owner.refresh_application_memory(ws.root)
     assert len(calls) == 1
 
 
@@ -183,7 +167,7 @@ def test_costs_use_transport_intervals_once_and_report_missing_time(ws):
 
 
 def test_retired_obligation_stays_retired_after_review_refresh(ws):
-    from pace.runtime.output.memory import refresh_application_memory
+    from pace.orchestrator.memory import refresh_application_memory
     ref=deliver(ws,1,agent='planner')
     original=ws.work_ref('round1/research.md')
     ws.write_json(ws.work_ref('round1/route_relations.json'), {'schema_version':'route_relations/v1',
@@ -227,16 +211,20 @@ def test_application_review_is_saved_before_semantic_success_publication(ws, mon
     with monkeypatch.context() as scoped:
         def interrupt(*args, **kwargs): raise KeyboardInterrupt
         scoped.setattr('pace.runtime.semantic.finish_call', interrupt)
-        with pytest.raises(KeyboardInterrupt): publish_applications(llm=llm, root=ws.root)
+        with pytest.raises(KeyboardInterrupt):
+            check_applications(llm=llm, root=ws.root)
+            memory_owner.refresh_application_memory(ws.root)
     assert len(requests)==2
-    assert publish_applications(llm=llm, root=ws.root)
+    assert check_applications(llm=llm, root=ws.root)
+    memory_owner.refresh_application_memory(ws.root)
     assert len(requests)==2
     assert load_index(ws.root)['obligations']['target']['status']=='CLOSED'
 
 def test_application_interface_failure_remains_pending_on_rebuild(ws, accepted_review):
     ref = deliver(ws, 1, application=True)
     commit_research_memory(ws.root, [ref])
-    assert publish_applications(llm=object(), root=ws.root)
+    assert check_applications(llm=object(), root=ws.root)
+    memory_owner.refresh_application_memory(ws.root)
     app = next(iter(load_index(ws.root)['applications'].values()))
     record = json.loads(ws.path(app['review_ref']).read_text())
     record.update(verdict={'stage_status': 'VERIFIER_ERROR'}, review_binding=None)
@@ -244,15 +232,17 @@ def test_application_interface_failure_remains_pending_on_rebuild(ws, accepted_r
     rebuilt = rebuild_research_index(ws.root)
     assert next(iter(rebuilt['applications'].values()))['status'] == 'PROPOSED'
     assert rebuilt['obligations']['target']['status'] == 'OPEN' and pending_finding_checks(ws.root)
-    assert not publish_applications(llm=object(), root=ws.root)
+    assert not check_applications(llm=object(), root=ws.root)
+    memory_owner.refresh_application_memory(ws.root)
     assert len(accepted_review) == 1
-    assert publish_applications(llm=object(), root=ws.root, retry_errors=True)
+    assert check_applications(llm=object(), root=ws.root, retry_errors=True)
+    memory_owner.refresh_application_memory(ws.root)
     assert len(accepted_review) == 2 and not pending_finding_checks(ws.root)
 
 
 @pytest.mark.parametrize('status', ['APPLICABLE', 'NOT_ESTABLISHED'])
 def test_recover_double_encoded_review_without_repeating_independent_check(ws, monkeypatch, status):
-    from pace.agents.verification import kernel
+    from pace.agents import finding_verifier as kernel
     from test_finding_publication import ProofPublicationTransport
 
     ref = deliver(ws, 1, application=True)
@@ -260,7 +250,7 @@ def test_recover_double_encoded_review_without_repeating_independent_check(ws, m
     app = next(iter(load_index(ws.root)['applications'].values()))
     schema = kernel._finding_receipt_schema
 
-    def legacy_schema(request=None):
+    def missing_application_schema(request=None):
         value = schema(request)
         value['properties'].pop('application_checks')
         value['required'] = ['stage_status']
@@ -282,11 +272,13 @@ def test_recover_double_encoded_review_without_repeating_independent_check(ws, m
 
     llm = Review('NONE')
     with monkeypatch.context() as scoped:
-        scoped.setattr(kernel, '_finding_receipt_schema', legacy_schema)
-        assert not publish_applications(llm=llm, root=ws.root)
+        scoped.setattr(kernel, '_finding_receipt_schema', missing_application_schema)
+        assert not check_applications(llm=llm, root=ws.root)
+        memory_owner.refresh_application_memory(ws.root)
     assert len(llm.calls) == 2
     snapshots = {p: p.read_bytes() for p in ws.root.rglob('response.txt')}
-    assert publish_applications(llm=llm, root=ws.root, retry_errors=True)
+    assert check_applications(llm=llm, root=ws.root, retry_errors=True)
+    memory_owner.refresh_application_memory(ws.root)
     assert len(llm.calls) == 2
     assert all(p.read_bytes() == data for p, data in snapshots.items())
     restored = next(iter(load_index(ws.root)['applications'].values()))
@@ -299,7 +291,7 @@ def test_recover_double_encoded_review_without_repeating_independent_check(ws, m
 
 
 def test_local_receipt_decoding_cannot_supply_authorization():
-    from pace.agents.verification.kernel import _finding_receipt_schema
+    from pace.agents.finding_verifier import _finding_receipt_schema
     from pace.runtime.json_values import decode_structured_fields
     from pace.runtime.schema import validate_json_instance
 

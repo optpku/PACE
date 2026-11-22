@@ -2,7 +2,8 @@
 
 import json
 from pathlib import Path
-from pace.runtime.output.workspace import _write_text_atomic
+
+from pace.artifacts.workspace import _write_text_atomic
 
 
 def render_revision(root: Path, patch_ref: str, *, base_ref: str) -> str:
@@ -34,18 +35,11 @@ def render_revision(root: Path, patch_ref: str, *, base_ref: str) -> str:
     return text
 
 
-def apply_revision(root: Path, patch_ref: str, *, base_ref: str, output_ref: str) -> None:
+def apply_revision(
+    root: Path, patch_ref: str, *, base_ref: str, output_ref: str
+) -> None:
     if (root / base_ref).resolve() == (root / output_ref).resolve():
         raise ValueError("revision output must be a new copy")
-    _write_text_atomic(root / output_ref, render_revision(root, patch_ref, base_ref=base_ref))
-
-
-def revision_instruction(base_ref: str, patch_ref: str) -> str:
-    return (
-        f"Write the local revision to `{patch_ref}` as JSON with edits "
-        '[{"old":"unique exact passage","new":"complete replacement passage"}]. '
-        f"The Host binds the base to `{base_ref}`; do not repeat base_ref in the patch. "
-        "Use a unique surrounding heading for additions. The Host applies these changes "
-        "to a complete new copy. Leave unrelated passages unchanged. If a global rewrite "
-        "is necessary, one edit may replace the whole base, explaining why in the response. "
+    _write_text_atomic(
+        root / output_ref, render_revision(root, patch_ref, base_ref=base_ref)
     )

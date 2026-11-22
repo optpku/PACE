@@ -1,0 +1,1 @@
+Audit only the candidate, without mechanism or coverage records.

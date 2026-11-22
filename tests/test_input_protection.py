@@ -1,8 +1,8 @@
 import pytest
 
 from pace.runtime.input_protection import InputModifiedError, protected_inputs
-from pace.runtime.output.results import publish_finding
-from pace.runtime.output.workspace import RunWorkspace
+from pace.artifacts.results import publish_finding
+from pace.artifacts.workspace import RunWorkspace
 
 
 def workspace(tmp_path):

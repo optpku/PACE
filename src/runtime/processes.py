@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import os
 import signal
 import subprocess
-import logging
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-import json
-
 
 logger = logging.getLogger(__name__)
 _calls_lock = threading.Lock()
@@ -19,9 +18,14 @@ _call_scopes: dict[Path, "ModelCallCancellation"] = {}
 
 
 def _process_identity(pid: int):
-    row = subprocess.run(["ps", "-p", str(pid), "-o", "pid=,pgid=,stat=,lstart="],
-                         capture_output=True, text=True, timeout=5, check=False,
-                         env={**os.environ, "LC_ALL": "C"})
+    row = subprocess.run(
+        ["ps", "-p", str(pid), "-o", "pid=,pgid=,stat=,lstart="],
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+        env={**os.environ, "LC_ALL": "C"},
+    )
     if row.returncode == 1 or not row.stdout.strip():
         return None
     if row.returncode:
@@ -29,28 +33,44 @@ def _process_identity(pid: int):
     fields = row.stdout.strip().split(maxsplit=3)
     if len(fields) != 4:
         raise OSError("Unexpected process identity output")
-    return {"pid": int(fields[0]), "process_group": int(fields[1]),
-            "state": fields[2], "started_identity": fields[3]}
+    return {
+        "pid": int(fields[0]),
+        "process_group": int(fields[1]),
+        "state": fields[2],
+        "started_identity": fields[3],
+    }
 
 
 def assert_no_active_model_processes(workdir: Path):
     """Refuse recovery until a previous owned model has actually stopped."""
-    from pace.runtime.output.events import append_event
+    from pace.artifacts.events import append_event
 
     directory = Path(workdir) / "work/state/model_processes"
     for path in directory.glob("*.json"):
         saved = json.loads(path.read_text(encoding="utf-8"))
         actual = _process_identity(saved["pid"])
-        if (actual and not actual["state"].startswith("Z")
-                and actual["started_identity"] == saved["started_identity"]
-                and actual["process_group"] == saved["process_group"]):
-            raise ValueError(f"A previous owned process is still active (PID {saved['pid']}); stop it before recovery or continuation")
+        if (
+            actual
+            and not actual["state"].startswith("Z")
+            and actual["started_identity"] == saved["started_identity"]
+            and actual["process_group"] == saved["process_group"]
+        ):
+            raise ValueError(
+                f"A previous owned process is still active (PID {saved['pid']}); stop it before recovery or continuation"
+            )
         path.unlink()
-        append_event(workdir, "MODEL_PROCESS_EXIT_UNOBSERVED" if saved.get("kind", "model") == "model" else "HOST_TOOL_PROCESS_EXIT_UNOBSERVED", pid=saved["pid"],
-                     process_group=saved["process_group"], exit_code=None,
-                     kind=saved.get("kind", "model"),
-                     saved_started_identity=saved["started_identity"],
-                     reason="saved process identity is no longer running")
+        append_event(
+            workdir,
+            "MODEL_PROCESS_EXIT_UNOBSERVED"
+            if saved.get("kind", "model") == "model"
+            else "HOST_TOOL_PROCESS_EXIT_UNOBSERVED",
+            pid=saved["pid"],
+            process_group=saved["process_group"],
+            exit_code=None,
+            kind=saved.get("kind", "model"),
+            saved_started_identity=saved["started_identity"],
+            reason="saved process identity is no longer running",
+        )
 
 
 @dataclass
@@ -66,7 +86,9 @@ class ModelCallCancellation:
             try:
                 terminate_process_tree(process)
             except (OSError, subprocess.SubprocessError):
-                logger.warning("Could not fully stop a cancelled model process", exc_info=True)
+                logger.warning(
+                    "Could not fully stop a cancelled model process", exc_info=True
+                )
 
 
 def cancel_model_calls(workdir: Path) -> None:
@@ -83,7 +105,9 @@ def cancellable_model_calls(workdir: Path):
     scope = ModelCallCancellation()
     with _calls_lock:
         if root in _call_scopes:
-            raise ValueError("model-call cancellation scope already active for this run")
+            raise ValueError(
+                "model-call cancellation scope already active for this run"
+            )
         _call_scopes[root] = scope
     try:
         yield scope
@@ -94,8 +118,8 @@ def cancellable_model_calls(workdir: Path):
 
 @contextmanager
 def tracked_model_process(workdir: Path, process: subprocess.Popen, *, kind="model"):
-    from pace.runtime.output.workspace import _write_json_atomic, utc_now
-    from pace.runtime.output.events import append_event
+    from pace.artifacts.events import append_event
+    from pace.artifacts.workspace import _write_json_atomic, utc_now
 
     path = Path(workdir) / f"work/state/model_processes/{process.pid}.json"
     has_workspace = (Path(workdir) / "work/state/current_turn.json").is_file()
@@ -103,9 +127,18 @@ def tracked_model_process(workdir: Path, process: subprocess.Popen, *, kind="mod
     started_identity = None
     if identity and not identity["state"].startswith("Z"):
         started_identity = identity["started_identity"]
-        saved = {**identity, "kind": kind, "owner_pid": os.getpid(), "observed_at": utc_now()}
+        saved = {
+            **identity,
+            "kind": kind,
+            "owner_pid": os.getpid(),
+            "observed_at": utc_now(),
+        }
         _write_json_atomic(path, saved)
-        append_event(workdir, "MODEL_PROCESS_STARTED" if kind == "model" else "HOST_TOOL_PROCESS_STARTED", **saved)
+        append_event(
+            workdir,
+            "MODEL_PROCESS_STARTED" if kind == "model" else "HOST_TOOL_PROCESS_STARTED",
+            **saved,
+        )
     with _calls_lock:
         scope = _call_scopes.get(Path(workdir).resolve())
         if scope is not None:
@@ -124,22 +157,47 @@ def tracked_model_process(workdir: Path, process: subprocess.Popen, *, kind="mod
         if scope is not None:
             with _calls_lock:
                 scope.processes.discard(process)
-        if started_identity is not None and process.poll() is not None and path.is_file():
+        if (
+            started_identity is not None
+            and process.poll() is not None
+            and path.is_file()
+        ):
             try:
                 path.unlink()
-                append_event(workdir, "MODEL_PROCESS_FINISHED" if kind == "model" else "HOST_TOOL_PROCESS_FINISHED",
-                             pid=process.pid, started_identity=started_identity, exit_code=process.returncode)
+                append_event(
+                    workdir,
+                    "MODEL_PROCESS_FINISHED"
+                    if kind == "model"
+                    else "HOST_TOOL_PROCESS_FINISHED",
+                    pid=process.pid,
+                    started_identity=started_identity,
+                    exit_code=process.returncode,
+                )
             except OSError:
-                logger.warning("Could not finalize model process observation", exc_info=True)
+                logger.warning(
+                    "Could not finalize model process observation", exc_info=True
+                )
 
 
-def run_owned_process(cmd, *, workdir, cwd, env, input, stdout, stderr, timeout, kind="model"):
+def run_owned_process(
+    cmd, *, workdir, cwd, env, input, stdout, stderr, timeout, kind="model"
+):
     """Use the same lifetime/lock boundary for models and Host build tools."""
-    from pace.runtime.output.workspace import execution_lock_fds
+    from pace.artifacts.workspace import execution_lock_fds
 
-    with subprocess.Popen(cmd, cwd=cwd, env=env, stdin=subprocess.PIPE, stdout=stdout,
-                          stderr=stderr, text=True, encoding="utf-8", errors="replace",
-                          start_new_session=True, pass_fds=execution_lock_fds(workdir)) as process:
+    with subprocess.Popen(
+        cmd,
+        cwd=cwd,
+        env=env,
+        stdin=subprocess.PIPE,
+        stdout=stdout,
+        stderr=stderr,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        start_new_session=True,
+        pass_fds=execution_lock_fds(workdir),
+    ) as process:
         cancelled = None
         try:
             with tracked_model_process(workdir, process, kind=kind) as cancelled:
@@ -178,13 +236,18 @@ def terminate_process_tree(process: subprocess.Popen) -> None:
                 continue
             # ps exposes the same parent relation on macOS, Linux and WSL.
             table = subprocess.run(
-                ["ps", "-axo", "pid=,ppid="], check=True,
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, timeout=5,
+                ["ps", "-axo", "pid=,ppid="],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=5,
             )
             pending.extend(
-                int(child) for line in table.stdout.splitlines()
-                for child, parent in (line.split(),) if int(parent) == pid
+                int(child)
+                for line in table.stdout.splitlines()
+                for child, parent in (line.split(),)
+                if int(parent) == pid
             )
     except ProcessLookupError:
         pass

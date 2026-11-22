@@ -5,15 +5,15 @@ from pathlib import Path
 import pytest
 
 from pace.runtime.chat_api import ChatCompletionsLLM, WorkspaceTools
-from pace.runtime.output.calls import begin_call
-from pace.runtime.output.workspace import RunWorkspace
+from pace.artifacts.calls import begin_call
+from pace.artifacts.workspace import RunWorkspace
 from pace.runtime.llm import RETRY_TRANSIENT, TransportSuccess
 
 
 def test_native_transport_writes_only_assigned_artifact(tmp_path,monkeypatch):
     ws=RunWorkspace.create(tmp_path,'api');ref=ws.work_ref('round1/proof.md')
     from pace.runtime.prompts import materialize_run_resources
-    from pace.runtime.agent_environment import prepare_agent_environments
+    from pace.agents.director.harness import prepare_agent_environments
     materialize_run_resources(ws.root, resource_variant='standard')
     prepare_agent_environments(ws.root, mode='proof')
     ws.write_text(ws.work_ref('input/problem.md'),'Prove 2+2=4.')
@@ -52,8 +52,8 @@ def test_only_survey_gets_network_tools(tmp_path):
 @pytest.mark.parametrize('phase,action', [('BLIND_PROVER_PROBE','NO_FIRST_STEP'),
     ('REFUTE_PROVER_PROBE','NO_COUNTEREXAMPLE'), ('FRONTIER_REFUTE_PROBE','NO_COUNTEREXAMPLE')])
 def test_actual_blind_phase_has_no_memory_and_resumes_without_model(ws,monkeypatch,phase,action):
-    from pace.agents.research.rci.phase_runner import RciPhaseRunner
-    from pace.runtime.research_context import freeze_context
+    from pace.agents.rci.phase_runner import RciPhaseRunner
+    from pace.agents.director.context import freeze_context
     from test_research_memory import task
     freeze_context(ws.root,ws.work_ref('round1/assignment/task.json'),task(),[ws.work_ref('input/problem.md')])
     ws.write_text('probe.md','Self-contained problem with permitted assumptions.')
@@ -85,8 +85,8 @@ from test_research_memory import ws
 
 @pytest.mark.parametrize('separate_reporter', [False, True])
 def test_explorer_delta_and_originals_are_reused_together(ws, monkeypatch, separate_reporter):
-    from pace.agents.research.rci.phase_runner import RciPhaseRunner
-    from pace.runtime.research_context import freeze_context
+    from pace.agents.rci.phase_runner import RciPhaseRunner
+    from pace.agents.director.context import freeze_context
     from test_research_memory import task
     if separate_reporter:
         ws.write_json(ws.work_ref('state/research_execution_policy.json'),
@@ -126,7 +126,7 @@ def test_explorer_delta_and_originals_are_reused_together(ws, monkeypatch, separ
 
 
 def test_kernel_native_writable_paths_match_prompt_without_host_receipt(ws, monkeypatch):
-    from pace.agents.verification.kernel import run_math_verifier_kernel
+    from pace.agents.kernel import run_math_verifier_kernel
     from test_research_reporter import NativeFixture
     proof = ws.work_ref('round1/proof.md'); ws.write_text(proof,'A candidate requiring independent verification.')
     note = ws.work_ref('round1/verification/memory_note.md')
@@ -147,9 +147,9 @@ def test_kernel_native_writable_paths_match_prompt_without_host_receipt(ws, monk
 
 
 def test_director_can_follow_host_dossier_and_committed_evidence(ws, monkeypatch):
-    from pace.agents.research.global_director import run_global_director
+    from pace.agents.director.agent import run_global_director
     from pace.runtime.semantic import StructuredSemanticResult
-    from pace.runtime.output.memory import commit_research_memory
+    from pace.orchestrator.memory import commit_research_memory
     from test_research_memory import deliver
     from test_research_reporter import NativeFixture
     orientation = ws.work_ref('orientation/problem_orientation_result.json')
@@ -283,7 +283,7 @@ def test_network_retries_only_failed_request_without_replaying_tools(ws, monkeyp
     assert isinstance(result, TransportSuccess)
     assert len(sleeps) == 5 and writes == [output]
     assert len(payloads) == 8 and all(payload == sent[1] for payload in sent[2:])
-    from pace.runtime.output.events import read_events
+    from pace.artifacts.events import read_events
     events = read_events(ws.root)
     failures = [row for row in events if row['event_kind'] == 'CHAT_REQUEST_FAILURE']
     assert [row['attempt'] for row in failures] == [1, 2, 3, 4, 5]
@@ -331,7 +331,7 @@ def test_resume_probes_before_replaying_failed_http_request(ws, monkeypatch):
 def test_http_attempt_classifies_real_wire_failures(ws, monkeypatch):
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from threading import Thread
-    from pace.runtime.output.events import read_events
+    from pace.artifacts.events import read_events
 
     payloads = []
     answer = b'{"choices":[{"message":{"role":"assistant","content":"Done."}}]}'
@@ -374,7 +374,7 @@ def test_http_attempt_classifies_real_wire_failures(ws, monkeypatch):
 @pytest.mark.parametrize('expired,stage', [(False, 'connect'), (True, 'role_deadline')])
 def test_http_connect_failure_distinguishes_role_deadline(ws, monkeypatch, expired, stage):
     import http.client
-    from pace.runtime.output.events import read_events
+    from pace.artifacts.events import read_events
     tick = 0
 
     def clock():
@@ -399,8 +399,8 @@ def test_http_connect_failure_distinguishes_role_deadline(ws, monkeypatch, expir
 @pytest.mark.parametrize('agent', ['research', 'prover', 'planner'])
 def test_specialist_uses_frozen_archive_even_when_live_navigation_changes(ws, monkeypatch, agent):
     from dataclasses import replace
-    from pace.orchestrator.director_led_adapters import run_default_specialist
-    from pace.runtime.research_context import freeze_context
+    from pace.agents.director.dispatch import run_specialist
+    from pace.agents.director.context import freeze_context
     from test_research_memory import task
     from test_research_reporter import NativeFixture, use_reporter
     use_reporter(ws)
@@ -429,16 +429,16 @@ def test_specialist_uses_frozen_archive_even_when_live_navigation_changes(ws, mo
     monkeypatch.setattr(llm, '_request', reply)
     kwargs = dict(llm=llm, workdir=ws.root, prompt='Use the frozen optional context.', agent_id=agent,
         input_refs=frozen['required_refs'], round_index=1, output_ref=output)
-    result = run_default_specialist(**kwargs)
+    result = run_specialist(**kwargs)
     assert result['status'] == 'SUCCEEDED', result
     completed_count = count
-    assert run_default_specialist(**kwargs)['status'] == 'SUCCEEDED'
+    assert run_specialist(**kwargs)['status'] == 'SUCCEEDED'
     assert count == completed_count
 
 
 def test_rci_archive_is_readable_but_not_required_and_recovery_reuses_phase(ws, monkeypatch):
-    from pace.agents.research.rci.phase_runner import RciPhaseRunner
-    from pace.runtime.research_context import freeze_context
+    from pace.agents.rci.phase_runner import RciPhaseRunner
+    from pace.agents.director.context import freeze_context
     from test_research_memory import task
     from test_research_reporter import NativeFixture, use_reporter
     use_reporter(ws)
@@ -478,8 +478,8 @@ def test_rci_archive_is_readable_but_not_required_and_recovery_reuses_phase(ws, 
 
 def test_reporter_can_read_request_context_and_optional_archive(ws, monkeypatch):
     from dataclasses import replace
-    from pace.reporting.research_progress import run_research_reporter
-    from pace.runtime.research_context import freeze_context
+    from pace.agents.reporter import run_research_reporter
+    from pace.agents.director.context import freeze_context
     from test_research_memory import task
     from test_research_reporter import NativeFixture, use_reporter
     use_reporter(ws)
@@ -523,7 +523,7 @@ def test_public_finding_links_reach_exact_prior_turn_evidence_only(ws):
 
 
 def _checkpoint_call(ws, llm, call_id, prompt, inputs=(), outputs=(), role='RESEARCH'):
-    from pace.runtime.output.events import append_event
+    from pace.artifacts.events import append_event
     ref = begin_call(ws.root, call_id=call_id, role=role, stage='checkpoint', prompt=prompt,
                      input_refs=inputs, metadata={'stage_ref': ws.work_ref('round1')})
     append_event(ws.root, 'SEMANTIC_CALL_STARTED', call_id=call_id, call_ref=ref, role=role)

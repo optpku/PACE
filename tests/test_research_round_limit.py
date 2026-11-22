@@ -1,5 +1,8 @@
 """User research limits bound every dispatch while preserving verification and resume."""
 
+from pace.orchestrator.memory import commit_round_memory
+from pace.orchestrator.results import publish_stage_findings
+
 import json
 import re
 from pathlib import Path
@@ -7,10 +10,10 @@ from pathlib import Path
 import pytest
 
 from pace import cli
-from pace.orchestrator.director_led import DirectorLedEngine
-from pace.runtime.output.workspace import RunWorkspace, work_ref
-from pace.runtime.output.events import read_events
-from pace.runtime.prompt_composer import PromptComposerResult
+from pace.agents.director.loop import DirectorLedEngine
+from pace.artifacts.workspace import RunWorkspace, work_ref
+from pace.artifacts.events import read_events
+from pace.agents.prompt_composer import PromptComposerResult
 from pace.runtime.prompts import materialize_run_resources
 from test_finding_publication import ProofPublicationTransport
 
@@ -50,7 +53,7 @@ class RoundLimitTransport(ProofPublicationTransport):
 
 def test_cli_stops_uncharged_research_and_saves_limits_per_turn(tmp_path, monkeypatch, capsys):
     transport = RoundLimitTransport()
-    monkeypatch.setattr("pace.orchestrator.pipeline.build_llm", lambda **settings: transport)
+    monkeypatch.setattr("pace.agents.director.harness.build_llm", lambda **settings: transport)
     problem = tmp_path / "problem.md"
     problem.write_text("Prove 2+2=4.\n")
     assert cli.main(["run", "--problem", str(problem), "--problem-id", "bounded",
@@ -87,7 +90,7 @@ def test_cli_stops_uncharged_research_and_saves_limits_per_turn(tmp_path, monkey
 
 def test_call_budget_exhausted_after_orientation_before_first_director(tmp_path, monkeypatch):
     transport = RoundLimitTransport()
-    monkeypatch.setattr("pace.orchestrator.pipeline.build_llm", lambda **_: transport)
+    monkeypatch.setattr("pace.agents.director.harness.build_llm", lambda **_: transport)
     problem = tmp_path / "problem.md"
     problem.write_text("Prove 2+2=4.\n")
     assert cli.main(["run", "--problem", str(problem), "--problem-id", "setup-budget",
@@ -104,7 +107,7 @@ def test_call_budget_exhausted_after_orientation_before_first_director(tmp_path,
 
 def test_last_round_candidate_is_verified_before_round_limit(tmp_path, monkeypatch, capsys):
     transport = RoundLimitTransport("prover")
-    monkeypatch.setattr("pace.orchestrator.pipeline.build_llm", lambda **settings: transport)
+    monkeypatch.setattr("pace.agents.director.harness.build_llm", lambda **settings: transport)
     problem = tmp_path / "problem.md"
     problem.write_text("Prove 2+2=4.\n")
     assert cli.main(["run", "--problem", str(problem), "--problem-id", "verified",
@@ -120,7 +123,7 @@ def test_last_round_candidate_is_verified_before_round_limit(tmp_path, monkeypat
 
 def test_resume_publishes_verified_progress_after_parent_checkpoint(tmp_path, monkeypatch):
     transport = RoundLimitTransport("prover")
-    monkeypatch.setattr("pace.orchestrator.pipeline.build_llm", lambda **_: transport)
+    monkeypatch.setattr("pace.agents.director.harness.build_llm", lambda **_: transport)
     problem = tmp_path / "problem.md"
     problem.write_text("Prove 2+2=4.\n")
     root = tmp_path / "handoff"
@@ -128,7 +131,7 @@ def test_resume_publishes_verified_progress_after_parent_checkpoint(tmp_path, mo
     def interrupt(*args, **kwargs):
         raise KeyboardInterrupt
     with monkeypatch.context() as scoped:
-        scoped.setattr("pace.orchestrator.director_led.commit_verified_progress", interrupt)
+        scoped.setattr("pace.orchestrator.memory.commit_verified_progress", interrupt)
         assert cli.main(["run", "--problem", str(problem), "--problem-id", "handoff",
                          "--output", str(tmp_path), "--max-rounds", "1", "--json"]) == 130
     state = json.loads((root / "work/turn001/state/director_state.json").read_text())
@@ -147,14 +150,14 @@ def test_resume_publishes_verified_progress_after_parent_checkpoint(tmp_path, mo
 
 def test_failed_binding_after_kernel_pass_preserves_only_local_diagnostics(tmp_path, monkeypatch):
     transport = RoundLimitTransport("prover")
-    monkeypatch.setattr("pace.orchestrator.pipeline.build_llm", lambda **_: transport)
+    monkeypatch.setattr("pace.agents.director.harness.build_llm", lambda **_: transport)
     problem = tmp_path / "problem.md"
     problem.write_text("Prove 2+2=4.\n")
     root = tmp_path / "binding"
     def fail_binding(*args, **kwargs):
         raise ValueError("interrupted binding commit")
     with monkeypatch.context() as scoped:
-        scoped.setattr("pace.orchestrator.director_verifier.resolve_verification_binding", fail_binding)
+        scoped.setattr("pace.agents.director.verification.resolve_verification_binding", fail_binding)
         cli.main(["run", "--problem", str(problem), "--problem-id", "binding",
                   "--output", str(tmp_path), "--max-rounds", "1", "--json"])
     turn = root / "work/turn001"
@@ -175,7 +178,7 @@ def test_failed_binding_after_kernel_pass_preserves_only_local_diagnostics(tmp_p
 def test_whole_candidate_root_is_not_reviewed_again_but_other_argument_is(
     tmp_path, monkeypatch, interrupted
 ):
-    from pace.orchestrator.finding_publication import pending_finding_checks
+    from pace.agents.director.findings import pending_finding_checks
     from pace.runtime.semantic import StructuredSemanticResult
 
     class WholeCandidateTransport(RoundLimitTransport):
@@ -236,8 +239,8 @@ def test_whole_candidate_root_is_not_reviewed_again_but_other_argument_is(
                                     "review_ref": request["review_ref"], "status": "NOT_ESTABLISHED"}]}, {})
 
     transport = WholeCandidateTransport()
-    monkeypatch.setattr("pace.orchestrator.pipeline.build_llm", lambda **settings: transport)
-    monkeypatch.setattr("pace.orchestrator.finding_publication.verify_finding", verify_application)
+    monkeypatch.setattr("pace.agents.director.harness.build_llm", lambda **settings: transport)
+    monkeypatch.setattr("pace.agents.director.findings.verify_finding", verify_application)
     problem = tmp_path / "problem.md"
     problem.write_text("Prove 2+2=4.\n")
     code = cli.main(["run", "--problem", str(problem), "--problem-id", "whole",
@@ -286,7 +289,7 @@ def test_false_budget_stop_is_reconsidered_before_host_commits(tmp_path, monkeyp
                                                       ledger_context=ledger_context, **kwargs)
 
     transport = FalseBudgetTransport("prover")
-    monkeypatch.setattr("pace.orchestrator.pipeline.build_llm", lambda **settings: transport)
+    monkeypatch.setattr("pace.agents.director.harness.build_llm", lambda **settings: transport)
     problem = tmp_path / "problem.md"
     problem.write_text("Prove 2+2=4.\n")
     cli.main(["run", "--problem", str(problem), "--problem-id", "incorrect-stop",
@@ -341,7 +344,7 @@ def test_parallel_dispatch_reserves_only_remaining_rounds(research_workspace, li
         director=lambda **_: {**task, "parallel_tasks": tasks},
         composer=lambda **_: PromptComposerResult(final_prompt="Execute the fixed task.", call_id="composer"),
         specialists={agent: specialist for agent in ("survey", "planner", "research")},
-        target_contract_id="TARGET", max_rounds=limit)
+        target_contract_id="TARGET", max_rounds=limit, commit_memory=commit_round_memory, commit_results=publish_stage_findings)
     result = engine.run()
     assert result.phase == "FINALIZE"
     assert result.state.round_index == limit
@@ -365,7 +368,7 @@ def test_resume_finishes_the_reserved_last_round_without_redispatch(research_wor
         director=lambda **_: {"action": "DISPATCH", "agent_id": "survey", "prompt_brief": "Inspect sources.",
                              "input_refs": [ws.work_ref("input/problem.md")]},
         composer=lambda **_: PromptComposerResult(final_prompt="Inspect the fixed sources.", call_id="composer"),
-        specialists={"survey": specialist}, target_contract_id="TARGET", max_rounds=1)
+        specialists={"survey": specialist}, target_contract_id="TARGET", max_rounds=1, commit_memory=commit_round_memory, commit_results=publish_stage_findings)
     with pytest.raises(KeyboardInterrupt):
         engine.run()
     assert json.loads(engine.state_path.read_text())["round_index"] == 1
@@ -398,7 +401,7 @@ def test_paid_dispatch_stops_at_credit_limit_without_operational_failure(researc
 
     engine = DirectorLedEngine(workdir=ws.root, director=lambda **_: credit_task(ws, agent),
         composer=lambda **_: PromptComposerResult(final_prompt="Investigate the exact target.", call_id="composer"),
-        specialists={agent: specialist}, target_contract_id="TARGET", max_proof_states=1, max_rounds=3)
+        specialists={agent: specialist}, target_contract_id="TARGET", max_proof_states=1, max_rounds=3, commit_memory=commit_round_memory, commit_results=publish_stage_findings)
     result = engine.run()
     assert calls == [agent]
     assert result.state.proof_states_used == 1
@@ -423,7 +426,7 @@ def test_parallel_research_and_rci_reserve_only_available_credits(research_works
         director=lambda **_: {**task, "parallel_tasks": [credit_task(ws, "rci")]},
         composer=lambda **_: PromptComposerResult(final_prompt="Investigate the exact target.", call_id="composer"),
         specialists={agent: specialist for agent in ("research", "rci")}, target_contract_id="TARGET",
-        max_proof_states=credits, max_rounds=2)
+        max_proof_states=credits, max_rounds=2, commit_memory=commit_round_memory, commit_results=publish_stage_findings)
     result = engine.run()
     assert result.state.proof_states_used == credits
     assert sorted(calls) == (["research"] if credits == 1 else ["rci", "research"])
@@ -448,7 +451,7 @@ def test_parallel_free_task_can_use_the_last_round_at_zero_credits(research_work
     engine = DirectorLedEngine(workdir=ws.root, director=director,
         composer=lambda **_: PromptComposerResult(final_prompt="Use the existing evidence.", call_id="composer"),
         specialists={agent: specialist for agent in ("research", "rci", "survey")},
-        target_contract_id="TARGET", max_proof_states=1, max_rounds=2)
+        target_contract_id="TARGET", max_proof_states=1, max_rounds=2, commit_memory=commit_round_memory, commit_results=publish_stage_findings)
     result = engine.run()
     assert calls == ["research", "survey"]
     assert result.state.proof_states_used == 1
@@ -470,7 +473,7 @@ def test_paid_dispatch_resume_reuses_its_reserved_credit(research_workspace, age
 
     engine = DirectorLedEngine(workdir=ws.root, director=lambda **_: credit_task(ws, agent),
         composer=lambda **_: PromptComposerResult(final_prompt="Investigate the exact target.", call_id="composer"),
-        specialists={agent: specialist}, target_contract_id="TARGET", max_proof_states=1, max_rounds=1)
+        specialists={agent: specialist}, target_contract_id="TARGET", max_proof_states=1, max_rounds=1, commit_memory=commit_round_memory, commit_results=publish_stage_findings)
     with pytest.raises(KeyboardInterrupt):
         engine.run()
     result = engine.resume()
@@ -512,7 +515,7 @@ class CreditTransport(RoundLimitTransport):
 
 def test_cli_prover_can_assemble_and_repair_after_research_uses_last_credit(tmp_path, monkeypatch, capsys):
     transport = CreditTransport()
-    monkeypatch.setattr("pace.orchestrator.pipeline.build_llm", lambda **settings: transport)
+    monkeypatch.setattr("pace.agents.director.harness.build_llm", lambda **settings: transport)
     problem = tmp_path / "problem.md"
     problem.write_text("Prove 2+2=4.\n")
     assert cli.main(["run", "--problem", str(problem), "--problem-id", "credits",
@@ -551,7 +554,7 @@ def test_resume_without_verifier_returns_committed_failure(research_workspace):
 
     engine = DirectorLedEngine(workdir=ws.root, director=lambda **_: credit_task(ws, "prover"),
         composer=lambda **_: PromptComposerResult(final_prompt="Prove the fixed target.", call_id="composer"),
-        specialists={"prover": prover}, target_contract_id="TARGET", verifier=interrupt)
+        specialists={"prover": prover}, target_contract_id="TARGET", verifier=interrupt, commit_memory=commit_round_memory, commit_results=publish_stage_findings)
     with pytest.raises(KeyboardInterrupt):
         engine.run()
     engine.verifier = None
@@ -563,7 +566,7 @@ def test_resume_without_verifier_returns_committed_failure(research_workspace):
 def test_resume_retries_final_publication_without_rechecking_proof(tmp_path, monkeypatch):
     transport = RoundLimitTransport("prover")
     transport.publication = {"action": "CREATE"}
-    monkeypatch.setattr("pace.orchestrator.pipeline.build_llm", lambda **_: transport)
+    monkeypatch.setattr("pace.agents.director.harness.build_llm", lambda **_: transport)
     source = tmp_path / "problem.md"
     source.write_text("Prove 2+2=4.\n")
     root = tmp_path / "publish"
@@ -573,7 +576,7 @@ def test_resume_retries_final_publication_without_rechecking_proof(tmp_path, mon
         raise OSError("interrupted final publication")
 
     with monkeypatch.context() as scoped:
-        scoped.setattr("pace.orchestrator.director_led_finalization.publish_finding", fail_publication)
+        scoped.setattr("pace.orchestrator.results.publish_finding", fail_publication)
         assert cli.main(["run", "--problem", str(source), "--problem-id", root.name,
                          "--output", str(tmp_path), "--max-rounds", "1", "--json"]) == 2
     report = json.loads(report_path.read_text())

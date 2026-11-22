@@ -1,0 +1,5 @@
+## JSON receipt correction
+Repair the saved Reporter receipt in `{{receipt_ref}}`. This is a reference/serialization repair only. Return the complete receipt with every invalid reference fixed in one pass. For each reference choose ONE exact path from that field's enum; never append sections, backticks or explanations. Annotations belong in prose, not a path field. Preserve the ORIGINAL summary, outcome and application identities supplied below exactly. Retain the assigned branch {{branch_id}} and obligation IDs {{obligation_ids}}. {{proof_constraint}}Do not independently review the mathematics, reread source papers, browse directories, invent a premise, remove an application, or rewrite manuscripts. The previous receipt and schema contain the information for this correction.
+{{diagnostics}}
+Original content to preserve (except the invalid file references):
+{{original_payload}}

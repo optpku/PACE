@@ -7,13 +7,15 @@ from pathlib import Path
 import pytest
 
 from pace import cli
-from pace.orchestrator.director_led_finalization import _publish_report
-from pace.orchestrator.finding_publication import publish_stage_findings
+from pace.orchestrator.results import publish_terminal_report
+from pace.agents.director.findings import check_stage_findings
+from pace.orchestrator.results import publish_stage_findings
 from pace.runtime.llm import TransportSuccess
-from pace.runtime.output.calls import attempt_directory
-from pace.runtime.output.results import finding_entries, publish_finding
-from pace.runtime.output.workspace import RunWorkspace
-from pace.runtime.prompt_composer import write_dependency_manifest
+from pace.artifacts.calls import attempt_directory
+from pace.artifacts.results import finding_entries
+from pace.orchestrator.results import publish_finding
+from pace.artifacts.workspace import RunWorkspace
+from pace.artifacts.results import write_dependency_manifest
 from pace.runtime.semantic import StructuredSemanticResult
 
 
@@ -67,17 +69,18 @@ def test_stage_verifier_controls_create_update_and_supporting_records(tmp_path, 
         return StructuredSemanticResult(payload={"stage_status": "PASS", "reuse_authorized": True,
                                                  "publication": actions[len(checked) - 1]}, host={})
 
-    monkeypatch.setattr("pace.orchestrator.finding_publication.verify_finding", verify)
+    monkeypatch.setattr("pace.agents.director.findings.verify_finding", verify)
     completed = []
     for index in range(1, 4):
         directory = ws.work_ref(f"round{index}")
         source = f"{directory}/findings/bound.md"
         ws.write_text(source, f"# Bound\n\nChecked statement {index}.\n")
         ws.write_json(f"{directory}/agent_result.json",
-                      {"status": "SUCCEEDED", "deliverable_ref": source})
+                      {"agent_id": "research", "status": "SUCCEEDED", "deliverable_ref": source})
         ws.write_json(f"{directory}/assignment/task.json", {"round_index": index})
         completed.append(f"{directory}/agent_result.json")
-        assert publish_stage_findings(llm=object(), workdir=ws.root, completed_result_refs=completed)
+        assert check_stage_findings(llm=object(), workdir=ws.root, completed_result_refs=completed)
+        publish_stage_findings(workdir=ws.root, completed_result_refs=completed)
     assert len(checked) == 3
     assert len(finding_entries(ws.root)) == 1
     assert "Checked statement 2." in ws.path("results/findings/R0001.md").read_text()
@@ -105,7 +108,7 @@ def test_research_finalization_obeys_the_kernel_publication_action(tmp_path, act
     report = {"schema_version": "final_report/v8", "result": "PASS", "run_status": "completed",
               "mathematical_status": "VERIFIED", "director_state": {"round_index": 2},
               "artifact_refs": {"proof": proof, "verification": receipt, "kernel": kernel}}
-    _publish_report(ws, report)
+    publish_terminal_report(ws, report)
     assert report["publication_status"] == ("NO_PUBLICATION" if action == "NONE" else "PUBLISHED")
     assert report["result"] == "PASS"
     assert "report" not in report["artifact_refs"]
@@ -133,7 +136,7 @@ class ProofPublicationTransport:
                                 attempt_count=1, artifact_dir=folder)
 
     def complete_structured_result(self, prompt, *, workdir, call_name, ledger_context, **kwargs):
-        from pace.runtime.output.workspace import work_ref
+        from pace.artifacts.workspace import work_ref
 
         root = Path(workdir)
         if call_name.startswith('research_reporter_'):
@@ -182,7 +185,7 @@ class ProofPublicationTransport:
 @pytest.mark.parametrize("action", ["CREATE", "NONE"])
 def test_public_cli_keeps_publication_separate_from_pass_and_updates_on_continue(tmp_path, monkeypatch, capsys, action):
     transport = ProofPublicationTransport(action)
-    monkeypatch.setattr("pace.orchestrator.pipeline.build_llm", lambda **settings: transport)
+    monkeypatch.setattr("pace.agents.director.harness.build_llm", lambda **settings: transport)
     problem = tmp_path / "problem.md"
     problem.write_text("Prove 2+2=4.\n")
     assert cli.main(["run", "--problem", str(problem), "--problem-id", "proof",

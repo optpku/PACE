@@ -1,0 +1,5 @@
+{{value_1}}
+
+## Complete this Kernel report's missing delivery
+Your own incomplete response is saved in `{{value_2}}`. This same-task response is delivery context, not mathematical authority. Independently check the same literal target and candidate; do not rewrite the candidate or supply a missing mathematical argument. Return valid JSON with an explicit stage_status and the complete requested report. For PASS, include actual nonempty relation_checks, target_clause_checks and final_assembly evidence, plus explicit publication_eligible=true and a separate publication CREATE/UPDATE/NONE decision. The schema is the minimum routing interface, not the complete report. If the independent check finds an unresolved mathematical issue, return MATH_FAIL with the actual gap and any valid local results instead of fabricating PASS evidence. Do not use other historical verdicts as authority. This is one delivery correction for the same candidate, not a new proof task.
+{{value_3}}

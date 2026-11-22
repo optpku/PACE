@@ -5,10 +5,11 @@ from pathlib import Path
 import pytest
 
 from pace import cli
-from pace.orchestrator.pipeline import ProofPipeline
+from pace.pipeline import ProofPipeline
+from pace.artifacts.workspace import work_ref
 from pace.runtime.llm import TransportSuccess
-from pace.runtime.output.calls import attempt_directory
-from pace.runtime.output.events import read_events
+from pace.artifacts.calls import attempt_directory
+from pace.artifacts.events import read_events
 
 
 @pytest.mark.parametrize("damage", ["missing", "empty", "outside", "oversized"])
@@ -39,7 +40,7 @@ class ResearchTransport:
             payload = {'target_clauses': [{'start_line': 1, 'end_line': 1}],
                        'recommended_mode': 'research', 'mode_reason': 'The requested classification needs research.'}
         elif call_name == 'problem_research_decision':
-            (root / 'work/turn001/input/problem_brief.md').write_text('# Classification\n\nThe original classification remains open.\n')
+            (root / work_ref(root, 'input/problem_brief.md')).write_text('# Classification\n\nThe original classification remains open.\n')
             payload = {'proof_assessment': {'difficulty': 'research', 'plan_node_level': 1, 'dependency_depth_level': 1}}
         elif call_name.startswith('global_research_director_'):
             payload = {'action': 'STOP', 'stop_reason': 'NO_ACTIONABLE_TASK',
@@ -56,7 +57,7 @@ class ResearchTransport:
 
 def test_research_terminal_and_resume_use_only_the_final_report(tmp_path, monkeypatch, capsys):
     transport = ResearchTransport()
-    monkeypatch.setattr('pace.orchestrator.pipeline.build_llm', lambda **settings: transport)
+    monkeypatch.setattr('pace.agents.director.harness.build_llm', lambda **settings: transport)
     source = tmp_path / 'problem.md'
     source.write_text('Classify all structures satisfying the stated axioms.\n')
     assert cli.main(['run', '--problem', str(source), '--problem-id', 'research', '--output', str(tmp_path), '--json']) == 0
@@ -77,8 +78,8 @@ def test_research_terminal_and_resume_use_only_the_final_report(tmp_path, monkey
 
 
 def test_terminal_evidence_pause_resumes_without_a_director_call(tmp_path, monkeypatch):
-    from pace.orchestrator.finding_publication import publish_stage_findings
-    from pace.runtime.output.delivery_pause import delivery_pause
+    from pace.agents.director.findings import check_stage_findings
+    from pace.artifacts.delivery_pause import delivery_pause
 
     transport = ResearchTransport()
     retries = []
@@ -87,10 +88,10 @@ def test_terminal_evidence_pause_resumes_without_a_director_call(tmp_path, monke
         retries.append(kwargs["retry_errors"])
         if len(retries) == 1:
             raise OSError("interrupted publication")
-        return publish_stage_findings(**kwargs)
+        return check_stage_findings(**kwargs)
 
-    monkeypatch.setattr("pace.orchestrator.pipeline.build_llm", lambda **_: transport)
-    monkeypatch.setattr("pace.orchestrator.pipeline.publish_stage_findings", review)
+    monkeypatch.setattr("pace.agents.director.harness.build_llm", lambda **_: transport)
+    monkeypatch.setattr("pace.agents.director.harness.check_stage_findings", review)
     source = tmp_path / "problem.md"
     source.write_text("Classify all structures satisfying the stated axioms.")
     cli.main(["run", "--problem", str(source), "--problem-id", "research", "--output", str(tmp_path)])
@@ -104,7 +105,7 @@ def test_terminal_evidence_pause_resumes_without_a_director_call(tmp_path, monke
         def interrupt(**kwargs):
             assert not delivery_pause(root)
             raise KeyboardInterrupt
-        scoped.setattr("pace.orchestrator.director_workflow.finalize_director_led", interrupt)
+        scoped.setattr("pace.agents.director.workflow.finalize_director_led", interrupt)
         assert cli.main(["resume", "--run-dir", str(root), "--json"]) == 130
     assert not delivery_pause(root)
     for _ in range(2):

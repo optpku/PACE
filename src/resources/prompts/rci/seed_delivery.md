@@ -1,0 +1,1 @@
+The Host records the assigned seed operation and artifact paths. Return one JSON object with any mathematical handoff rationale; do not return an action or repeat those Host-owned fields.

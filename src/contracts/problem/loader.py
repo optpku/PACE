@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from pace.runtime.output.workspace import sanitize_id
+from pace.artifacts.workspace import sanitize_id
 
 
 @dataclass
@@ -22,10 +22,14 @@ def load_problem(path: Path, problem_id: str | None = None) -> Problem:
 
     source_path = Path(path).expanduser()
     if not source_path.is_file():
-        raise ProblemInputError(f"problem input must be one regular file: {source_path}")
+        raise ProblemInputError(
+            f"problem input must be one regular file: {source_path}"
+        )
     payload = source_path.read_bytes()
     if payload.lstrip(b"\xef\xbb\xbf \t\r\n").startswith(b"%PDF-"):
-        raise ProblemInputError("problem input must be text; PDF input is not supported")
+        raise ProblemInputError(
+            "problem input must be text; PDF input is not supported"
+        )
     try:
         text = payload.decode("utf-8")
     except UnicodeDecodeError as exc:

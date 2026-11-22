@@ -1,0 +1,1 @@
+Attempt only the concrete construction or precise lemma in probe_target, independently of mechanisms. Report local progress separately from a complete solution of the original target.

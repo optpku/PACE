@@ -1,0 +1,1 @@
+Judge the combined promoted support and return exactly one coverage action. Promoted mechanism identities: {{value_1}}

@@ -192,6 +192,18 @@ PACE 保存数学原稿、断点与运行记录，外部 Web 应用负责研究�
 
 `resume` 接续未完成环节；`continue` 才开启下一 turn。研究结束不会自动写长报告，也不会自动开启下一 turn。
 
+## 源码组织
+
+生产入口为 `pace.cli → pace.pipeline.ProofPipeline.run`。`src/pipeline.py` 实际管理新建、继续和恢复 turn，并组装执行需要的服务。
+
+- `src/orchestrator/` 管理问题级累计记忆、成果发布及版本、历史交接，以及研究报告和论文流程。每个 round 提交后即可更新共享记录；提交中断时复用已完成的作者与核验结果。
+- `src/agents/director/` 管理单个 turn 的初始化、Orientation、研究调度、任务执行、预算、并行、独立核验协调和检查点。Director 模型决定任务，harness 执行决定，独立验证器保留数学裁决权。
+- 普通角色在 `src/agents/<角色>.py` 中选择并组合自己的固定 `AGENTS.md` 指令、当前调用提示词和局部纠正提示词。`prompt_composer.py` 只提供公共拼装操作。
+- 所有角色提示词位于 `src/resources/prompts/<角色>/`，共享指引位于 `shared/`。同一角色的 `standard`、`weak` 文件相邻保存；运行快照只保留所选版本。恢复沿用已有快照，新的 turn 重新选择资源。
+- `src/runtime/` 提供模型、工具、进程、原生会话、资源读取和构建能力；`src/artifacts/` 保存原稿、状态、提交回执、调用记录与事件。
+
+运行目录中的 `memory/`、`results/` 由外层 orchestrator 管理。当前 turn 的草稿、冻结上下文与检查点保存在 `work/turnNNN/`。共享记忆和历史成果保留原始目标及核验引用，跨 turn 使用时仍需检查当前目标的范围与条件。
+
 ## 许可证
 
 PACE 采用 [Apache License 2.0](LICENSE)。继承代码的许可声明保留于 [NOTICE](NOTICE) 和 [LICENSES](LICENSES)。

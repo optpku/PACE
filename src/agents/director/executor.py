@@ -1,0 +1,1515 @@
+"""Execute a committed bounded assignment without making scheduling decisions.
+
+Sequential and parallel tasks share this path. A batch worker is an executor
+with its own checkpoint, never another Director or research state machine.
+"""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Callable, Mapping
+from dataclasses import replace
+from pathlib import Path
+from typing import Any
+
+from pace.agents.director.context import freeze_context
+from pace.agents.director.dispatch import (
+    build_specialist_prompt_assembly,
+)
+from pace.agents.director.rounds import (
+    _coerce_composer,
+    _coerce_persisted_decision,
+    _invoke,
+    _is_private_transport_path,
+    _is_success_status,
+    _read_json,
+    _specialist_handoff,
+    _unique_strings,
+    _validate_assignment,
+    _validate_composer_manifest,
+    _validate_composer_prompt,
+    _validate_specialist_result_agent_id,
+    _validate_verification_checkpoint,
+    _validate_verifier_request,
+)
+from pace.agents.director.state import (
+    DIRECTOR_LED_ROUND_SCHEMA_VERSION,
+    DirectorLedEngineError,
+    DirectorLedState,
+    _unsafe_ref_syntax,
+)
+from pace.agents.prompt_composer import (
+    PromptAssembly,
+    PromptComposerResult,
+    load_prompt_assembly,
+)
+from pace.artifacts.events import publish_progress
+from pace.artifacts.workspace import (
+    _write_json_atomic as _write_json,
+)
+from pace.artifacts.workspace import (
+    _write_text_atomic as _write_text,
+)
+from pace.artifacts.workspace import (
+    is_call_path,
+    path_has_symlink_component,
+    stage_ref,
+    work_ref,
+)
+from pace.contracts.proof.binding import resolve_verification
+from pace.contracts.research.director_protocol import (
+    DirectorAction,
+    DirectorDecision,
+    specialist_spec,
+)
+from pace.contracts.research.memory import binding, check_binding
+from pace.contracts.research.memory import enabled as research_memory_enabled
+
+
+class AssignmentExecutor:
+    def __init__(
+        self,
+        *,
+        workdir: Path,
+        composer: Callable[..., Any],
+        specialists: Mapping[str, Callable[..., Any]],
+        target_contract_id: str,
+        verifier: Callable[..., Any] | None = None,
+        reporter: Callable[[str], Any] | None = None,
+        checkpoint_ref: str | None = None,
+        snapshot_round: int = 0,
+        parent_task_id: str = "",
+        commit_progress: bool = True,
+        commit_memory: Callable[..., Any] | None = None,
+    ) -> None:
+        self.workdir = Path(workdir)
+        self.workdir.mkdir(parents=True, exist_ok=True)
+        self.composer = composer
+        self.specialists = dict(specialists)
+        self.target_contract_id = target_contract_id
+        self.verifier = verifier
+        self.reporter = reporter
+        self.state_ref = checkpoint_ref or work_ref(
+            workdir, "state/director_state.json"
+        )
+        self.round_root = work_ref(workdir)
+        self.snapshot_round = snapshot_round
+        self.parent_task_id = parent_task_id
+        self.commit_progress = commit_progress
+        self.commit_memory_callback = commit_memory
+
+    @property
+    def state_path(self) -> Path:
+        return self.workdir / self.state_ref
+
+    def _resume_verification(
+        self,
+        state: DirectorLedState,
+        *,
+        control_context: str,
+    ) -> DirectorLedState:
+        """Resume the committed Prover verification boundary without dispatch."""
+
+        if not state.last_directive_ref or not state.last_specialist_result_ref:
+            return self._fail_round(
+                state,
+                state.round_index,
+                "VERIFY",
+                DirectorLedEngineError("VERIFY state lacks committed Prover refs"),
+            )
+        if any(
+            (
+                state.pending_dispatch_ref,
+                state.pending_prompt_ref,
+                state.pending_assignment_ref,
+            )
+        ):
+            return self._fail_round(
+                state,
+                state.round_index,
+                "VERIFY",
+                DirectorLedEngineError(
+                    "VERIFY state contains pending dispatch references"
+                ),
+            )
+        try:
+            directive_ref = self._require_round_local_file_ref(
+                state.last_directive_ref,
+                field="last_directive_ref",
+                round_index=state.round_index,
+            )
+            result_ref = self._require_round_local_file_ref(
+                state.last_specialist_result_ref,
+                field="last_specialist_result_ref",
+                round_index=state.round_index,
+            )
+            directive = _read_json(self.workdir / directive_ref)
+            decision = _coerce_persisted_decision(
+                directive,
+                expected_round_index=state.round_index,
+            )
+            if (
+                decision.action is not DirectorAction.DISPATCH
+                or decision.agent_id != "prover"
+            ):
+                raise DirectorLedEngineError(
+                    "VERIFY state is not bound to a Prover dispatch"
+                )
+            result_record = _read_json(self.workdir / result_ref)
+            _validate_specialist_result_agent_id(
+                result_record,
+                expected_agent_id=decision.agent_id,
+            )
+            raw_assignment_ref = state.last_assignment_ref
+            if not raw_assignment_ref:
+                raise DirectorLedEngineError(
+                    "VERIFY state lacks a committed assignment reference"
+                )
+            assignment_ref = self._require_round_local_file_ref(
+                raw_assignment_ref,
+                field="assignment_ref",
+                round_index=state.round_index,
+            )
+            assignment = _read_json(self.workdir / assignment_ref)
+            candidate_ref = self._require_round_local_file_ref(
+                state.candidate_ref,
+                field="candidate_ref",
+                round_index=state.round_index,
+            )
+            # The Host chooses a deterministic output path when it commits a
+            # dispatch.  A recovered state must not be able to replace that
+            # binding by changing candidate_ref and assignment together.
+            expected_candidate_ref = self._default_output_ref(
+                "prover", state.round_index
+            )
+            if candidate_ref != expected_candidate_ref:
+                raise DirectorLedEngineError(
+                    "candidate_ref differs from Host assignment output_ref"
+                )
+            _validate_assignment(
+                assignment,
+                decision=decision,
+                assignment_ref=assignment_ref,
+                directive_ref=directive_ref,
+                round_index=state.round_index,
+                expected_output_ref=expected_candidate_ref,
+                expected_input_refs=self._assignment_input_refs(
+                    decision, state.round_index
+                ),
+            )
+            decision = replace(decision, input_refs=tuple(assignment["input_refs"]))
+            if str(assignment.get("output_ref") or "") != candidate_ref:
+                raise DirectorLedEngineError(
+                    "candidate_ref differs from Host assignment output_ref"
+                )
+            self._validate_prover_result_binding(
+                result_record,
+                candidate_ref=candidate_ref,
+            )
+            self._validate_optional_verify_checkpoints(
+                state,
+                decision=decision,
+                directive_ref=directive_ref,
+                candidate_ref=candidate_ref,
+            )
+            context = {
+                "schema_version": DIRECTOR_LED_ROUND_SCHEMA_VERSION,
+                "round_index": state.round_index,
+                "target_contract_id": self.target_contract_id
+                or state.target_contract_id,
+                "completed_result_refs": list(state.completed_result_refs),
+                "previous_verification_ref": state.last_verification_ref,
+                "control_context": str(control_context or ""),
+                "directive_ref": directive_ref,
+                "assignment_ref": assignment_ref,
+                "output_ref": str(assignment.get("output_ref") or candidate_ref),
+                "verified_progress_ref": next(
+                    (
+                        ref
+                        for ref in decision.input_refs
+                        if ref == self._progress_snapshot_ref(state.round_index)
+                    ),
+                    "",
+                ),
+            }
+            return self._run_verifier(
+                state,
+                decision=decision,
+                context=context,
+                result_record=result_record,
+                result_ref=result_ref,
+                recovering=True,
+            )
+        except Exception as exc:
+            return self._fail_round(state, state.round_index, "VERIFY", exc)
+
+    def _validate_optional_verify_checkpoints(
+        self,
+        state: DirectorLedState,
+        *,
+        decision: DirectorDecision,
+        directive_ref: str,
+        candidate_ref: str,
+    ) -> None:
+        """Validate checkpoint refs retained while a Prover awaits verification."""
+
+        if state.last_composer_manifest_ref:
+            manifest_ref = self._require_round_local_file_ref(
+                state.last_composer_manifest_ref,
+                field="last_composer_manifest_ref",
+                round_index=state.round_index,
+            )
+            expected_manifest_ref = self._round_ref(
+                state.round_index, "prompt_assembly.json"
+            )
+            if manifest_ref != expected_manifest_ref:
+                raise DirectorLedEngineError(
+                    "last_composer_manifest_ref differs from the current dispatch"
+                )
+            prompt_ref = self._round_ref(state.round_index, "final_prompt.md")
+            prompt_ref = self._require_round_local_file_ref(
+                prompt_ref,
+                field="prompt_ref",
+                round_index=state.round_index,
+            )
+            manifest = _read_json(self.workdir / manifest_ref)
+            _validate_composer_manifest(
+                manifest,
+                decision=decision,
+                round_index=state.round_index,
+                prompt_ref=prompt_ref,
+                output_ref=candidate_ref,
+                directive_ref=directive_ref,
+            )
+            prompt_path = self.workdir / prompt_ref
+            if not prompt_path.is_file():
+                raise DirectorLedEngineError("committed Composer prompt is missing")
+            prompt = prompt_path.read_text(encoding="utf-8")
+            _validate_composer_prompt(
+                prompt,
+                source="committed Composer",
+            )
+
+        if state.last_verification_ref:
+            verification_ref = self._require_round_local_file_ref(
+                state.last_verification_ref,
+                field="last_verification_ref",
+                round_index=state.round_index,
+            )
+            expected_verification_ref = self._round_ref(
+                state.round_index, "verification/verification.json"
+            )
+            if verification_ref != expected_verification_ref:
+                raise DirectorLedEngineError(
+                    "last_verification_ref differs from the current round"
+                )
+
+    def _validate_prover_result_binding(
+        self,
+        result_record: Mapping[str, Any],
+        *,
+        candidate_ref: str,
+    ) -> None:
+        """Bind a recovered Prover handoff to the Host-owned candidate path."""
+
+        if not _is_success_status(result_record.get("status")):
+            raise DirectorLedEngineError(
+                "VERIFY state does not contain a successful Prover handoff"
+            )
+        # The Host assignment is the only source of the candidate path.  A
+        # Prover must repeat that path in the current handoff's explicit
+        # ``deliverable_ref`` field; proof-specific aliases are obsolete and
+        # must not be interpreted during recovery.
+        if "proof_ref" in result_record or "candidate_proof_ref" in result_record:
+            raise DirectorLedEngineError(
+                "recovered Prover handoff uses an unsupported proof reference alias"
+            )
+        raw_ref = result_record.get("deliverable_ref")
+        if not isinstance(raw_ref, str) or not raw_ref.strip():
+            raise DirectorLedEngineError(
+                "recovered Prover handoff has no deliverable reference"
+            )
+        normalized = self._resolve_stable_ref(raw_ref)
+        if not normalized or normalized != candidate_ref:
+            raise DirectorLedEngineError(
+                "recovered Prover handoff deliverable_ref differs from candidate"
+            )
+
+    def _progress_snapshot_ref(self, round_index: int) -> str:
+        return self._round_ref(
+            self.snapshot_round or round_index, "progress_snapshot.json"
+        )
+
+    def _assignment_input_refs(
+        self,
+        decision: DirectorDecision,
+        round_index: int,
+        *,
+        snapshot_round: int | None = None,
+    ) -> tuple[str, ...]:
+        """Bind execution inputs without changing the Director's ticket."""
+
+        progress_ref = self._progress_snapshot_ref(snapshot_round or round_index)
+        refs = _unique_strings(
+            (
+                work_ref(self.workdir, "input/request.md"),
+                work_ref(self.workdir, "input/problem.md"),
+                work_ref(self.workdir, "input/target_contract.json"),
+                *(
+                    (work_ref(self.workdir, "input/handoff.md"),)
+                    if (
+                        self.workdir / work_ref(self.workdir, "input/handoff.md")
+                    ).is_file()
+                    else ()
+                ),
+                work_ref(self.workdir, "state/proof_loop_budget.json"),
+                *((progress_ref,) if (self.workdir / progress_ref).is_file() else ()),
+                *(
+                    ref
+                    for ref in decision.input_refs
+                    if ref != "memory/verified_progress.json"
+                ),
+            )
+        )
+
+        if research_memory_enabled(self.workdir):
+            context = freeze_context(
+                self.workdir,
+                self._round_ref(round_index, "assignment/task.json"),
+                decision,
+                refs,
+            )
+            return (
+                *context["required_refs"],
+                self._round_ref(round_index, "assignment/context.json"),
+                context["route_context"]["ref"],
+            )
+        return refs
+
+    def _context_binding(self, round_index):
+        if not research_memory_enabled(self.workdir):
+            return {}
+        return {
+            "context_binding": binding(
+                self.workdir, self._round_ref(round_index, "assignment/context.json")
+            )
+        }
+
+    def _run_pending_specialist(
+        self,
+        state: DirectorLedState,
+        *,
+        control_context: str,
+        recovering: bool = False,
+    ) -> DirectorLedState:
+        # A pending dispatch is committed before Composer or the specialist
+        # is called.  Do not silently reconstruct either binding from the
+        # round layout when a persisted state field is missing.
+        directive_ref = state.pending_dispatch_ref
+        if not directive_ref:
+            return self._fail_round(
+                state,
+                state.round_index,
+                "PENDING_SPECIALIST",
+                DirectorLedEngineError(
+                    "pending dispatch has no committed directive reference"
+                ),
+            )
+        if not state.pending_assignment_ref:
+            return self._fail_round(
+                state,
+                state.round_index,
+                "PENDING_SPECIALIST",
+                DirectorLedEngineError(
+                    "pending dispatch has no committed assignment reference"
+                ),
+            )
+        try:
+            # A pending state is an external recovery boundary.  Validate its
+            # persisted references before opening either JSON file; generated
+            # round paths are not a substitute for checking tampered state.
+            directive_ref = self._require_round_local_file_ref(
+                directive_ref,
+                field="pending_dispatch_ref",
+                round_index=state.round_index,
+            )
+            if not state.last_directive_ref:
+                raise DirectorLedEngineError(
+                    "pending dispatch has no committed last_directive_ref"
+                )
+            last_directive_ref = self._require_round_local_file_ref(
+                state.last_directive_ref,
+                field="last_directive_ref",
+                round_index=state.round_index,
+            )
+            if last_directive_ref != directive_ref:
+                raise DirectorLedEngineError(
+                    "pending_dispatch_ref differs from last_directive_ref"
+                )
+            directive = _read_json(self.workdir / directive_ref)
+            decision = _coerce_persisted_decision(
+                directive,
+                expected_round_index=state.round_index,
+            )
+            from pace.contracts.research.director_protocol import (
+                validate_director_reference_bindings,
+            )
+
+            validate_director_reference_bindings(decision, self.workdir)
+            if decision.action is not DirectorAction.DISPATCH:
+                raise DirectorLedEngineError("pending directive is not DISPATCH")
+            spec = specialist_spec(decision.agent_id)
+            handler = self.specialists.get(decision.agent_id)
+            if handler is None:
+                raise DirectorLedEngineError(
+                    f"no handler is registered for specialist {decision.agent_id}"
+                )
+            round_index = state.round_index
+            assignment_ref = state.pending_assignment_ref
+            assignment_ref = self._require_round_local_file_ref(
+                assignment_ref,
+                field="pending_assignment_ref",
+                round_index=state.round_index,
+            )
+            assignment = _read_json(self.workdir / assignment_ref)
+            output_ref = str(assignment.get("output_ref") or "").strip()
+            if not output_ref:
+                raise DirectorLedEngineError("assignment has no Host output_ref")
+            _validate_assignment(
+                assignment,
+                decision=decision,
+                assignment_ref=assignment_ref,
+                directive_ref=directive_ref,
+                round_index=round_index,
+                expected_output_ref=self._default_output_ref(
+                    decision.agent_id, round_index
+                ),
+                expected_input_refs=self._assignment_input_refs(decision, round_index),
+            )
+            if research_memory_enabled(self.workdir):
+                check_binding(self.workdir, assignment["context_binding"])
+            # The model-owned ticket stays unchanged on disk. Composer,
+            # specialist and verifier use the frozen Host assignment inputs.
+            decision = replace(decision, input_refs=tuple(assignment["input_refs"]))
+            context = {
+                "schema_version": DIRECTOR_LED_ROUND_SCHEMA_VERSION,
+                "round_index": round_index,
+                "target_contract_id": self.target_contract_id
+                or state.target_contract_id,
+                "completed_result_refs": list(state.completed_result_refs),
+                "previous_verification_ref": state.last_verification_ref,
+                "control_context": str(control_context or ""),
+                "directive_ref": directive_ref,
+                "assignment_ref": assignment_ref,
+                "output_ref": output_ref,
+                "verified_progress_ref": next(
+                    (
+                        ref
+                        for ref in decision.input_refs
+                        if ref == self._progress_snapshot_ref(round_index)
+                    ),
+                    "",
+                ),
+            }
+            publish_progress(
+                self.workdir,
+                task_id=f"round-{round_index:04d}",
+                parent_task_id=self.parent_task_id,
+                stage=decision.agent_id,
+                status="started",
+                round_index=round_index,
+            )
+            rci_owned_prompt_graph = decision.agent_id == "rci"
+            manifest_ref = ""
+            prompt_ref = ""
+            final_prompt = ""
+            input_refs = tuple(decision.input_refs)
+            composer_checkpoint_committed = False
+            if rci_owned_prompt_graph:
+                if state.last_composer_manifest_ref or state.pending_prompt_ref:
+                    raise DirectorLedEngineError(
+                        "RCI dispatch must not carry a top-level Composer checkpoint"
+                    )
+            else:
+                expected_manifest_ref = self._round_ref(
+                    round_index, "prompt_assembly.json"
+                )
+                expected_prompt_ref = self._round_ref(round_index, "final_prompt.md")
+                persisted_manifest_ref = state.last_composer_manifest_ref
+                persisted_prompt_ref = state.pending_prompt_ref
+                if bool(persisted_manifest_ref) != bool(persisted_prompt_ref):
+                    raise DirectorLedEngineError(
+                        "Composer checkpoint references must be committed together"
+                    )
+                composer_checkpoint_committed = bool(
+                    persisted_manifest_ref and persisted_prompt_ref
+                )
+                if composer_checkpoint_committed:
+                    manifest_ref = self._require_round_local_file_ref(
+                        persisted_manifest_ref,
+                        field="last_composer_manifest_ref",
+                        round_index=round_index,
+                    )
+                    prompt_ref = self._require_round_local_file_ref(
+                        persisted_prompt_ref,
+                        field="pending_prompt_ref",
+                        round_index=round_index,
+                    )
+                    if manifest_ref != expected_manifest_ref:
+                        raise DirectorLedEngineError(
+                            "last_composer_manifest_ref differs from the current dispatch"
+                        )
+                    if prompt_ref != expected_prompt_ref:
+                        raise DirectorLedEngineError(
+                            "pending_prompt_ref differs from the current dispatch"
+                        )
+                else:
+                    manifest_ref = expected_manifest_ref
+                    prompt_ref = expected_prompt_ref
+                request_path = (self.workdir / manifest_ref).with_name(
+                    "composer_request.json"
+                )
+                if composer_checkpoint_committed or request_path.is_file():
+                    assembly = load_prompt_assembly(request_path)
+                    if (
+                        assembly.target_contract_id != context["target_contract_id"]
+                        or assembly.output_artifact_ref != output_ref
+                    ):
+                        raise DirectorLedEngineError(
+                            "saved Composer inputs are bound to another task"
+                        )
+                else:
+                    assembly = build_specialist_prompt_assembly(
+                        workdir=self.workdir,
+                        decision=decision,
+                        target_contract_id=context["target_contract_id"],
+                        output_ref=output_ref,
+                        manifest_ref=manifest_ref,
+                    )
+                input_refs = assembly.candidate_refs
+                composer_record = self._load_or_compose(
+                    manifest_ref=manifest_ref,
+                    prompt_ref=prompt_ref,
+                    decision=decision,
+                    spec=spec,
+                    context=context,
+                    round_index=round_index,
+                    assembly=assembly,
+                    input_refs=input_refs,
+                    checkpoint_committed=composer_checkpoint_committed,
+                )
+                final_prompt = composer_record.final_prompt
+                # Commit prompt bytes before invoking an ordinary specialist.
+                # RCI instead owns an append-only internal phase graph and
+                # recovers from its committed assignment and outcome.
+                state = self._replace_state(
+                    state,
+                    pending_prompt_ref=prompt_ref,
+                    last_composer_manifest_ref=manifest_ref,
+                )
+                self._persist_state(state)
+            result_ref = self._round_ref(round_index, "agent_result.json")
+            if rci_owned_prompt_graph:
+                recovered, specialist_value = False, None
+                if recovering and (self.workdir / result_ref).is_file():
+                    saved = json.loads((self.workdir / result_ref).read_text())
+                    if saved.get("status") == "SUCCEEDED":
+                        recovered, specialist_value = True, saved
+            else:
+                recovered, specialist_value = self._recover_pending_specialist_value(
+                    result_ref=result_ref,
+                    output_ref=output_ref,
+                    agent_id=decision.agent_id,
+                    round_index=round_index,
+                    recovering=recovering and composer_checkpoint_committed,
+                )
+            if not recovered:
+                specialist_value = _invoke(
+                    handler,
+                    {
+                        "workdir": self.workdir,
+                        "prompt": final_prompt,
+                        "decision": decision,
+                        "agent_spec": spec,
+                        "context": context,
+                        "agent_id": decision.agent_id,
+                        "input_refs": input_refs,
+                        "round_index": round_index,
+                        "prompt_ref": prompt_ref,
+                        "composer_manifest_ref": manifest_ref,
+                        "output_ref": output_ref,
+                        "on_accept": lambda result: _write_json(
+                            self.workdir / result_ref, result
+                        ),
+                    },
+                )
+            result_record, stable_ref = _specialist_handoff(
+                specialist_value, decision.agent_id
+            )
+            if str(result_record.get("status") or "").upper() == "INTERFACE_FAILED":
+                return self._fail_round(
+                    state,
+                    round_index,
+                    "SPECIALIST",
+                    DirectorLedEngineError(
+                        str(
+                            result_record.get("message")
+                            or result_record.get("reason_code")
+                            or "specialist interface failed"
+                        )
+                    ),
+                )
+            stable_refs = []
+            succeeded = _is_success_status(result_record.get("status"))
+            if succeeded:
+                stable_refs.append(result_ref)
+            # A specialist handoff must name its deliverable explicitly.  The
+            # Host-owned assignment path is an output constraint, not a
+            # response-to-proof fallback: accepting it here would allow a
+            # successful status (or a transport response) to promote an
+            # artifact the specialist never handed off.
+            explicit_ref = self._resolve_stable_ref(stable_ref)
+            if succeeded and not explicit_ref:
+                raise DirectorLedEngineError(
+                    "specialist succeeded without a committed deliverable file"
+                )
+            if explicit_ref and explicit_ref != output_ref:
+                raise DirectorLedEngineError(
+                    "specialist deliverable_ref differs from Host assignment output_ref"
+                )
+            # Commit only a valid Host-bound handoff. Survey acquisition can
+            # then resume from it without repeating the model call.
+            _write_json(self.workdir / result_ref, result_record)
+            from pace.contracts.research.memory import reporter_owned
+
+            if (
+                succeeded
+                and decision.agent_id in {"research", "prover", "rci"}
+                and reporter_owned(self.workdir)
+            ):
+                if self.reporter is None:
+                    raise DirectorLedEngineError(
+                        "Reporter is required by the saved execution policy"
+                    )
+                self.reporter(result_ref)
+            if decision.agent_id == "survey" and succeeded and explicit_ref:
+                from pace.agents.director.survey import process_survey_sources
+
+                # The model handoff is durable before file acquisition starts.
+                # Recovery finishes processing without recalling Survey.
+                source_refs = process_survey_sources(
+                    workdir=self.workdir,
+                    report_ref=explicit_ref,
+                    allow_network=result_record.get("external_retrieval_enabled")
+                    is True,
+                )
+                result_record["published_refs"] = list(
+                    _unique_strings(
+                        (
+                            *result_record.get("published_refs", ()),
+                            *source_refs,
+                        )
+                    )
+                )
+                _write_json(self.workdir / result_ref, result_record)
+            if explicit_ref and explicit_ref not in stable_refs:
+                stable_refs.append(explicit_ref)
+            if succeeded:
+                for ref in result_record.get("published_refs", ()):
+                    stable_refs.append(
+                        self._require_run_local_file_ref(ref, field="published_ref")
+                    )
+            if decision.agent_id == "prover" and explicit_ref:
+                state = self._replace_state(state, candidate_ref=explicit_ref)
+            specialist_succeeded = succeeded and bool(explicit_ref)
+            state = self._replace_state(
+                state,
+                phase=(
+                    "VERIFY"
+                    if decision.agent_id == "prover" and specialist_succeeded
+                    else "DIRECTOR"
+                ),
+                pending_dispatch_ref="",
+                pending_prompt_ref="",
+                pending_assignment_ref="",
+                pending_verifier_request_ref="",
+                last_assignment_ref=assignment_ref,
+                last_composer_manifest_ref=manifest_ref,
+                last_specialist_result_ref=result_ref,
+                diagnostics_ref="",
+            )
+            if stable_refs:
+                state = self._replace_state(
+                    state,
+                    completed_result_refs=(
+                        *state.completed_result_refs,
+                        *(
+                            ref
+                            for ref in stable_refs
+                            if ref not in state.completed_result_refs
+                        ),
+                    ),
+                )
+            self._persist_state(state)
+            if self.commit_progress and specialist_succeeded:
+                if state.phase == "VERIFY":
+                    # A verifier receives the same committed handoff on start and resume.
+                    if self.commit_memory_callback is not None:
+                        self.commit_memory_callback(
+                            workdir=self.workdir, result_refs=(result_ref,)
+                        )
+            publish_progress(
+                self.workdir,
+                task_id=f"round-{round_index:04d}",
+                parent_task_id=self.parent_task_id,
+                stage=decision.agent_id,
+                status="completed" if specialist_succeeded else "failed",
+                round_index=round_index,
+            )
+            if decision.agent_id == "prover" and specialist_succeeded:
+                if self.verifier is None:
+                    return self._fail_round(
+                        state,
+                        round_index,
+                        "VERIFY",
+                        DirectorLedEngineError(
+                            "Prover candidate cannot be verified: verifier is not configured"
+                        ),
+                    )
+                state = self._run_verifier(
+                    state,
+                    decision=decision,
+                    context=context,
+                    result_record=result_record,
+                    result_ref=result_ref,
+                )
+            return state
+        except Exception as exc:
+            # Host execution failed; retry the committed assignment without
+            # reserving another task or spending another proof state.
+            return self._fail_round(
+                state,
+                state.round_index,
+                "SPECIALIST",
+                exc,
+            )
+
+    def _recover_pending_specialist_value(
+        self,
+        *,
+        result_ref: str,
+        output_ref: str,
+        agent_id: str,
+        round_index: int,
+        recovering: bool,
+    ) -> tuple[bool, Mapping[str, Any] | None]:
+        """Recover a pending call from its Host-bound round outputs.
+
+        A prompt checkpoint authorizes execution, not completion. A bare output
+        may be a partial write and must never become a successful handoff.
+        """
+
+        if not recovering:
+            return False, None
+        result_path = self.workdir / result_ref
+        if result_path.is_symlink():
+            raise DirectorLedEngineError(
+                "pending specialist agent_result.json (result_ref) must not be a symlink"
+            )
+        if result_path.exists() or result_path.is_symlink():
+            normalized_result_ref = self._require_round_local_file_ref(
+                result_ref,
+                field="pending specialist result_ref",
+                round_index=round_index,
+            )
+            return True, _read_json(self.workdir / normalized_result_ref)
+
+        output_path = self.workdir / output_ref
+        directory = output_path.parent
+        if (directory / "author_delivery.json").is_file():
+            return False, None
+        sources = directory / "sources"
+        # Host-downloaded immutable versions are reusable context, not an
+        # uncommitted mathematical draft. Keep their paths stable on resume.
+        source_drafts = (
+            [p for p in sources.iterdir() if p.name != "web_cache"]
+            if (sources / "web_cache").is_dir()
+            and not (sources / "web_cache").is_symlink()
+            else [sources]
+        )
+        uncommitted = [
+            path
+            for path in (
+                output_path,
+                *source_drafts,
+                *(
+                    directory / name
+                    for name in (
+                        "findings",
+                        "memory_note.md",
+                        "source_manifest.json",
+                        "research_delta.json",
+                        "route_relations.json",
+                        "revision.json",
+                    )
+                ),
+            )
+            if path.exists() or path.is_symlink()
+        ]
+        if uncommitted:
+            # Cancellation can leave files before the Host handoff commits.
+            # Retain that attempt without publishing its drafts on the retry.
+            archive = directory / "interrupted_attempts"
+            archive.mkdir(exist_ok=True)
+            attempt = archive / f"attempt-{len(list(archive.iterdir())) + 1:04d}"
+            attempt.mkdir()
+            moved_refs = {}
+            for path in uncommitted:
+                destination = attempt / path.relative_to(directory)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                files = path.rglob("*") if path.is_dir() else (path,)
+                for file in files:
+                    if file.is_file():
+                        moved_refs[file.relative_to(self.workdir).as_posix()] = (
+                            (
+                                destination / file.relative_to(path)
+                                if path.is_dir()
+                                else destination
+                            )
+                            .relative_to(self.workdir)
+                            .as_posix()
+                        )
+                path.replace(destination)
+            # A call can finish immediately before agent_result is committed.
+            # Its original delivery must keep referring to that attempt.
+            for record_path in directory.glob("calls/*/record.json"):
+                record = _read_json(record_path)
+                archived_ref = moved_refs.get(record.get("deliverable_ref"))
+                if archived_ref:
+                    record["deliverable_ref"] = archived_ref
+                    _write_json(record_path, record)
+        return False, None
+
+    def _load_or_compose(
+        self,
+        *,
+        manifest_ref: str,
+        prompt_ref: str,
+        decision: DirectorDecision,
+        spec: Any,
+        context: Mapping[str, Any],
+        round_index: int,
+        assembly: PromptAssembly,
+        input_refs: tuple[str, ...],
+        checkpoint_committed: bool = False,
+    ) -> PromptComposerResult:
+        """Restore a committed Composer result or perform it once."""
+
+        manifest_path = self.workdir / manifest_ref
+        prompt_path = self.workdir / prompt_ref
+        if (
+            checkpoint_committed
+            and not manifest_path.is_file()
+            and not prompt_path.is_file()
+        ):
+            raise DirectorLedEngineError(
+                "committed Composer checkpoint is missing; refusing to recompose"
+            )
+        checkpoint_files_complete = manifest_path.is_file() and prompt_path.is_file()
+        if checkpoint_files_complete or checkpoint_committed:
+            # Checkpoint files can be replaced between process invocations;
+            # resolve the generated refs through the same public round
+            # boundary before reading their bytes.
+            manifest_ref = self._require_round_local_file_ref(
+                manifest_ref,
+                field="composer_manifest_ref",
+                round_index=round_index,
+            )
+            prompt_ref = self._require_round_local_file_ref(
+                prompt_ref,
+                field="prompt_ref",
+                round_index=round_index,
+            )
+            manifest_path = self.workdir / manifest_ref
+            prompt_path = self.workdir / prompt_ref
+            if not manifest_path.is_file() or not prompt_path.is_file():
+                raise DirectorLedEngineError(
+                    "Composer checkpoint is incomplete; refusing to recompose"
+                )
+            manifest = _read_json(manifest_path)
+            _validate_composer_manifest(
+                manifest,
+                decision=decision,
+                round_index=round_index,
+                prompt_ref=prompt_ref,
+                output_ref=str(context.get("output_ref") or ""),
+                directive_ref=self._round_ref(round_index, "director_decision.json"),
+            )
+            final_ref = str(manifest.get("final_prompt_ref") or prompt_ref)
+            if final_ref != prompt_ref:
+                raise DirectorLedEngineError(
+                    "Composer checkpoint names a different final prompt"
+                )
+            prompt = prompt_path.read_text(encoding="utf-8")
+            prompt = _validate_composer_prompt(
+                prompt,
+                source="committed Composer",
+            )
+            return PromptComposerResult(
+                final_prompt=prompt,
+                call_id=manifest["composer_call_id"],
+            )
+
+        from pace.agents.prompt_composer import append_skill_catalog
+
+        composer_record = self._compose_specialist(
+            decision=decision,
+            spec=spec,
+            context=context,
+            round_index=round_index,
+            manifest_ref=manifest_ref,
+            prompt_ref=prompt_ref,
+            assembly=assembly,
+            input_refs=input_refs,
+        )
+        draft_map = self.workdir / context["output_ref"]
+        draft_map = draft_map.parent / "recovery_drafts.json"
+        if draft_map.is_file():
+            composer_record = PromptComposerResult(
+                final_prompt=composer_record.final_prompt
+                + "\nUnverified partial drafts from interrupted attempts: "
+                + draft_map.read_text(),
+                call_id=composer_record.call_id,
+            )
+        # Add discovery after composition so it reaches the actual specialist,
+        # even when the Composer condenses its inputs. Committed prompts above
+        # are restored byte-for-byte; RCI owns its phase-specific resources.
+        if decision.agent_id != "rci":
+            composer_record = PromptComposerResult(
+                final_prompt=append_skill_catalog(
+                    composer_record.final_prompt,
+                    workdir=self.workdir,
+                ),
+                call_id=composer_record.call_id,
+            )
+        # Add discovery after composition so it reaches the actual specialist,
+        # even when the Composer condenses its inputs. Committed prompts above
+        # are restored byte-for-byte; RCI owns its phase-specific resources.
+        if decision.agent_id != "rci":
+            composer_record = PromptComposerResult(
+                final_prompt=append_skill_catalog(
+                    composer_record.final_prompt,
+                    workdir=self.workdir,
+                ),
+                call_id=composer_record.call_id,
+            )
+        _validate_composer_prompt(composer_record.final_prompt, source="task prompt")
+        _write_text(prompt_path, composer_record.final_prompt)
+        _write_json(
+            manifest_path,
+            {
+                "schema_version": DIRECTOR_LED_ROUND_SCHEMA_VERSION,
+                "round_index": round_index,
+                "agent_id": decision.agent_id,
+                "composer_call_id": composer_record.call_id,
+                "final_prompt_ref": prompt_ref,
+                "director_decision_ref": self._round_ref(
+                    round_index, "director_decision.json"
+                ),
+                "output_artifact_ref": context["output_ref"],
+                "assembly_source": "template",
+            },
+        )
+        return composer_record
+
+    def _compose_specialist(
+        self,
+        *,
+        decision,
+        spec,
+        context,
+        round_index,
+        manifest_ref,
+        prompt_ref,
+        assembly,
+        input_refs,
+    ):
+        composer_value = _invoke(
+            self.composer,
+            {
+                "workdir": self.workdir,
+                "decision": decision,
+                "agent_spec": spec,
+                "context": context,
+                "target_contract_id": context["target_contract_id"],
+                "round_index": round_index,
+                "output_ref": context["output_ref"],
+                "manifest_ref": manifest_ref,
+                "prompt_ref": prompt_ref,
+                "assembly": assembly,
+                "input_refs": input_refs,
+            },
+        )
+        return _coerce_composer(composer_value)
+
+    def _run_verifier(
+        self,
+        state: DirectorLedState,
+        *,
+        decision: DirectorDecision,
+        context: Mapping[str, Any],
+        result_record: Mapping[str, Any],
+        result_ref: str,
+        recovering: bool = False,
+    ) -> DirectorLedState:
+        try:
+            if result_ref != state.last_specialist_result_ref:
+                raise DirectorLedEngineError(
+                    "verifier result_ref differs from committed specialist result"
+                )
+            verification_ref = self._round_ref(
+                state.round_index, "verification/verification.json"
+            )
+            request_ref = self._round_ref(
+                state.round_index, "verification/request.json"
+            )
+            request_path = self.workdir / request_ref
+            verification_path = self.workdir / verification_ref
+            committed_verification_ref = str(state.last_verification_ref or "").strip()
+            pending_request_ref = str(state.pending_verifier_request_ref or "").strip()
+
+            if committed_verification_ref:
+                # A committed verification is authoritative only when state
+                # names the canonical envelope.  A pending request marker and
+                # a committed result are mutually exclusive state snapshots.
+                if pending_request_ref:
+                    raise DirectorLedEngineError(
+                        "Director-led state has both pending and committed verification refs"
+                    )
+                committed_verification_ref = self._require_round_local_file_ref(
+                    committed_verification_ref,
+                    field="last_verification_ref",
+                    round_index=state.round_index,
+                )
+                if committed_verification_ref != verification_ref:
+                    raise DirectorLedEngineError(
+                        "last_verification_ref differs from the current round"
+                    )
+                persisted = _read_json(self.workdir / committed_verification_ref)
+                value = _validate_verification_checkpoint(
+                    persisted,
+                    expected_round_index=state.round_index,
+                    expected_specialist_result_ref=state.last_specialist_result_ref,
+                )
+                return self._apply_verifier_value(
+                    state,
+                    value,
+                    resolved=resolve_verification(
+                        self.workdir,
+                        value,
+                        target_contract_id=state.target_contract_id,
+                        candidate_ref=state.candidate_ref,
+                    ),
+                    verification_ref=committed_verification_ref,
+                    context=context,
+                )
+
+            if pending_request_ref:
+                # Recovery may reuse a verifier envelope only after the Host
+                # committed this exact request binding in state.  A file at
+                # the generated path alone is not sufficient: the specialist
+                # can pre-write both request and verification files.
+                pending_request_ref = self._require_round_local_file_ref(
+                    pending_request_ref,
+                    field="pending_verifier_request_ref",
+                    round_index=state.round_index,
+                )
+                if pending_request_ref != request_ref:
+                    raise DirectorLedEngineError(
+                        "pending_verifier_request_ref differs from the current round"
+                    )
+                if not request_path.is_file():
+                    raise DirectorLedEngineError(
+                        "committed verifier request is missing"
+                    )
+                request = _read_json(request_path)
+                _validate_verifier_request(
+                    request,
+                    expected_round_index=state.round_index,
+                    expected_specialist_result_ref=result_ref,
+                    expected_candidate_ref=state.candidate_ref,
+                    expected_directive_ref=str(context.get("directive_ref") or ""),
+                    expected_assignment_ref=str(context.get("assignment_ref") or ""),
+                )
+                if verification_path.exists() or verification_path.is_symlink():
+                    self._require_round_local_file_ref(
+                        verification_ref,
+                        field="verification_ref",
+                        round_index=state.round_index,
+                    )
+                    if not recovering:
+                        raise DirectorLedEngineError(
+                            "uncommitted verification checkpoint exists"
+                        )
+                    persisted = _read_json(verification_path)
+                    value = _validate_verification_checkpoint(
+                        persisted,
+                        expected_round_index=state.round_index,
+                        expected_specialist_result_ref=state.last_specialist_result_ref,
+                    )
+                    return self._apply_verifier_value(
+                        state,
+                        value,
+                        resolved=resolve_verification(
+                            self.workdir,
+                            value,
+                            target_contract_id=state.target_contract_id,
+                            candidate_ref=state.candidate_ref,
+                        ),
+                        verification_ref=verification_ref,
+                        context=context,
+                    )
+            else:
+                # No Host request has been committed for this handoff.  Any
+                # pre-existing request or envelope therefore belongs to an
+                # untrusted specialist and must not be adopted.
+                if verification_path.exists() or verification_path.is_symlink():
+                    self._require_round_local_file_ref(
+                        verification_ref,
+                        field="verification_ref",
+                        round_index=state.round_index,
+                    )
+                    raise DirectorLedEngineError(
+                        "uncommitted verification checkpoint exists"
+                    )
+                if request_path.exists() or request_path.is_symlink():
+                    self._require_round_local_file_ref(
+                        request_ref,
+                        field="verifier_request_ref",
+                        round_index=state.round_index,
+                    )
+                    raise DirectorLedEngineError(
+                        "uncommitted verifier request checkpoint exists"
+                    )
+                request = {
+                    "schema_version": DIRECTOR_LED_ROUND_SCHEMA_VERSION,
+                    "round_index": state.round_index,
+                    "specialist_result_ref": result_ref,
+                    "candidate_ref": state.candidate_ref,
+                    "directive_ref": str(context.get("directive_ref") or ""),
+                    "assignment_ref": str(context.get("assignment_ref") or ""),
+                }
+                _validate_verifier_request(
+                    request,
+                    expected_round_index=state.round_index,
+                    expected_specialist_result_ref=result_ref,
+                    expected_candidate_ref=state.candidate_ref,
+                    expected_directive_ref=str(context.get("directive_ref") or ""),
+                    expected_assignment_ref=str(context.get("assignment_ref") or ""),
+                )
+                _write_json(request_path, request)
+                # Persist the marker only after the request bytes are durable.
+                # A crash before this state write leaves the request
+                # uncommitted and recovery will refuse both files.
+                state = self._replace_state(
+                    state,
+                    pending_verifier_request_ref=request_ref,
+                )
+                self._persist_state(state)
+            value = _invoke(
+                self.verifier,
+                {
+                    "workdir": self.workdir,
+                    "decision": decision,
+                    "context": context,
+                    "result": result_record,
+                    "result_ref": result_ref,
+                    "round_index": state.round_index,
+                },
+            )
+            resolved = resolve_verification(
+                self.workdir,
+                value,
+                target_contract_id=state.target_contract_id,
+                candidate_ref=state.candidate_ref,
+            )
+            if resolved["status"] == "VERIFIER_ERROR":
+                raise DirectorLedEngineError("verifier_interface_failed")
+            checkpoint = {
+                "schema_version": DIRECTOR_LED_ROUND_SCHEMA_VERSION,
+                "round_index": state.round_index,
+                "specialist_result_ref": result_ref,
+                "verification": value,
+            }
+            _write_json(self.workdir / verification_ref, checkpoint)
+            value = _validate_verification_checkpoint(
+                _read_json(self.workdir / verification_ref),
+                expected_round_index=state.round_index,
+                expected_specialist_result_ref=state.last_specialist_result_ref,
+            )
+            return self._apply_verifier_value(
+                state,
+                value,
+                resolved=resolved,
+                verification_ref=verification_ref,
+                context=context,
+            )
+        except Exception as exc:
+            return self._fail_round(state, state.round_index, "VERIFY", exc)
+
+    def _apply_verifier_value(
+        self,
+        state: DirectorLedState,
+        value: Any,
+        *,
+        resolved: Mapping[str, Any],
+        verification_ref: str,
+        context: Mapping[str, Any],
+    ) -> DirectorLedState:
+        state = self._replace_state(
+            state,
+            phase="DIRECTOR",
+            pending_verifier_request_ref="",
+            last_verification_ref=verification_ref,
+        )
+        verification_status = resolved["status"]
+        if verification_status == "PASS":
+            state = self._replace_state(
+                state,
+                phase="FINALIZE",
+                terminal_result="PASS",
+                stop_reason="Auditor and Kernel accepted the same candidate.",
+            )
+        elif verification_status != "FAILED":
+            raise DirectorLedEngineError(
+                "verifier returned no recognized terminal status"
+            )
+        self._persist_state(state)
+        publish_progress(
+            self.workdir,
+            task_id=f"round-{state.round_index:04d}-verification",
+            stage="verification",
+            round_index=state.round_index,
+            status="completed" if verification_status == "PASS" else "needs_work",
+            notice="candidate_checked"
+            if verification_status == "PASS"
+            else "candidate_repair"
+            if state.phase == "DIRECTOR"
+            else "candidate_unresolved",
+        )
+        return state
+
+    def _fail_round(
+        self,
+        state: DirectorLedState,
+        round_index: int,
+        phase: str,
+        exc: Exception,
+    ) -> DirectorLedState:
+        safe_round = max(1, int(round_index or 1))
+        diagnostic_ref = self._round_ref(safe_round, "diagnostics.json")
+        diagnostic: dict[str, Any] = {
+            "schema_version": DIRECTOR_LED_ROUND_SCHEMA_VERSION,
+            "round_index": safe_round,
+            "failure_owner": "HOST",
+            "phase": str(phase or ""),
+            "error_type": type(exc).__name__,
+            "message": str(exc),
+        }
+        if state.phase in {"DIRECTOR", "PENDING_SPECIALIST", "PENDING_BATCH", "VERIFY"}:
+            # The active boundary owns its exact next action, including any
+            # already reserved budget and committed handoffs. Terminal search
+            # decisions are not retryable operational checkpoints.
+            diagnostic["resume_checkpoint"] = state.to_json()
+        _write_json(
+            self.workdir / diagnostic_ref,
+            diagnostic,
+        )
+        next_state = self._replace_state(
+            state,
+            round_index=max(state.round_index, safe_round),
+            phase="FAILED",
+            pending_dispatch_ref="",
+            pending_prompt_ref="",
+            pending_assignment_ref="",
+            pending_verifier_request_ref="",
+            diagnostics_ref=diagnostic_ref,
+            terminal_result="FAILED",
+        )
+        self._persist_state(next_state)
+        task_id = f"round-{safe_round:04d}"
+        if phase == "DIRECTOR":
+            task_id += "-director"
+        elif phase == "VERIFY":
+            task_id += "-verification"
+        publish_progress(
+            self.workdir,
+            task_id=task_id,
+            stage={"DIRECTOR": "director", "VERIFY": "verification"}.get(
+                phase, "research"
+            ),
+            status="failed",
+            round_index=safe_round,
+            notice="stage_failed_final",
+        )
+        return next_state
+
+    def _round_ref(self, round_index: int, filename: str) -> str:
+        if self.parent_task_id and filename == "diagnostics.json":
+            filename = "task_diagnostics.json"
+        return f"{stage_ref(int(round_index), workdir=self.workdir)}/{filename}"
+
+    def _default_output_ref(self, agent_id: str, round_index: int) -> str:
+        names = {
+            "framer": "research_brief.json",
+            "planner": "planner_deliverable.md",
+            "survey": "survey_deliverable.md",
+            "rci": "rci_deliverable.md",
+            "research": "research_deliverable.md",
+            "prover": "candidate_proof.md",
+        }
+        return self._round_ref(round_index, names.get(agent_id, "deliverable.md"))
+
+    def _resolve_stable_ref(self, value: str) -> str:
+        """Return a valid run-local file ref, or an empty value."""
+
+        raw = str(value or "").strip().replace("\\", "/")
+        if not raw:
+            return ""
+        # Public handoffs are deliberately portable relative refs.  Do not
+        # normalize an absolute path merely because it happens to be inside
+        # this workspace: a resumed run must reject that representation.
+        if _unsafe_ref_syntax(raw):
+            return ""
+        normalized = "/".join(part for part in raw.split("/") if part)
+        if not normalized:
+            return ""
+        normalized_path = Path(normalized)
+        if is_call_path(normalized_path):
+            return ""
+        if normalized_path.name.startswith("private_"):
+            return ""
+        try:
+            lexical = self.workdir / normalized
+            if path_has_symlink_component(self.workdir, lexical):
+                return ""
+            workspace_root = self.workdir.resolve()
+            canonical = lexical.resolve()
+            canonical_relative = canonical.relative_to(workspace_root)
+        except (OSError, RuntimeError, ValueError):
+            # A stable handoff must remain inside this run.  This also rejects
+            # a public-looking symlink whose target is outside the workspace.
+            return ""
+        if _is_private_transport_path(canonical_relative):
+            return ""
+        if not canonical.is_file():
+            return ""
+        return normalized
+
+    def _require_run_local_file_ref(self, value: str, *, field: str) -> str:
+        """Validate a persisted reference before using it during recovery.
+
+        Recovery state is an input boundary, so it cannot rely on the
+        generated round layout alone.  In particular, absolute paths that
+        happen to point inside the workspace are still rejected: persisted
+        public references are deliberately relative and portable.
+        """
+
+        raw = str(value or "").strip().replace("\\", "/")
+        path = Path(raw)
+        if (
+            _unsafe_ref_syntax(raw)
+            or is_call_path(path)
+            or path.name.startswith("private_")
+        ):
+            raise DirectorLedEngineError(
+                f"{field} must be a public relative workspace reference"
+            )
+        normalized = "/".join(part for part in raw.split("/") if part)
+        if not normalized:
+            raise DirectorLedEngineError(
+                f"{field} must be a public relative workspace reference"
+            )
+        lexical = self.workdir / normalized
+        if path_has_symlink_component(self.workdir, lexical):
+            raise DirectorLedEngineError(f"{field} must not contain a symlink")
+        try:
+            workspace_root = self.workdir.resolve()
+            resolved = lexical.resolve()
+            canonical_relative = resolved.relative_to(workspace_root)
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise DirectorLedEngineError(f"{field} escapes the run workspace") from exc
+        if _is_private_transport_path(canonical_relative):
+            raise DirectorLedEngineError(
+                f"{field} points to a private or transport artifact"
+            )
+        if not resolved.is_file():
+            raise DirectorLedEngineError(f"{field} does not name a file: {normalized}")
+        return normalized
+
+    def _require_round_local_file_ref(
+        self,
+        value: str,
+        *,
+        field: str,
+        round_index: int,
+    ) -> str:
+        """Require a recovery reference to remain inside its committed round.
+
+        The generic reference check permits any public run-local file because
+        public search context is intentionally cumulative.  Dispatch and
+        verification checkpoints are different: their refs bind one exact
+        round, so a cross-round path would allow a resumed state to pair a
+        directive with another round's result.
+        """
+
+        if isinstance(round_index, bool) or int(round_index or 0) < 1:
+            raise DirectorLedEngineError(
+                f"{field} requires a positive Director round index"
+            )
+        try:
+            normalized = self._require_run_local_file_ref(value, field=field)
+        except DirectorLedEngineError as exc:
+            if "must not contain a symlink" in str(exc):
+                raise DirectorLedEngineError(
+                    f"{field} must belong to Director round {int(round_index):04d}; "
+                    "symlinks are not allowed"
+                ) from exc
+            raise
+        # Compare canonical paths, not just the lexical ref.  A file under
+        # round 0001 may be a symlink to round 0002 (or elsewhere) and must
+        # not satisfy the round binding in that case.
+        try:
+            expected_root = (
+                self.workdir / self.round_root / f"round{int(round_index)}"
+            ).resolve()
+            canonical = (self.workdir / normalized).resolve()
+            canonical.relative_to(expected_root)
+        except (OSError, RuntimeError, ValueError):
+            raise DirectorLedEngineError(
+                f"{field} must belong to Director round {int(round_index):04d}"
+            ) from None
+        return normalized
+
+    def _load_state(self) -> DirectorLedState:
+        if path_has_symlink_component(self.workdir, self.state_path):
+            raise DirectorLedEngineError(
+                "Director-led state path must not contain a symlink"
+            )
+        try:
+            return DirectorLedState.from_json(_read_json(self.state_path))
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            raise DirectorLedEngineError("cannot load Director-led state") from exc
+
+    def _persist_state(self, state: DirectorLedState) -> DirectorLedState:
+        if path_has_symlink_component(self.workdir, self.state_path):
+            raise DirectorLedEngineError(
+                "Director-led state path must not contain a symlink"
+            )
+        _write_json(self.state_path, state.to_json())
+        return state
+
+    def _replace_state(
+        self, state: DirectorLedState, **changes: Any
+    ) -> DirectorLedState:
+        return replace(state, **changes)

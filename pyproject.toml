@@ -31,9 +31,10 @@ package-dir = {pace = "src"}
 packages = [
     "pace",
     "pace.agents",
-    "pace.agents.research",
-    "pace.agents.research.rci",
-    "pace.agents.verification",
+    "pace.agents.director",
+    "pace.orchestrator.writing",
+    "pace.agents.rci",
+    "pace.artifacts",
     "pace.contracts",
     "pace.contracts.problem",
     "pace.contracts.proof",
@@ -44,7 +45,6 @@ packages = [
     "pace.resources",
     "pace.resources.prompts",
     "pace.runtime",
-    "pace.runtime.output",
 ]
 
 [tool.setuptools.exclude-package-data]
@@ -54,9 +54,6 @@ packages = [
 pace = [
     "resources/templates/neurips2026/*.sty",
     "resources/templates/neurips2026/*.md",
-    "resources/variants/*/prompts/roles/*.md",
     "resources/skills/**/*.md",
-    "resources/prompts/*.md",
-    "resources/prompts/*/*.md",
-    "resources/prompts/kernel/verification_cards/*.md",
+    "resources/prompts/**/*.md",
 ]

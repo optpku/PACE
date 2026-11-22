@@ -1,0 +1,4 @@
+Selected outline snapshot (read-only): `{{outline_ref}}`.
+Write the whole paper and its complete supplied proofs in `{{output_directory}}`. Keep main.tex and all required assets together using relative paths. Include bibliography files when cited; an uncited paper needs no bibliography file. The Host compiles with XeLaTeX and BibTeX. For Chinese use ctex with the installed Fandol fonts. Keep compilation logs and PDF text exports outside the delivered source directory. Complete all prose in this single author task; no independent editorial review or revision loop.
+NeurIPS template: `{{template_ref}}`; use this NeurIPS preprint style and copy it unchanged into the output directory. Do not generate a checklist or submission questionnaire.
+You may compile and fix concrete formatting errors within this task. The Host builds the delivered source and records build status separately from source delivery.

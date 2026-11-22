@@ -1,0 +1,1 @@
+Compare the precise question in this seed before exploration. New task ID: seed. Return duplicate_of_ref only for mathematical equivalence; ignore source hints.

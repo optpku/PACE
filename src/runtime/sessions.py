@@ -5,7 +5,8 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from pace.runtime.output.workspace import work_ref, _write_json_atomic
+
+from pace.artifacts.workspace import _write_json_atomic, work_ref
 
 _ACTIVE = {}
 _MODEL_FAILURES = {}
@@ -32,7 +33,10 @@ def run_session(root: Path, *, profile=False, config=None):
     rows = json.loads(ref.read_text()) if ref.is_file() else []
     for previous in rows:
         if previous.get("status") == "running" and not previous.get("ended_at"):
-            previous.update(status="end_unobserved", measurement_gap="Previous Host session ended without a closing record; elapsed time and OS exit code are unknown.")
+            previous.update(
+                status="end_unobserved",
+                measurement_gap="Previous Host session ended without a closing record; elapsed time and OS exit code are unknown.",
+            )
     row = {
         "started_at": datetime.now(timezone.utc).isoformat(),
         "status": "running",
@@ -47,16 +51,22 @@ def run_session(root: Path, *, profile=False, config=None):
             key: str(value) if isinstance(value, Path) else value
             for key, value in asdict(config).items()
         }
-    for name, key in (("config.json", "config"), ("state/research_execution_policy.json", "policy"),
-                      ("resources/manifest.json", "resources")):
+    for name, key in (
+        ("config.json", "config"),
+        ("state/research_execution_policy.json", "policy"),
+        ("resources/manifest.json", "resources"),
+    ):
         path = root / work_ref(root, name)
         if path.is_file():
             row[key] = json.loads(path.read_text(encoding="utf-8"))
     if rows and rows[-1].get("ended_at"):
-        row["gap_since_previous_session_seconds"] = max(0, (
-            datetime.fromisoformat(row["started_at"])
-            - datetime.fromisoformat(rows[-1]["ended_at"])
-        ).total_seconds())
+        row["gap_since_previous_session_seconds"] = max(
+            0,
+            (
+                datetime.fromisoformat(row["started_at"])
+                - datetime.fromisoformat(rows[-1]["ended_at"])
+            ).total_seconds(),
+        )
     rows.append(row)
     _write_json_atomic(ref, rows)
     started = time.monotonic()
@@ -75,8 +85,10 @@ def run_session(root: Path, *, profile=False, config=None):
             raise failure from None
         raise
     finally:
-        for name, key in (("state/research_execution_policy.json", "policy"),
-                          ("resources/manifest.json", "resources")):
+        for name, key in (
+            ("state/research_execution_policy.json", "policy"),
+            ("resources/manifest.json", "resources"),
+        ):
             path = root / work_ref(root, name)
             if path.is_file():
                 row[key] = json.loads(path.read_text(encoding="utf-8"))
@@ -87,14 +99,6 @@ def run_session(root: Path, *, profile=False, config=None):
         _write_json_atomic(ref, rows)
         _ACTIVE.pop(str(root), None)
         _MODEL_FAILURES.pop(str(root), None)
-        # Derived accounting must include the just-closed session, without
-        # replacing a mathematical result if an optional index is unavailable.
-        from pace.runtime.output.memory import update_research_costs
-        try:
-            update_research_costs(root)
-        except (OSError, ValueError, KeyError):
-            import logging
-            logging.getLogger(__name__).warning('Research cost index refresh failed', exc_info=True)
 
 
 def budget_exhausted(root: Path) -> str:
@@ -103,7 +107,7 @@ def budget_exhausted(root: Path) -> str:
         return ""
     policy = json.loads(policy_path.read_text())
     if policy.get("max_calls"):
-        from pace.runtime.output.events import read_events
+        from pace.artifacts.events import read_events
 
         if (
             sum(x["event_kind"] == "SEMANTIC_CALL_STARTED" for x in read_events(root))

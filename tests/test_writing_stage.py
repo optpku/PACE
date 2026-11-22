@@ -9,8 +9,8 @@ import pytest
 from pace import cli
 from pace.runtime.llm import TransportSuccess
 from pace.runtime.chat_api import WorkspaceTools
-from pace.runtime.output.calls import attempt_directory
-from pace.runtime.output.events import read_updates
+from pace.artifacts.calls import attempt_directory
+from pace.artifacts.events import read_updates
 from test_terminal_result import ResearchTransport
 
 
@@ -41,9 +41,10 @@ class WritingTransport(ResearchTransport):
 
 
 def test_writing_role_uses_its_request_resource_snapshot(tmp_path):
-    from pace.reporting.research_report import ResearchReportOutliner, outline_state_ref
-    from pace.runtime.agent_environment import prepare_agent_environments, role_home
-    from pace.runtime.output.workspace import RunWorkspace
+    from pace.orchestrator.writing.report import ResearchReportOutliner, outline_state_ref
+    from pace.agents.director.harness import prepare_agent_environments
+    from pace.runtime.agent_environment import role_home
+    from pace.artifacts.workspace import RunWorkspace
     from pace.runtime.prompts import materialize_run_resources, prompt_root
 
     ws = RunWorkspace.create(tmp_path, "writing")
@@ -60,14 +61,14 @@ def test_writing_role_uses_its_request_resource_snapshot(tmp_path):
             )
 
     transport = RequestTransport()
-    writer = ResearchReportOutliner(llm=transport, composer_llm=transport, workdir=ws.root)
+    writer = ResearchReportOutliner(llm=transport,  workdir=ws.root)
     writer.request("Explain the current research and its open questions.", resource_variant="weak")
     state = json.loads(ws.path(outline_state_ref(ws.root)).read_text())
-    template = ws.path(state["resources_ref"]) / "prompts/roles/research_report_outline.md"
+    template = ws.path(state["resources_ref"]) / "prompts/report_writer/outline.md"
     template.write_text(template.read_text() + "\n" + marker)
     assert writer.update()
     assert marker in (role_home(ws.root, "RESEARCH_REPORT_OUTLINE") / "AGENTS.md").read_text()
-    assert marker not in (prompt_root(ws.root) / "roles/research_report_outline.md").read_text()
+    assert marker not in (prompt_root(ws.root) / "report_writer/outline.md").read_text()
 
 
 @pytest.mark.parametrize("failed_action", [
@@ -76,7 +77,8 @@ def test_writing_role_uses_its_request_resource_snapshot(tmp_path):
 ])
 def test_cli_keeps_writing_progress_out_of_orientation(tmp_path, monkeypatch, failed_action):
     transport = WritingTransport(failed_action=failed_action)
-    monkeypatch.setattr("pace.orchestrator.pipeline.build_llm", lambda **settings: transport)
+    monkeypatch.setattr("pace.agents.director.harness.build_llm", lambda **settings: transport)
+    monkeypatch.setattr("pace.pipeline.build_llm", lambda **settings: transport)
     builds = []
 
     def build_paper(directory):
@@ -88,7 +90,7 @@ def test_cli_keeps_writing_progress_out_of_orientation(tmp_path, monkeypatch, fa
             (directory / "main.pdf").write_bytes(b"%PDF-writing-stage")
         return result
 
-    monkeypatch.setattr("pace.reporting.theory_paper.build_paper", build_paper)
+    monkeypatch.setattr("pace.orchestrator.writing.paper.build_paper", build_paper)
     problem = tmp_path / "problem.md"
     problem.write_text("Classify all structures satisfying the stated axioms.\n")
     assert cli.main(["run", "--problem", str(problem), "--problem-id", "topic",
@@ -138,7 +140,8 @@ def test_completed_outline_yields_to_interrupted_math(tmp_path, monkeypatch, mod
             return super().complete_structured_result(prompt, call_name=call_name, **kwargs)
 
     transport = InterruptedVerifier("prover")
-    monkeypatch.setattr("pace.orchestrator.pipeline.build_llm", lambda **_: transport)
+    monkeypatch.setattr("pace.agents.director.harness.build_llm", lambda **_: transport)
+    monkeypatch.setattr("pace.pipeline.build_llm", lambda **_: transport)
     source = tmp_path / "problem.md"
     source.write_text("Prove 2+2=4.\n")
     root = tmp_path / "example"
@@ -149,7 +152,8 @@ def test_completed_outline_yields_to_interrupted_math(tmp_path, monkeypatch, mod
     assert json.loads(state.read_text())["phase"] == "VERIFY"
     with monkeypatch.context() as scoped:
         writer = WritingTransport()
-        scoped.setattr("pace.orchestrator.pipeline.build_llm", lambda **_: writer)
+        scoped.setattr("pace.agents.director.harness.build_llm", lambda **_: writer)
+        scoped.setattr("pace.pipeline.build_llm", lambda **_: writer)
         assert cli.main(["outline", "--run-dir", str(root), "--message", str(source), "--json"]) == 0
     before = list(transport.calls)
     outline = (root / "results/outline.md").read_bytes()

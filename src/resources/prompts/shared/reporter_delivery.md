@@ -1,0 +1,1 @@
+{{common}}A separate Reporter records research_delta.json from your completed originals. Do not write a delta, progress summary, or duplicate memory note. Explain the conclusion, hypotheses, missing connection and any obstruction in the original manuscript.

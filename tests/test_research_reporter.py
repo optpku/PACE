@@ -1,15 +1,19 @@
 """Exercise real handoff boundaries, file tools, and recovery without live inference."""
+
+from pace.orchestrator.memory import commit_round_memory
+from pace.orchestrator.results import publish_stage_findings
 import json
 from pathlib import Path
 
 import pytest
 
 from pace import cli
-from pace.contracts.research.memory import delivery_instruction, reporter_owned
-from pace.reporting.research_progress import run_research_reporter, restore_reporter_delivery
+from pace.contracts.research.memory import reporter_owned
+from pace.agents.prompt_composer import delivery_instruction
+from pace.agents.reporter import run_research_reporter, restore_reporter_delivery
 from pace.runtime.chat_api import ChatCompletionsLLM
-from pace.runtime.output.workspace import work_ref
-from pace.runtime.research_context import load_index
+from pace.artifacts.workspace import work_ref
+from pace.agents.director.context import load_index
 from test_research_memory import ws, deliver, task
 from test_finding_publication import ProofPublicationTransport
 
@@ -34,17 +38,17 @@ def test_reporter_replay_never_calls_author_or_reporter_again(ws, agent, monkeyp
     run_research_reporter(llm=llm, workdir=ws.root, result_ref=ref)
     assert llm.calls == ['research_reporter_round1']
     assert ws.path(str(folder / 'research.md')).read_bytes() == original
-    from pace.runtime.output.memory import commit_research_memory
+    from pace.orchestrator.memory import commit_research_memory
     commit_research_memory(ws.root, [ref]); commit_research_memory(ws.root, [ref])
     assert len(load_index(ws.root)['attempts']) == 1
     assert load_index(ws.root)['obligations']['target']['status'] == 'OPEN'
-    assert 'Do not write a delta' in delivery_instruction(ws.root, str(folder / 'research.md'), agent)
+    assert 'Do not write a delta' in delivery_instruction(ws.root, str(folder / 'research.md'), with_delta=True)
 
 
 def test_reporter_acceptance_survives_projection_failure(ws, monkeypatch):
     use_reporter(ws); ref = deliver(ws, 1)
     llm = ProofPublicationTransport('NONE')
-    import pace.reporting.research_progress as module
+    import pace.agents.reporter as module
     original = module._write_text_atomic
     monkeypatch.setattr(module, '_write_text_atomic', lambda *_: (_ for _ in ()).throw(OSError('disk interruption')))
     with pytest.raises(OSError): run_research_reporter(llm=llm, workdir=ws.root, result_ref=ref)
@@ -143,7 +147,7 @@ class NativeFixture(ChatCompletionsLLM):
 @pytest.mark.parametrize('interrupted', [False,True])
 def test_native_cli_initialization_reporter_and_resume(tmp_path, monkeypatch, mode, interrupted):
     transport = NativeFixture(mode, interrupt_reporter=interrupted)
-    monkeypatch.setattr('pace.orchestrator.pipeline.build_llm', lambda **_: transport)
+    monkeypatch.setattr('pace.agents.director.harness.build_llm', lambda **_: transport)
     problem = tmp_path/'problem.md'; problem.write_text('Prove 2+2=4.\n')
     args = ['run','--problem',str(problem),'--problem-id','native','--output',str(tmp_path),'--json']
     if interrupted:
@@ -192,9 +196,9 @@ def test_native_cli_initialization_reporter_and_resume(tmp_path, monkeypatch, mo
 
 @pytest.mark.parametrize('parallel', [False, True])
 def test_rci_outer_handoff_and_parallel_reporter_recover_without_author(ws, parallel):
-    from pace.orchestrator.director_led import DirectorLedEngine
-    from pace.runtime.prompt_composer import PromptComposerResult
-    from pace.runtime.output.delivery_pause import DeliveryPaused, delivery_pause
+    from pace.agents.director.loop import DirectorLedEngine
+    from pace.agents.prompt_composer import PromptComposerResult
+    from pace.artifacts.delivery_pause import DeliveryPaused, delivery_pause
     use_reporter(ws)
     author_calls = []; reporter_calls = []; interrupted = False
     llm = ProofPublicationTransport('NONE')
@@ -222,11 +226,11 @@ def test_rci_outer_handoff_and_parallel_reporter_recover_without_author(ws, para
     engine = DirectorLedEngine(workdir=ws.root, director=lambda **_: first,
         composer=lambda **_: PromptComposerResult(final_prompt='Work on the original question.', call_id='composer'),
         specialists={'rci':author,'research':author}, max_rounds=2 if parallel else 1, max_proof_states=2,
-        reporter=reporter, review_findings=review, target_contract_id='TARGET')
+        reporter=reporter, review_findings=review, target_contract_id='TARGET', commit_memory=commit_round_memory, commit_results=publish_stage_findings)
     result = engine.run()
     assert result.phase == 'FAILED'
     assert len(author_calls) == (2 if parallel else 1)
-    from pace.orchestrator.recovery import _restore_operational_checkpoint
+    from pace.agents.director.recovery import _restore_operational_checkpoint
     assert _restore_operational_checkpoint(ws, result.state.to_json())
     engine.director = lambda **_: pytest.fail('Do not redispatch the reserved task')
     with pytest.raises(DeliveryPaused, match="Finding verification is incomplete"):
@@ -244,7 +248,7 @@ def test_rci_outer_handoff_and_parallel_reporter_recover_without_author(ws, para
 
 
 def test_native_director_repairs_empty_purpose_locally(ws):
-    from pace.agents.research.global_director import run_global_director
+    from pace.agents.director.agent import run_global_director
     from pace.runtime.semantic import StructuredSemanticResult
     llm = NativeFixture('research')
     request = llm._request
@@ -271,7 +275,7 @@ def test_native_director_repairs_empty_purpose_locally(ws):
     ("planner", None, "INITIAL_PLAN", True),
 ])
 def test_native_director_parallel_purpose(ws, monkeypatch, agent, purpose, expected, needs_correction):
-    from pace.agents.research.global_director import run_global_director
+    from pace.agents.director.agent import run_global_director
     from pace.runtime.semantic import StructuredSemanticResult
 
     primary = task("research" if agent == "planner" else "planner").to_json()
@@ -327,13 +331,13 @@ def test_reporter_receipt_repair_cannot_write_mathematical_files(ws):
 
 def test_parallel_pass_does_not_drop_unfinished_reporter(ws, monkeypatch):
     from dataclasses import replace
-    from pace.orchestrator.director_led import DirectorLedEngine
-    from pace.orchestrator import director_parallel as module
-    from pace.runtime.prompt_composer import PromptComposerResult
+    from pace.agents.director.loop import DirectorLedEngine
+    from pace.agents.director import parallel as module
+    from pace.agents.prompt_composer import PromptComposerResult
     use_reporter(ws)
     engine = DirectorLedEngine(workdir=ws.root, director=lambda **_: None,
         composer=lambda **_: PromptComposerResult(final_prompt='Task', call_id='fixture'),
-        specialists={'prover':lambda **_:None,'research':lambda **_:None}, max_proof_states=2)
+        specialists={'prover':lambda **_:None,'research':lambda **_:None}, max_proof_states=2, commit_memory=commit_round_memory, commit_results=publish_stage_findings)
     initial = engine._new_state()
     decision = replace(task('prover'), parallel_tasks=(task('research'),))
     reserved = module.reserve_batch(engine, initial, decision)
@@ -443,7 +447,7 @@ def test_rejected_content_change_cannot_be_accepted_by_resume(ws, monkeypatch):
 
 
 def test_json_only_rci_handoff_schema_is_valid_and_disallows_applications():
-    from pace.reporting.research_progress import reporter_schema
+    from pace.agents.reporter import reporter_schema
     from pace.runtime.schema import preflight_output_schema,validate_json_instance
     schema=reporter_schema({'original_refs':['outcome.json'],'bindings':[{'ref':'outcome.json'}]})
     assert preflight_output_schema(schema).ok
@@ -451,7 +455,7 @@ def test_json_only_rci_handoff_schema_is_valid_and_disallows_applications():
 
 @pytest.mark.parametrize("interrupt_round", [1, 2])
 def test_cli_resumes_a_director_receipt_accepted_before_dispatch(tmp_path, monkeypatch, interrupt_round):
-    from pace.orchestrator import pipeline
+    from pace.agents.director import harness as pipeline
     transport = NativeFixture("research")
     monkeypatch.setattr(pipeline, "build_llm", lambda **_: transport)
     original = pipeline.run_global_director

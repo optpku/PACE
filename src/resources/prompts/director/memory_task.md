@@ -1,0 +1,2 @@
+{{brief}}
+For each DISPATCH, including each entry in parallel_tasks, provide its own obligation_ids, branch_id, archive_refs, next_step_kind and change_refs. Use obligation target and branch b-target before a route exists. Planner explicitly chooses INITIAL_PLAN or REPLAN. REPLAN requires change_refs. Other roles use CONTINUE for ordinary work, APPLY_EXISTING for applying an existing result, or REASSESS for reassessing a line of work. STOP leaves dispatch fields empty.

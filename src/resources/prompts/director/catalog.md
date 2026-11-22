@@ -1,0 +1,6 @@
+- `framer`: frame an open request into bounded work items
+- `planner`: own the canonical route and its dependencies
+- `survey`: acquire sources and report source gaps
+- `rci`: deeply explore conjectures and mechanisms with a slower multi-stage investigation
+- `research`: carry out lightweight local mathematical research
+- `prover`: assemble one complete literal-target candidate

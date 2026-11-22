@@ -60,11 +60,17 @@ def decide_final_result(
     interface_failures = []
     for stage, report, field, allowed, blocker_fields in (
         (
-            "ProofContractAuditor", auditor, "contract_status", {"PASS", "FAIL"},
+            "ProofContractAuditor",
+            auditor,
+            "contract_status",
+            {"PASS", "FAIL"},
             ("blocking_violations", "canonical_blockers"),
         ),
         (
-            "MathVerifierKernel", kernel, "stage_status", {"PASS", "MATH_FAIL"},
+            "MathVerifierKernel",
+            kernel,
+            "stage_status",
+            {"PASS", "MATH_FAIL"},
             ("canonical_blocker", "canonical_blockers", "fatal_blockers"),
         ),
     ):
@@ -72,7 +78,9 @@ def decide_final_result(
         failure = {}
         if status not in allowed:
             failure = _as_dict(report.get("interface_failure")) or {
-                "reason": "verifier_interface_error" if status == "VERIFIER_ERROR" else "invalid_verifier_status",
+                "reason": "verifier_interface_error"
+                if status == "VERIFIER_ERROR"
+                else "invalid_verifier_status",
                 "status_field": field,
                 "reported_status": report.get(field),
             }
@@ -83,9 +91,12 @@ def decide_final_result(
             if missing:
                 failure = {
                     "reason": "kernel_publication_evidence_missing",
-                    "diagnostics": [{
-                        "reason_code": "kernel_publication_evidence_missing", "missing": missing,
-                    }],
+                    "diagnostics": [
+                        {
+                            "reason_code": "kernel_publication_evidence_missing",
+                            "missing": missing,
+                        }
+                    ],
                 }
             elif kernel.get("publication_eligible") is not True:
                 failure = {"reason": "kernel_publication_not_authorized"}
@@ -156,8 +167,7 @@ def verified_relations(
             "proof_id": str(row.get("proof_id") or proof_id or ""),
         }
         for row in _rows(kernel.get("relation_checks"))
-        if isinstance(row, dict)
-        and str(row.get("status") or "").upper() == "PASS"
+        if isinstance(row, dict) and str(row.get("status") or "").upper() == "PASS"
     ]
 
 
@@ -167,3 +177,27 @@ def _dedupe_result_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if row not in values:
             values.append(row)
     return values
+
+
+def validate_publication(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    if payload.get("stage_status") != "PASS":
+        return []
+    decision = payload.get("publication")
+    if (
+        not isinstance(decision, dict)
+        or decision.get("action") not in ("CREATE", "UPDATE", "NONE")
+        or (
+            decision["action"] == "UPDATE"
+            and not isinstance(decision.get("finding_ref"), str)
+        )
+        or (decision["action"] == "UPDATE" and not decision["finding_ref"].strip())
+    ):
+        return [
+            {
+                "stage": "finding_publication",
+                "reason_code": "finding_publication_decision_missing",
+                "json_pointer": "/publication",
+                "message": "Explicitly choose CREATE, UPDATE with a current finding_ref, or NONE independently of mathematical PASS.",
+            }
+        ]
+    return []
