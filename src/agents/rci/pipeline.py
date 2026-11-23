@@ -17,9 +17,6 @@ from typing import Any, Protocol
 from pace.artifacts.workspace import (
     _write_json_atomic as _write_json,
 )
-from pace.artifacts.workspace import (
-    work_ref,
-)
 from pace.runtime.prompts import render_prompt_template
 
 from .context import objection_key, scope_matches, scope_snapshot
@@ -29,6 +26,7 @@ from .phase_runner import (
     RciPhaseError,
     RciPhaseResult,
 )
+from .prompt_composer import build_explorer_task
 from .roles import PHASE_ACTIONS, SKILL_ROOT
 
 MAX_ACTIVE_CANDIDATES = 2
@@ -135,7 +133,7 @@ class _DriveResult:
 
 
 class RciPipeline:
-    """Run the fixed twelve-role RCI phase graph for one ready work item."""
+    """Run the fixed RCI phase graph for one ready work item."""
 
     def __init__(self, *, phase_runner: PhaseRunner) -> None:
         self.phase_runner = phase_runner
@@ -197,6 +195,7 @@ class RciPipeline:
         self.round_index = round_index
         self.work_item_ref = work_item_ref
         root = Path(workdir)
+        self.workdir = root
         artifact_root = Path(round_root)
         artifact_root.mkdir(parents=True, exist_ok=True)
         self._candidate_ordinal = 0
@@ -455,13 +454,11 @@ class RciPipeline:
                 workdir=workdir,
                 target_contract_id=target_contract_id,
                 input_refs=inputs,
-                prompt_seed=(
-                    "Create the one bounded seed for this work item. Earlier seeds are "
-                    "context for this new dispatch. The Host assigns operation CREATE."
+                prompt_seed=render_prompt_template(
+                    "rci/seed_scout/task.md"
                     if attempt == 0
-                    else render_prompt_template(
-                        "rci/seed_repair_task.md", workdir=self.workdir
-                    )
+                    else "rci/seed_scout/repair_task.md",
+                    workdir=self.workdir,
                 ),
                 skill_card_refs=(_SEED_REPAIR_CARD,) if attempt else (),
                 routing_context={"seed_operation": operation},
@@ -478,7 +475,8 @@ class RciPipeline:
                         "PRIOR_TASK": self.prior_refs,
                     },
                     prompt_seed=render_prompt_template(
-                        "rci/tasks/semantic_dedup_09.md", workdir=self.workdir
+                        "rci/semantic_dedup/early_identity_task.md",
+                        workdir=self.workdir,
                     ),
                     round_index=self.round_index,
                     routing_context={
@@ -512,7 +510,7 @@ class RciPipeline:
                         **({"SOURCE": source_refs} if source_refs else {}),
                     },
                     prompt_seed=render_prompt_template(
-                        "rci/tasks/raw_seed_critic_math.md", workdir=self.workdir
+                        "rci/raw_seed_critic_math/task.md", workdir=self.workdir
                     ),
                 ),
                 self._call(
@@ -527,7 +525,7 @@ class RciPipeline:
                         **({"SOURCE": source_refs} if source_refs else {}),
                     },
                     prompt_seed=render_prompt_template(
-                        "rci/tasks/raw_seed_critic_research.md", workdir=self.workdir
+                        "rci/raw_seed_critic_research/task.md", workdir=self.workdir
                     ),
                 ),
             )
@@ -615,7 +613,7 @@ class RciPipeline:
                     target_contract_id=target_contract_id,
                     input_refs={"PROBE_TASK": view_ref},
                     prompt_seed=render_prompt_template(
-                        "rci/tasks/frontier_refute_probe.md", workdir=self.workdir
+                        "rci/frontier_refute_probe/task.md", workdir=self.workdir
                     ),
                 )
                 self._expect_action(
@@ -851,22 +849,18 @@ class RciPipeline:
                 if action != "EMIT" or state.coverage_action == "SUBSTANTIVE_PARTIAL"
             )
         )
-        task = render_prompt_template(
-            "rci/tasks/continuation.md",
+        task = build_explorer_task(
             workdir=self.workdir,
-            value_1=", ".join(allowed),
-        )
-        if self.continued_ref:
-            task += f" CONTINUE_PROBLEM: reuse the exact candidate `{self.continued_ref}` unchanged. Propose statement changes explicitly as new questions."
-        task += " Promoted mechanism identities: " + json.dumps(
-            [
+            actions=allowed,
+            question_ref=self.continued_ref,
+            mechanisms=[
                 {
                     "mechanism_id": item.mechanism_id,
                     "mechanism_ref": item.ref,
                     "review_ref": item.receipt_ref,
                 }
                 for item in state.promoted
-            ]
+            ],
         )
         result = self._call(
             state,
@@ -966,7 +960,7 @@ class RciPipeline:
                 input_refs=critic_inputs,
                 prompt_seed=(
                     render_prompt_template(
-                        "rci/tasks/mechanism_critic.md",
+                        "rci/mechanism_critic/task.md",
                         workdir=self.workdir,
                         value_1=mechanism_id,
                     )
@@ -1043,7 +1037,7 @@ class RciPipeline:
             },
             prompt_seed=(
                 render_prompt_template(
-                    "rci/tasks/coverage_judge.md",
+                    "rci/coverage_judge/task.md",
                     workdir=self.workdir,
                     value_1=json.dumps(
                         [
@@ -1086,7 +1080,7 @@ class RciPipeline:
             target_contract_id=target_contract_id,
             input_refs=inputs,
             prompt_seed=render_prompt_template(
-                "rci/tasks/final_challenger.md", workdir=self.workdir
+                "rci/final_challenger/task.md", workdir=self.workdir
             ),
         )
         state.challenge_ref = challenge.output_ref
@@ -1201,7 +1195,7 @@ class RciPipeline:
             target_contract_id=target_contract_id,
             input_refs={"PROBE_TASK": prover_ref},
             prompt_seed=render_prompt_template(
-                "rci/tasks/blind_prover_probe.md", workdir=self.workdir
+                "rci/blind_prover_probe/task.md", workdir=self.workdir
             ),
             base_dir=(
                 state.root / "probes" / f"revision_{state.revision:02d}" / "blind"
@@ -1214,7 +1208,7 @@ class RciPipeline:
             target_contract_id=target_contract_id,
             input_refs={"PROBE_TASK": prover_ref},
             prompt_seed=render_prompt_template(
-                "rci/tasks/refute_prover_probe.md", workdir=self.workdir
+                "rci/refute_prover_probe/task.md", workdir=self.workdir
             ),
             base_dir=(
                 state.root / "probes" / f"revision_{state.revision:02d}" / "refute"
@@ -1271,7 +1265,7 @@ class RciPipeline:
                     "INVALID_PROBE_RECEIPT": invalid.output_ref,
                 },
                 prompt_seed=render_prompt_template(
-                    "rci/tasks/statement_normalizer.md", workdir=self.workdir
+                    "rci/statement_normalizer/task.md", workdir=self.workdir
                 ),
             )
             action = self._expect_action(
@@ -1361,7 +1355,7 @@ class RciPipeline:
                 trigger_kind: trigger_ref,
             },
             prompt_seed=render_prompt_template(
-                "rci/tasks/frontier_hardener.md", workdir=self.workdir
+                "rci/frontier_hardener/task.md", workdir=self.workdir
             ),
         )
         action = self._expect_action(
@@ -1446,7 +1440,7 @@ class RciPipeline:
             },
             prompt_seed=(
                 render_prompt_template(
-                    "rci/tasks/semantic_dedup.md",
+                    "rci/semantic_dedup/task.md",
                     workdir=self.workdir,
                     value_1=json.dumps(
                         [
@@ -1540,21 +1534,14 @@ class RciPipeline:
         root = Path(kwargs["workdir"])
         phase, inputs = kwargs["phase"], kwargs["input_refs"]
         candidate = inputs.get("CANDIDATE") or inputs.get("SEED")
-        from .roles import (
-            RCI_SKILL_CORE_REF,
-            RCI_SKILL_ENTRY_REF,
-            resolve_skill_refs,
-            role_binding,
-        )
+        from .prompt_composer import build_instructions, skill_refs
+        from .roles import role_binding
 
         binding = role_binding(phase)
-        skill_refs = resolve_skill_refs(
-            root, (*binding.skill_refs, RCI_SKILL_CORE_REF, RCI_SKILL_ENTRY_REF)
+        rules = {"AGENTS.md": build_instructions(phase=phase, workdir=root)}
+        rules.update(
+            {ref: (root / ref).read_text() for ref in skill_refs(phase, workdir=root)}
         )
-        rules = {
-            ref: (root / ref).read_text()
-            for ref in (work_ref(root, binding.prompt_ref), *skill_refs)
-        }
         dependencies = tuple(
             ref
             for kind, values in inputs.items()

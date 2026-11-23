@@ -516,6 +516,7 @@ def _semantic_call_once(
             spec=spec,
             host=host,
             diagnostics=[],
+            payload=payload,
             attempt_count=1,
         )
         finish_call(
@@ -578,6 +579,7 @@ def _semantic_call_once(
         spec=spec,
         host=host,
         diagnostics=diagnostics,
+        payload=payload,
         attempt_count=1,
     )
     finish_call(
@@ -708,6 +710,7 @@ def _write_trace(
     spec: SemanticCallSpec,
     host: dict[str, Any],
     diagnostics: list[dict[str, Any]],
+    payload: dict[str, Any],
     attempt_count: int,
 ) -> None:
     _write_json_atomic(
@@ -717,5 +720,6 @@ def _write_trace(
             "role": spec.role,
             "attempt_count": attempt_count,
             "diagnostics": diagnostics,
+            "payload": payload,
         },
     )

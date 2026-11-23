@@ -62,6 +62,7 @@ def begin_call(
             "target_contract_id": str(meta.get("target_contract_id") or ""),
             "round_index": int(meta.get("round_index", 0) or 0),
             "parent_call_id": str(meta.get("parent_call_id") or ""),
+            "resume_from_call_ref": str(meta.get("resume_from_call_ref") or ""),
             "task_id": str(meta.get("task_id") or ""),
             "parent_task_id": str(meta.get("parent_task_id") or ""),
             "status": "STARTED",

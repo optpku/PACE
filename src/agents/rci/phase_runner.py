@@ -11,28 +11,29 @@ from typing import Any
 from pace.agents.prompt_composer import build_prompt_assembly
 from pace.agents.roles import SemanticRoleSpec, run_semantic_role
 from pace.artifacts.calls import update_agent_call_deliverable
-from pace.artifacts.events import publish_progress
+from pace.artifacts.events import publish_progress, read_events
 from pace.artifacts.workspace import (
     _write_json_atomic as _write_json,
 )
-from pace.artifacts.workspace import stage_ref, work_ref
-from pace.runtime.prompts import prompt_root, render_prompt_template
+from pace.artifacts.workspace import _write_text_atomic, stage_ref, work_ref
+from pace.runtime.agent_environment import prepare_role_environment
+from pace.runtime.prompts import render_prompt_template
 from pace.runtime.schema import open_object
 from pace.runtime.semantic import (
     SemanticInterfaceFailure,
     SemanticRepresentationFailure,
+    StructuredSemanticResult,
     semantic_call,
     validate_semantic_payload,
 )
 
 from .context import linked_review_refs, select_inputs
+from .prompt_composer import build_instructions, build_prompt, instruction_refs
+from .prompt_composer import skill_refs as phase_skill_refs
 from .receipts import host_receipt_fields, materialize_seed_revision, validate_receipt
 from .roles import (
     PHASE_ACTIONS,
     RCI_MODE,
-    RCI_SKILL_CORE_REF,
-    RCI_SKILL_ENTRY_REF,
-    resolve_skill_refs,
     role_binding,
 )
 
@@ -240,14 +241,15 @@ class RciPhaseRunner:
             "archive": archive_inputs,
             "policy": "declared role dependencies; no byte truncation",
         }
-        if frozen:
-            if selection_path.is_file():
-                saved = json.loads(selection_path.read_text())
-                for row in saved.get("bindings", []):
+        if selection_path.is_file():
+            selection = json.loads(selection_path.read_text())
+            if frozen:
+                for row in selection["bindings"]:
                     check_binding(root, row)
-                normalized = {k: tuple(v) for k, v in saved["selected"].items()}
-                archive_inputs = {k: tuple(v) for k, v in saved["archive"].items()}
-            else:
+                normalized = {k: tuple(v) for k, v in selection["selected"].items()}
+                archive_inputs = {k: tuple(v) for k, v in selection["archive"].items()}
+        else:
+            if frozen:
                 selection["bindings"] = [
                     memory_binding(root, ref)
                     for ref in dict.fromkeys(
@@ -261,8 +263,6 @@ class RciPhaseRunner:
                     )
                     if (root / ref).is_file()
                 ]
-                _write_json(selection_path, selection)
-        else:
             _write_json(selection_path, selection)
         supplied = tuple((ref for refs in normalized.values() for ref in refs))
 
@@ -381,8 +381,18 @@ class RciPhaseRunner:
             accepted_result = committed
             return committed
 
+        instructions = build_instructions(phase=binding.phase, workdir=root)
+        prepare_role_environment(root, binding.role, instructions=instructions)
+        skill_refs = phase_skill_refs(
+            binding.phase, workdir=root, extra_refs=tuple(skill_card_refs)
+        )
         checkpoint = target_dir / "completed_phase.json"
         inputs_snapshot = {
+            "instructions": instructions,
+            "skills": {ref: (root / ref).read_bytes().hex() for ref in skill_refs},
+            "archive_refs": {kind: list(refs) for kind, refs in archive_inputs.items()}
+            if binding.required_inputs != ("PROBE_TASK",)
+            else {},
             "phase": phase,
             "target_contract_id": target_contract_id,
             "input_refs": {kind: list(refs) for kind, refs in normalized.items()},
@@ -397,6 +407,14 @@ class RciPhaseRunner:
         }
         if routing:
             inputs_snapshot["routing_context"] = routing
+        assembly_path = target_dir / "prompt_assembly.json"
+        if assembly_path.is_file():
+            saved_assembly = json.loads(assembly_path.read_text())
+            if saved_assembly["phase_inputs"] != inputs_snapshot:
+                raise RciPhaseError(
+                    "saved RCI phase task changed; create a new phase version",
+                    phase=phase,
+                )
         if checkpoint.is_file():
             cached = json.loads(checkpoint.read_text(encoding="utf-8"))
             if cached["inputs"] != inputs_snapshot:
@@ -426,45 +444,25 @@ class RciPhaseRunner:
                 artifact_refs=tuple(cached["outputs"]),
             )
             return RciPhaseResult(**cached["result"])
-        partials = [
-            path
-            for path in target_dir.iterdir()
-            if path.name
-            not in {
-                "prompt_assembly.json",
-                "input_selection.json",
-                "final_prompt.md",
-                "input_diagnostics.json",
-                "interrupted_attempts",
-            }
-        ]
-        if partials:
-            archive = target_dir / "interrupted_attempts"
-            archive.mkdir(exist_ok=True)
-            previous = archive / f"attempt-{len(list(archive.iterdir())) + 1:04d}"
-            previous.mkdir()
-            moved_refs = {}
-            for path in partials:
-                for file in path.rglob("*") if path.is_dir() else (path,):
-                    if file.is_file():
-                        destination = (
-                            previous / path.name / file.relative_to(path)
-                            if path.is_dir()
-                            else previous / path.name
-                        )
-                        moved_refs[_relative_ref(file, root)] = _relative_ref(
-                            destination, root
-                        )
-                path.replace(previous / path.name)
-            for record_path in (root / stage_ref(round_index, workdir=root)).glob(
-                "calls/*/record.json"
+        # Keep unfinished manuscripts at their original paths for this exact task.
+        # Mathematical revisions already receive a new phase directory in the graph.
+        calls = []
+        for event in read_events(root):
+            if (
+                event.get("event_kind") == "SEMANTIC_CALL_STARTED"
+                and event.get("task_id") == progress_context["task_id"]
             ):
-                record = json.loads(record_path.read_text(encoding="utf-8"))
-                archived_ref = moved_refs.get(record.get("deliverable_ref"))
-                if archived_ref:
-                    update_agent_call_deliverable(
-                        root, call_id=record["call_id"], deliverable_ref=archived_ref
-                    )
+                ref = event["call_ref"]
+                calls.append((ref, json.loads((root / ref).read_text())))
+        author_ref = next(
+            (
+                ref
+                for ref, record in reversed(calls)
+                if record["source_prompt_ref"]
+                == _relative_ref(target_dir / "final_prompt.md", root)
+            ),
+            "",
+        )
         missing = tuple(
             (kind for kind in binding.required_inputs if not normalized.get(kind))
         )
@@ -533,33 +531,17 @@ class RciPhaseRunner:
         assembly_path = target_dir / "prompt_assembly.json"
         output_path = target_dir / "output.json"
         try:
-            skill_refs = resolve_skill_refs(
-                root,
-                (
-                    *binding.skill_refs,
-                    *skill_card_refs,
-                    RCI_SKILL_CORE_REF,
-                    *(
-                        (RCI_SKILL_ENTRY_REF,)
-                        if binding.required_inputs != ("PROBE_TASK",)
-                        else ()
-                    ),
-                ),
+            resource_refs = tuple(
+                work_ref(root, "resources/prompts/" + ref)
+                for ref in instruction_refs(binding.phase, workdir=root)
             )
-            resource_refs = (
-                work_ref(root, binding.prompt_ref),
-                *skill_refs,
-                *(),
-                work_ref(workdir, "resources/prompts/shared/output/findings.md"),
-                work_ref(workdir, "resources/prompts/shared/output/structured.md"),
-            )
+            resource_refs = (*resource_refs, *skill_refs)
             assembly = build_prompt_assembly(
                 workdir=root,
                 stage=binding.phase,
                 role=binding.role,
                 mode=RCI_MODE,
                 target_contract_id=str(target_contract_id),
-                manifest_path=assembly_path,
                 candidate_file_refs=(*predecessor_refs, *resource_refs),
                 required_file_refs=(*required_predecessors, *resource_refs),
                 contract_guide_refs=(
@@ -570,6 +552,14 @@ class RciPhaseRunner:
                 ),
                 prompt_seed=str(prompt_seed),
                 output_artifact_ref=_relative_ref(output_path, root),
+            )
+            _write_json(
+                assembly_path,
+                {
+                    **assembly.to_json(),
+                    "manifest_ref": _relative_ref(assembly_path, root),
+                    "phase_inputs": inputs_snapshot,
+                },
             )
             allowed = tuple(
                 dict.fromkeys(
@@ -597,48 +587,15 @@ class RciPhaseRunner:
                 if archive_access
                 else ()
             )
-            guidance = []
-            inputs = []
-            for ref in allowed:
-                if archive_access and ref == archive_ref:
-                    continue
-                path = Path(ref)
-                path = (path if path.is_absolute() else root / path).resolve()
-                if path.is_relative_to(prompt_root(root)) and (
-                    not path.is_relative_to(prompt_root(root) / "rci/skills")
-                ):
-                    guidance.append(path.read_text(encoding="utf-8"))
-                else:
-                    inputs.append(ref)
-            final_prompt = render_prompt_template(
-                "rci/task.md",
+            final_prompt = build_prompt(
                 workdir=root,
-                guidance="\n\n".join(guidance),
                 task=str(prompt_seed),
-                routing_contract=(
-                    render_prompt_template(
-                        "rci/routing_task.md", workdir=root, actions=repr(list(actions))
-                    )
-                    if actions
-                    else ""
-                ),
-                routing_identities=json.dumps(routing) if routing else "",
-                input_refs="\n".join(f"- `{ref}`" for ref in inputs),
-                archive_instruction=(
-                    render_prompt_template(
-                        "rci/archive_task.md", workdir=root, archive_ref=archive_ref
-                    )
-                    if archive_access
-                    else ""
-                ),
+                actions=actions,
+                routing=routing,
+                input_refs=allowed,
+                archive_ref=archive_ref if archive_access else "",
                 output_directory=_relative_ref(target_dir, root),
-                output_instruction=render_prompt_template(
-                    "rci/seed_delivery.md"
-                    if binding.phase == "SEED_SCOUT"
-                    else "rci/phase_delivery.md",
-                    workdir=root,
-                ),
-                findings_directory=f"{stage_ref(round_index, workdir=workdir)}/findings",
+                findings_directory=f"{stage_ref(round_index, workdir=root)}/findings",
             )
             if (
                 frozen
@@ -654,7 +611,14 @@ class RciPhaseRunner:
                     outer_output, _relative_ref(target_dir / "change.md", root)
                 )
                 final_prompt += instruction
-            (target_dir / "final_prompt.md").write_text(final_prompt, encoding="utf-8")
+            prompt_path = target_dir / "final_prompt.md"
+            if author_ref:
+                if prompt_path.read_text(encoding="utf-8") != final_prompt:
+                    raise ValueError(
+                        "saved RCI phase prompt changed; create a new phase version"
+                    )
+            else:
+                _write_text_atomic(prompt_path, final_prompt)
         except Exception as exc:
             publish_progress(root, **progress_context, status="failed")
             raise RciPhaseError(
@@ -674,44 +638,53 @@ class RciPhaseRunner:
             fatal_scope="CALL",
         )
         try:
-            result = run_semantic_role(
-                self.llm,
-                final_prompt,
-                workdir=root,
-                call_name=_call_name(binding.phase, target_dir, suffix="semantic"),
-                input_refs=allowed,
-                semantic_call_fn=self.semantic_call_fn,
-                role=role,
-                host_metadata={
-                    "agent_id": binding.role.lower(),
-                    "archive_refs": archives,
-                    "target_contract_id": str(target_contract_id),
-                    "round_index": round_index,
-                    "task_id": progress_context["task_id"],
-                    "parent_task_id": progress_context["parent_task_id"],
-                    "output_ref": _relative_ref(output_path, root),
-                    "prompt_ref": _relative_ref(target_dir / "final_prompt.md", root),
-                    "output_refs": [
-                        _relative_ref(target_dir / name, root)
-                        for name in (
-                            "seed.md",
-                            "candidate.md",
-                            "mechanism.md",
-                            "probe_task.md",
-                            "closure_brief.md",
-                            "review.md",
-                            "change.md",
-                            "patch.json",
-                            *(() if reporter_owned(root) else ("research_delta.json",)),
-                        )
-                    ],
-                    "phase": binding.phase,
-                    "output_dirs": [_relative_ref(finding_dir, root)],
-                    "receipt_correction_owner": "RCI_PHASE",
-                    "allowed_actions": list(actions),
-                    "prompt_assembly_ref": _relative_ref(assembly_path, root),
-                },
-            )
+            result = _saved_author_result(root, author_ref) if author_ref else None
+            if result is None:
+                result = run_semantic_role(
+                    self.llm,
+                    final_prompt,
+                    workdir=root,
+                    call_name=_call_name(binding.phase, target_dir, suffix="semantic"),
+                    input_refs=allowed,
+                    semantic_call_fn=self.semantic_call_fn,
+                    role=role,
+                    host_metadata={
+                        "agent_id": binding.role.lower(),
+                        "resume_from_call_ref": author_ref,
+                        "archive_refs": archives,
+                        "target_contract_id": str(target_contract_id),
+                        "round_index": round_index,
+                        "task_id": progress_context["task_id"],
+                        "parent_task_id": progress_context["parent_task_id"],
+                        "output_ref": _relative_ref(output_path, root),
+                        "prompt_ref": _relative_ref(
+                            target_dir / "final_prompt.md", root
+                        ),
+                        "output_refs": [
+                            _relative_ref(target_dir / name, root)
+                            for name in (
+                                "seed.md",
+                                "candidate.md",
+                                "mechanism.md",
+                                "probe_task.md",
+                                "closure_brief.md",
+                                "review.md",
+                                "change.md",
+                                "patch.json",
+                                *(
+                                    ()
+                                    if reporter_owned(root)
+                                    else ("research_delta.json",)
+                                ),
+                            )
+                        ],
+                        "phase": binding.phase,
+                        "output_dirs": [_relative_ref(finding_dir, root)],
+                        "receipt_correction_owner": "RCI_PHASE",
+                        "allowed_actions": list(actions),
+                        "prompt_assembly_ref": _relative_ref(assembly_path, root),
+                    },
+                )
         except Exception as exc:
             publish_progress(root, **progress_context, status="failed")
             raise RciPhaseError(
@@ -755,11 +728,10 @@ class RciPhaseRunner:
                             "completed_phase.json",
                         }
                     )
-                    and ("interrupted_attempts" not in p.parts)
                 )
             )
             correction = render_prompt_template(
-                "rci/receipt_correction.md",
+                "rci/shared/receipt_correction.md",
                 workdir=root,
                 actions=list(actions),
                 receipt_ref=raw_ref,
@@ -838,6 +810,14 @@ class RciPhaseRunner:
                     "output_ref": _relative_ref(output_path, root),
                     "receipt_correction_owner": "RCI_PHASE",
                     "receipt_correction": True,
+                    "resume_from_call_ref": next(
+                        (
+                            ref
+                            for ref, record in reversed(calls)
+                            if record["parent_call_id"] == result.host["call_id"]
+                        ),
+                        result.host["call_ref"],
+                    ),
                     "output_refs": [],
                     "output_dirs": [],
                     "parent_call_id": result.host["call_id"],
@@ -887,6 +867,21 @@ class RciPhaseRunner:
             artifact_refs=tuple(json.loads(checkpoint.read_text())["outputs"]),
         )
         return committed
+
+
+def _saved_author_result(root: Path, call_ref: str):
+    trace_path = (root / call_ref).with_name("interface_result.json")
+    if not trace_path.is_file():
+        return None
+    trace = json.loads(trace_path.read_text())
+    host = trace["host"]
+    if host["semantic_status"] == "FAILED":
+        return SemanticRepresentationFailure(
+            payload=trace["payload"], host=host, diagnostics=tuple(trace["diagnostics"])
+        )
+    if host["host_metadata"]["transport"]["status"] == "SUCCESS":
+        return StructuredSemanticResult(payload=trace["payload"], host=host)
+    return None
 
 
 def _refs(value: str | Path | Iterable[str | Path]) -> tuple[str, ...]:

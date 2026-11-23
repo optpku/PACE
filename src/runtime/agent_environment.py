@@ -1,4 +1,4 @@
-"""Turn-owned Codex homes and fixed instructions for ordinary PACE roles."""
+"""Turn-owned role homes and explicitly owned native conversations."""
 
 from __future__ import annotations
 
@@ -30,13 +30,26 @@ _ROLE_PATHS = {
     "THEORY_PAPER_WRITER": "writing/paper_writer",
     "RESEARCH_REPORTER": "reporter",
     "WEB_REPORTER": "writing/web_reporter",
+    "RCI_SEED_SCOUT": "rci/seed_scout",
+    "RCI_RAW_SEED_CRITIC_MATH": "rci/raw_seed_critic_math",
+    "RCI_RAW_SEED_CRITIC_RESEARCH": "rci/raw_seed_critic_research",
+    "RCI_FRONTIER_EXPLORER": "rci/frontier_explorer",
+    "RCI_FRONTIER_REFUTE_PROBE": "rci/frontier_refute_probe",
+    "RCI_MECHANISM_CRITIC": "rci/mechanism_critic",
+    "RCI_COVERAGE_JUDGE": "rci/coverage_judge",
+    "RCI_FINAL_CHALLENGER": "rci/final_challenger",
+    "RCI_FRONTIER_HARDENER": "rci/frontier_hardener",
+    "RCI_BLIND_PROVER_PROBE": "rci/blind_prover_probe",
+    "RCI_REFUTE_PROVER_PROBE": "rci/refute_prover_probe",
+    "RCI_STATEMENT_NORMALIZER": "rci/statement_normalizer",
+    "RCI_SEMANTIC_DEDUP": "rci/semantic_dedup",
 }
 
 
 def role_home(
     workdir: Path, role: str, *, environment_root: Path | None = None
 ) -> Path | None:
-    """RCI phases and utility calls retain their own invocation environments."""
+    """Resolve a role's fixed environment; utility calls have no role home."""
     definition = _ROLE_PATHS.get(role.upper())
     if definition is None:
         return None
@@ -63,8 +76,37 @@ def director_thread(home: Path) -> str:
     )
 
 
+def resumed_call(workdir: Path, record: dict) -> dict | None:
+    """Read the caller-selected conversation, bound to the same task and role."""
+    ref = record.get("resume_from_call_ref")
+    if not ref:
+        return None
+    previous = json.loads((workdir / ref).read_text(encoding="utf-8"))
+    for key in ("role", "task_id", "stage_ref", "agent_home"):
+        if previous[key] != record[key]:
+            raise ValueError(f"session continuation changed {key}")
+    return previous
+
+
+def native_thread(workdir: Path, record_path: Path) -> str:
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    if record["role"].upper() == "GLOBAL_RESEARCH_DIRECTOR":
+        return director_thread(Path(record["agent_home"]))
+    # An internal retry continues this logical call, never the role's last call.
+    while not record["thread_id"]:
+        record = resumed_call(workdir, record)
+        if record is None:
+            return ""
+    return record["thread_id"]
+
+
 def record_native_session(
-    *, home: Path, role: str, stdout_path: Path, record_path: Path
+    *,
+    home: Path,
+    role: str,
+    stdout_path: Path,
+    record_path: Path,
+    expected_thread_id: str = "",
 ) -> None:
     """Persist the native ID even when an invocation times out or is interrupted."""
     for line in stdout_path.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -75,10 +117,9 @@ def record_native_session(
         if event.get("type") != "thread.started":
             continue
         thread_id = event["thread_id"]
+        if expected_thread_id and thread_id != expected_thread_id:
+            raise ValueError("resumed a different native session")
         if role.upper() == "GLOBAL_RESEARCH_DIRECTOR":
-            previous = director_thread(home)
-            if previous and previous != thread_id:
-                raise ValueError("Director resumed a different native session")
             _write_json_atomic(home / "session.json", {"thread_id": thread_id})
         record = json.loads(record_path.read_text(encoding="utf-8"))
         record.update(thread_id=thread_id)

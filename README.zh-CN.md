@@ -202,6 +202,8 @@ PACE 保存数学原稿、断点与运行记录，外部 Web 应用负责研究�
 - 所有角色提示词位于 `src/resources/prompts/<角色>/`，共享指引位于 `shared/`。同一角色的 `standard`、`weak` 文件相邻保存；运行快照只保留所选版本。恢复沿用已有快照，新的 turn 重新选择资源。
 - `src/runtime/` 提供模型、工具、进程、原生会话、资源读取和构建能力；`src/artifacts/` 保存原稿、状态、提交回执、调用记录与事件。
 
+RCI 在 `src/agents/rci/prompt_composer.py` 组装内部角色的指令，正文集中于 `src/resources/prompts/rci/<角色>/`。实际调用时为角色创建当前 turn 的 AGENTS.md 环境。session 属于一次具体阶段任务：中断恢复和回执修正继续原会话并保留原稿路径；新阶段或新 round 创建新 session。`CONTINUE_PROBLEM` 保持问题原文，向 Explorer 交接选定的原始尝试、机制、评审和缺口，不重复选题或价值筛选。已完成阶段复用绑定的检查点，不重复调用模型。
+
 运行目录中的 `memory/`、`results/` 由外层 orchestrator 管理。当前 turn 的草稿、冻结上下文与检查点保存在 `work/turnNNN/`。共享记忆和历史成果保留原始目标及核验引用，跨 turn 使用时仍需检查当前目标的范围与条件。
 
 ## 许可证

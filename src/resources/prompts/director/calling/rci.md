@@ -47,6 +47,10 @@ Continuation enters Explorer directly with the existing question and evidence;
 it does not recreate a seed or repeat research-value screening. Select the
 specific result manuscripts and verification records to reuse within their
 scope, and name the one remaining gap and return condition in ordinary prose.
+Each new round starts a fresh RCI phase session. Supply the original mechanism,
+review and change/gap files needed to continue; session history is not an input.
+Keep the accepted question version fixed while stating the new evidence or
+different mathematical move for this assignment.
 A route-node label alone does not identify an unchanged question. A changed
 question uses NEW_PROBLEM with its changed assumptions or conclusion explicit.
 

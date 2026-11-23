@@ -380,7 +380,7 @@ class CodexLLM:
         invocation_dir = call_directory(resolved, record_ref)
         record = json.loads((resolved / record_ref).read_text(encoding="utf-8"))
         from pace.runtime.agent_environment import (
-            director_thread,
+            native_thread,
             record_native_session,
         )
 
@@ -461,9 +461,7 @@ class CodexLLM:
             stdout_path = attempt_dir / "stdout.jsonl"
             stderr_path = attempt_dir / "stderr.txt"
             thread_id = (
-                director_thread(agent_home)
-                if agent_home and role.upper() == "GLOBAL_RESEARCH_DIRECTOR"
-                else ""
+                native_thread(resolved, resolved / record_ref) if agent_home else ""
             )
             cmd = [self.cli_path, "exec"]
             if thread_id:
@@ -570,6 +568,7 @@ class CodexLLM:
                                     role=role,
                                     stdout_path=stdout_path,
                                     record_path=resolved / record_ref,
+                                    expected_thread_id=thread_id,
                                 )
                             # Always record a transport's actual active interval. Higher-level
                             # profiling remains optional and must not be added to this cost.

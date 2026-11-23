@@ -95,15 +95,14 @@ def _skills(*paths: str) -> tuple[str, ...]:
 
 def _binding(
     phase: str,
-    prompt: str,
     *,
     skills: tuple[str, ...],
     required: tuple[str, ...],
 ) -> RciRoleBinding:
     return RciRoleBinding(
         phase=phase,
-        role=f"RCI_{prompt.removesuffix('.md').upper()}",
-        prompt_ref=f"{PROMPT_ROOT}/{prompt}",
+        role=f"RCI_{phase}",
+        prompt_ref=f"{PROMPT_ROOT}/{phase.lower()}/role.md",
         skill_refs=skills,
         required_inputs=required,
     )
@@ -112,7 +111,6 @@ def _binding(
 ROLE_BINDINGS: Final[dict[str, RciRoleBinding]] = {
     "SEED_SCOUT": _binding(
         "SEED_SCOUT",
-        "seed_scout.md",
         skills=_skills(
             "raw_seed/claim_shape_contract.md",
             "raw_seed/contribution_boundary.md",
@@ -123,7 +121,6 @@ ROLE_BINDINGS: Final[dict[str, RciRoleBinding]] = {
     ),
     "RAW_SEED_CRITIC_MATH": _binding(
         "RAW_SEED_CRITIC_MATH",
-        "raw_seed_critic.md",
         skills=_skills(
             "critic/index.md",
             "critic/raw_seed/attack_correctness.md",
@@ -135,7 +132,6 @@ ROLE_BINDINGS: Final[dict[str, RciRoleBinding]] = {
     ),
     "RAW_SEED_CRITIC_RESEARCH": _binding(
         "RAW_SEED_CRITIC_RESEARCH",
-        "raw_seed_critic.md",
         skills=_skills(
             "critic/index.md",
             "critic/raw_seed/attack_novelty_value.md",
@@ -147,7 +143,6 @@ ROLE_BINDINGS: Final[dict[str, RciRoleBinding]] = {
     ),
     "FRONTIER_EXPLORER": _binding(
         "FRONTIER_EXPLORER",
-        "frontier_explorer.md",
         skills=_skills(
             "mechanism/expert_mechanism_discovery.md",
             "mechanism/proof_mechanism.md",
@@ -158,13 +153,11 @@ ROLE_BINDINGS: Final[dict[str, RciRoleBinding]] = {
     ),
     "FRONTIER_REFUTE_PROBE": _binding(
         "FRONTIER_REFUTE_PROBE",
-        "frontier_refute_probe.md",
         skills=_skills("critic/raw_seed/attack_counterexamples.md"),
         required=("PROBE_TASK",),
     ),
     "MECHANISM_CRITIC": _binding(
         "MECHANISM_CRITIC",
-        "mechanism_critic.md",
         skills=_skills(
             "multi_mechanism/mechanism_audit.md",
             "multi_mechanism/capability_interface_contract.md",
@@ -175,7 +168,6 @@ ROLE_BINDINGS: Final[dict[str, RciRoleBinding]] = {
     ),
     "COVERAGE_JUDGE": _binding(
         "COVERAGE_JUDGE",
-        "coverage_judge.md",
         skills=_skills(
             "multi_mechanism/bundle_closure_audit.md",
             "multi_mechanism/bundle_composition.md",
@@ -193,7 +185,6 @@ ROLE_BINDINGS: Final[dict[str, RciRoleBinding]] = {
     ),
     "FINAL_CHALLENGER": _binding(
         "FINAL_CHALLENGER",
-        "final_challenger.md",
         skills=_skills(
             "multi_mechanism/semi_open_audit.md",
             "raw_seed/attack_surface_failure_tests.md",
@@ -204,7 +195,6 @@ ROLE_BINDINGS: Final[dict[str, RciRoleBinding]] = {
     ),
     "FRONTIER_HARDENER": _binding(
         "FRONTIER_HARDENER",
-        "frontier_hardener.md",
         skills=_skills(
             "raw_seed/claim_shape_contract.md",
         ),
@@ -212,19 +202,16 @@ ROLE_BINDINGS: Final[dict[str, RciRoleBinding]] = {
     ),
     "BLIND_PROVER_PROBE": _binding(
         "BLIND_PROVER_PROBE",
-        "blind_prover_probe.md",
         skills=_skills("raw_seed/attack_surface_failure_tests.md"),
         required=("PROBE_TASK",),
     ),
     "REFUTE_PROVER_PROBE": _binding(
         "REFUTE_PROVER_PROBE",
-        "refute_prover_probe.md",
         skills=_skills("critic/raw_seed/attack_counterexamples.md"),
         required=("PROBE_TASK",),
     ),
     "STATEMENT_NORMALIZER": _binding(
         "STATEMENT_NORMALIZER",
-        "statement_normalizer.md",
         skills=_skills(
             "raw_seed/claim_shape_contract.md",
             "multi_mechanism/target_capability_contract.md",
@@ -233,7 +220,6 @@ ROLE_BINDINGS: Final[dict[str, RciRoleBinding]] = {
     ),
     "SEMANTIC_DEDUP": _binding(
         "SEMANTIC_DEDUP",
-        "semantic_dedup.md",
         skills=_skills(
             "raw_seed/contribution_boundary.md",
             "multi_mechanism/semi_open_audit.md",

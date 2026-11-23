@@ -209,13 +209,3 @@ def test_web_reporter_keeps_owner_home_with_its_evidence_workspace(role_workspac
     assert calls[0][1] == home
     assert calls[0][3] == evidence.root
     assert "--ephemeral" not in calls[0][0]
-
-
-def test_rci_keeps_its_ephemeral_environment(role_workspace, monkeypatch):
-    calls = native_process(monkeypatch)
-    result = invoke(role_workspace, "RCI_FRONTIER_EXPLORER", "rci-phase")
-    assert result.transport_status == "SUCCESS"
-    cmd, home, _, _ = calls[0]
-    assert "--ephemeral" in cmd and "project_doc_max_bytes=0" in cmd
-    assert not home.exists()
-    assert role_home(role_workspace.root, "RCI_FRONTIER_EXPLORER") is None

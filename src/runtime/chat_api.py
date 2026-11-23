@@ -187,53 +187,73 @@ def _resume_messages(root, directory, context, capabilities, initial):
     """Continue an interrupted conversation in this exact task, never another role's."""
     from pace.artifacts.calls import call_directory
     from pace.artifacts.events import read_events
+    from pace.runtime.agent_environment import resumed_call
 
+    current = json.loads((root / context["call_ref"]).read_text())
+    explicit_ref = current["resume_from_call_ref"]
+    previous = resumed_call(root, current)
     calls = call_directory(root, context["call_ref"]).parent
-    for event in reversed(read_events(root)):
-        ref = event.get("call_ref", "")
-        if (
-            event.get("event_kind") != "SEMANTIC_CALL_STARTED"
-            or not ref
-            or ref == context["call_ref"]
-        ):
-            continue
-        record_path = root / ref
-        if record_path.parent.parent != calls or event.get("role") != context.get(
-            "role"
-        ):
-            continue
-        record = json.loads(record_path.read_text())
-        if record.get("status") not in {"STARTED", "INTERFACE_FAILED", "ABORTED"}:
-            continue
-        for chat in sorted(
-            record_path.parent.glob("attempts/*/chat.json"), reverse=True
-        ):
+    if explicit_ref:
+        candidates = [(root / explicit_ref, previous)]
+    else:
+        candidates = []
+        for event in reversed(read_events(root)):
+            ref = event.get("call_ref", "")
+            if (
+                event.get("event_kind") != "SEMANTIC_CALL_STARTED"
+                or not ref
+                or ref == context["call_ref"]
+            ):
+                continue
+            record_path = root / ref
+            if record_path.parent.parent != calls or event.get("role") != context.get(
+                "role"
+            ):
+                continue
+            record = json.loads(record_path.read_text())
+            if record["status"] in {"STARTED", "INTERFACE_FAILED", "ABORTED"}:
+                candidates.append((record_path, record))
+    for record_path, record in candidates:
+        chats = sorted(record_path.parent.glob("attempts/*/chat.json"), reverse=True)
+        if explicit_ref and not chats:
+            raise ValueError("selected call has no saved API conversation")
+        for chat in chats:
             old_caps = json.loads(chat.with_name("capabilities.json").read_text())
+            messages = json.loads(chat.read_text())
+            same_task = (root / record["prompt_ref"]).read_text(
+                encoding="utf-8"
+            ) == initial[1]["content"]
+            correction = bool(explicit_ref and not same_task)
             keys = (
                 "provider",
+                "base_url",
                 "model",
                 "reasoning_effort_requested",
-                "tools",
-                "required_refs",
-                "archive_refs",
+                "read_scope",
             )
-            if any(old_caps.get(k) != capabilities.get(k) for k in keys):
-                continue
-            # New checkpoints also bind the provider and complete tool contract.
-            if old_caps.get("request_contract") not in (
-                None,
-                capabilities["request_contract"],
-            ):
-                continue
-            # A historical structured schema cannot be reconstructed safely.
+            if not correction:
+                keys += ("tools", "required_refs", "archive_refs")
+            same_contract = (
+                (
+                    "write_file" not in capabilities["tools"]
+                    and set(capabilities["tools"]) <= set(old_caps["tools"])
+                )
+                if correction
+                else old_caps["request_contract"] == capabilities["request_contract"]
+            )
             if (
-                "request_contract" not in old_caps
-                and "submit_result" in old_caps["tools"]
+                any(old_caps.get(k) != capabilities.get(k) for k in keys)
+                or not same_contract
             ):
+                if explicit_ref:
+                    raise ValueError(
+                        "selected conversation's execution contract changed"
+                    )
                 continue
-            messages = json.loads(chat.read_text())
-            if messages[:2] != initial:
+            if not explicit_ref and messages[:2] != initial:
                 continue
+            if explicit_ref and not correction and messages[0] != initial[0]:
+                raise ValueError("selected conversation's fixed instructions changed")
             tools = WorkspaceTools(
                 root, context, web_search="fetch_url" in capabilities["tools"]
             )
@@ -288,6 +308,29 @@ def _resume_messages(root, directory, context, capabilities, initial):
             for ref, content in writes.items():
                 if tools.path(ref).read_text() != content:
                     raise ValueError(f"saved conversation output changed: {ref}")
+            if correction:
+                last = messages[-1]
+                # submit_result is terminal, so its tool acknowledgement is owned by
+                # the Host. A receipt correction starts after that rejected submission.
+                if last.get("tool_calls"):
+                    for call in last["tool_calls"]:
+                        if call["function"]["name"] != "submit_result":
+                            raise ValueError(
+                                "receipt correction has unfinished artifact tools"
+                            )
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": call["id"],
+                                "content": json.dumps(
+                                    {
+                                        "error": "Receipt requires correction; follow the current task."
+                                    }
+                                ),
+                            }
+                        )
+                messages[0] = initial[0]
+                messages.append(initial[1])
             append_event(
                 root,
                 "CHAT_CONVERSATION_RESUMED",
@@ -757,6 +800,8 @@ class ChatCompletionsLLM(CodexLLM):
         ]
         capabilities = {
             "provider": "chat-completions",
+            "base_url": self.base_url,
+            "read_scope": ledger_context.get("read_scope", ""),
             "model": self.model,
             "tools": [t["function"]["name"] for t in tool_specs],
             "reasoning_effort_requested": self.reasoning_effort,

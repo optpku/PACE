@@ -220,6 +220,8 @@ The production entry is `pace.cli → pace.pipeline.ProofPipeline.run`. The impl
 - Role text lives in `src/resources/prompts/<role>/`, with common guidance under `shared/`. Standard and weak files live beside each other; a run snapshot selects one version. Resume keeps that snapshot and a new turn selects resources again.
 - `src/runtime/` provides model, tool, process, native-session, resource and build capabilities. `src/artifacts/` persists originals, state, commit receipts, calls and events.
 
+RCI composes its internal roles in `src/agents/rci/prompt_composer.py`, using editable resources under `src/resources/prompts/rci/<role>/`. Each internal role gets a turn-owned `AGENTS.md` environment when invoked. A session belongs to one phase task: interrupted execution and receipt correction continue that task's conversation while preserving manuscript paths. A new phase or round starts a new session. `CONTINUE_PROBLEM` preserves the exact question and carries selected original attempts, mechanisms, reviews and gaps into Explorer; it does not rerun seed discovery or value screening. Completed phases reuse bound checkpoints without model calls.
+
 The outer orchestrator owns the run's `memory/` and `results/`. Turn-local drafts, frozen context and checkpoints stay under `work/turnNNN/`. Historical memory and findings retain their original targets and verification references; reuse still requires checking the current target's scope and conditions.
 
 ## License
