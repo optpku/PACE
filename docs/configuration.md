@@ -152,7 +152,7 @@ mathematical workflow. See the separately supplied Skill for client settings.
 
 Paper writing snapshots the bundled `neurips_2026.sty` and uses its preprint mode. The source copies that style unchanged and omits a checklist and submission questionnaire. Paper prose defaults to English; an explicit writing request can select a different language. A Chinese problem statement or conversation alone does not change that default.
 
-XeLaTeX builds the source, BibTeX resolves an actual bibliography, and `pdffonts` checks for Type 3 fonts. Chinese prose uses ctex and installed Fandol fonts. `pace doctor --pdf` checks the installed toolchain without model inference. Compilation and layout checks do not establish mathematical correctness.
+`latexmk -xelatex` builds the source and runs the bibliography tools when needed. `pdffonts` checks for Type 3 fonts. Chinese prose uses ctex and installed Fandol fonts. `pace doctor --pdf` checks the installed toolchain without model inference. Independent verifiers determine mathematical acceptance.
 
 ## Recovery and task scheduling
 

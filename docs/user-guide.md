@@ -125,7 +125,7 @@ Each step uses one author task with its Composer provenance, saved output and de
 
 Reports are written to `results/research_report.md`. Paper sources and their local dependencies are written under `results/paper/`, with a successful build at `results/paper/main.pdf`. Paper prose defaults to English unless the user explicitly requests another language. The saved NeurIPS preprint template is used without a checklist or submission questionnaire.
 
-PDF compilation uses XeLaTeX, BibTeX when cited, and `pdffonts`. The source delivery and build status are separate. Build failures keep the source and diagnostic, and recovery can retry compilation without calling the author again. Writing and build status do not alter the committed mathematical verdict. The external Web application organizes reader copies and download archives.
+PDF compilation uses `latexmk -xelatex` to manage compilation and bibliography passes, then checks fonts with `pdffonts`. PACE records source delivery and PDF build status separately. Build failures keep the source and diagnostic, and recovery can retry compilation without calling the author again. The committed mathematical verdict comes from independent verification. The external Web application organizes reader copies and download archives.
 
 ## Run a batch
 

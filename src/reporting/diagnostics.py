@@ -74,8 +74,7 @@ def check_environment(*, pdf: bool = False) -> dict[str, Any]:
     if pdf:
         checks.extend(
             [
-                _probe("xelatex", "xelatex", ["--version"], "XeTeX|MiKTeX"),
-                _probe("bibtex", "bibtex", ["--version"], "BibTeX"),
+                _probe("latexmk", "latexmk", ["-v"], "Latexmk"),
                 _probe("pdffonts", "pdffonts", ["-v"], r"pdffonts\s+version"),
             ]
         )
@@ -85,7 +84,7 @@ def check_environment(*, pdf: bool = False) -> dict[str, Any]:
             "path": "",
             "detail": "required PDF tools are unavailable",
         }
-        if all(row["ok"] for row in checks[-3:]):
+        if all(row["ok"] for row in checks[-2:]):
             with TemporaryDirectory(prefix="nl-proof-doctor-") as directory:
                 source = Path(directory)
                 style = files("pace.resources").joinpath(
@@ -134,6 +133,6 @@ def execution_capabilities() -> dict[str, Any]:
         },
         "tools": {
             name: shutil.which(name) or ""
-            for name in ("python3", "bash", "xelatex", "bibtex", "pdffonts")
+            for name in ("python3", "bash", "latexmk", "pdffonts")
         },
     }

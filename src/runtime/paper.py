@@ -19,7 +19,7 @@ def build_paper(directory: Path) -> dict[str, str]:
     status, reason = ("COMPLETE", "")
     logs: list[str] = []
 
-    def run(command: list[str], build: Path) -> str:
+    def run(command: list[str], build: Path, *, timeout: int) -> str:
         if shutil.which(command[0]) is None:
             raise FileNotFoundError(f"{command[0]} is not installed")
         result = subprocess.run(
@@ -29,7 +29,7 @@ def build_paper(directory: Path) -> dict[str, str]:
             capture_output=True,
             text=True,
             errors="replace",
-            timeout=180,
+            timeout=timeout,
         )
         logs.append("$ " + " ".join(command) + "\n" + result.stdout + result.stderr)
         if result.returncode:
@@ -62,19 +62,19 @@ def build_paper(directory: Path) -> dict[str, str]:
             )
             for tex in build.rglob("*.tex"):
                 require_math_format(tex.read_text(encoding="utf-8"), markdown=False)
-            latex = [
-                "xelatex",
-                "-interaction=nonstopmode",
-                "-halt-on-error",
-                "-no-shell-escape",
-                "main.tex",
-            ]
-            run(latex, build)
-            aux = (build / "main.aux").read_text(encoding="utf-8")
-            if "\\citation{" in aux and "\\bibdata{" in aux:
-                run(["bibtex", "main"], build)
-            run(latex, build)
-            run(latex, build)
+            run(
+                [
+                    "latexmk",
+                    "-norc",
+                    "-xelatex",
+                    "-interaction=nonstopmode",
+                    "-halt-on-error",
+                    "-no-shell-escape",
+                    "main.tex",
+                ],
+                build,
+                timeout=720,
+            )
             transcript = (build / "main.log").read_text(
                 encoding="utf-8", errors="replace"
             )
@@ -84,8 +84,8 @@ def build_paper(directory: Path) -> dict[str, str]:
                 raise RuntimeError("Unresolved references or citations remain")
             built_pdf = build / "main.pdf"
             if not built_pdf.is_file() or not built_pdf.stat().st_size:
-                raise RuntimeError("xelatex did not produce a PDF")
-            fonts = run(["pdffonts", "main.pdf"], build)
+                raise RuntimeError("latexmk did not produce a PDF")
+            fonts = run(["pdffonts", "main.pdf"], build, timeout=180)
             if re.search("\\bType\\s+3\\b", fonts):
                 raise RuntimeError(
                     "PDF contains Type 3 fonts; use installed vector fonts"

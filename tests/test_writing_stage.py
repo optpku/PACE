@@ -22,6 +22,12 @@ class WritingTransport(ResearchTransport):
     def complete_unstructured_result(self, prompt, *, workdir, call_name, ledger_context, **kwargs):
         self.calls.append(call_name)
         root = Path(workdir)
+        if call_name == "theory_paper_writer":
+            record = json.loads((root / ledger_context["call_ref"]).read_text())
+            instructions = (Path(record["agent_home"]) / "AGENTS.md").read_text()
+            for text in (instructions, prompt):
+                assert "workspace-conventions" in text
+                assert "latexmk -xelatex" in text
         output = root / re.search(r"## Deliverable\nWrite `([^`]+)`", prompt)[1]
         output.parent.mkdir(parents=True, exist_ok=True)
         if call_name != self.failed_action:

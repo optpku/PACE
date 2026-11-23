@@ -98,7 +98,7 @@ without overwriting the thematic overview or changing target acceptance.
 
 ### 1. Install PACE
 
-Requirements: **Python 3.11+** and model access through **Codex CLI** or a [Chat Completions API](docs/configuration.md#chat-completions-api). Installation includes `pypdf` for reading PDF sources; Codex is installed separately when used. The proof-mode example below needs no TeX or Poppler. Explicit paper writing also needs `xelatex`, BibTeX, and `pdffonts`; see [PDF tools](docs/installation.md#paper-pdf-tools).
+Requirements are **Python 3.11+** and model access through **Codex CLI** or a [Chat Completions API](docs/configuration.md#chat-completions-api). Installation includes `pypdf` for reading PDF sources. Install Codex separately when using it. Explicit paper writing also needs `latexmk`, a XeLaTeX-capable TeX distribution, and `pdffonts`. See the [PDF tools](docs/installation.md#paper-pdf-tools).
 
 The commands below use Bash. Run PACE on macOS/Linux or, on Windows, inside WSL; see the [environment requirements](docs/installation.md#requirements).
 
@@ -139,7 +139,7 @@ PACE runs Codex with `--dangerously-bypass-approvals-and-sandbox` for unattended
 
 ### 3. Prepare PDF tools for paper writing
 
-For explicit paper tasks, install a TeX distribution and Poppler providing `xelatex`, `bibtex` and `pdffonts`; follow [PDF tool setup](docs/installation.md#paper-pdf-tools). The proof/research example below needs no TeX or Poppler.
+For explicit paper tasks, install `latexmk`, a XeLaTeX-capable TeX distribution, and Poppler. Follow the [PDF tool setup](docs/installation.md#paper-pdf-tools). The proof/research example below needs no TeX or Poppler.
 
 ### 4. Check the environment
 

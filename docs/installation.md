@@ -70,11 +70,10 @@ PACE does not load `.env` automatically. Export optional shell variables as desc
 
 ## 3. Prepare paper PDF tools when needed
 
-The research/proof quickstart needs no TeX or Poppler. Explicit `paper` tasks require `xelatex`, `bibtex`, and `pdffonts` on PATH. Install a [TeX distribution](https://tug.org/texlive/) and [Poppler](https://poppler.freedesktop.org/). The bundled NeurIPS preprint style needs its LaTeX dependencies, including T1 fonts and courier; Chinese prose uses ctex and Fandol fonts.
+The research/proof quickstart needs no TeX or Poppler. Explicit `paper` tasks require `latexmk` and `pdffonts` on PATH. Install a [TeX distribution](https://tug.org/texlive/) with XeLaTeX and bibliography tools, and [Poppler](https://poppler.freedesktop.org/). The bundled NeurIPS preprint style needs its LaTeX dependencies, including T1 fonts and courier. Chinese prose uses ctex and Fandol fonts.
 
 ```bash
-xelatex --version
-bibtex --version
+latexmk -v
 pdffonts -v
 ```
 
@@ -108,7 +107,7 @@ pace doctor --pdf
 ```
 
 This compiles a small document with formulas, cross-references and a bibliography,
-then inspects its fonts. Its several LaTeX/BibTeX passes may take a few minutes.
+then inspects its fonts. The compiler passes managed by latexmk may take a few minutes.
 
 An empty problem list is expected before your first run. Proceed to the example after the environment checks pass.
 
@@ -133,7 +132,7 @@ From the repository root, follow the [quickstart example](../examples/quickstart
 | Transient service retries exhausted | Resolve the service or connection issue, confirm the previous process has stopped, then [resume the saved turn](user-guide.md#resume-an-interrupted-turn) in the same directory. |
 | Initial Orientation/setup failed | Correct the environment or service problem, then use `resume` in the same directory. Committed initialization results are reused. A changed problem statement requires a new turn or problem ID. |
 | Problem directory already exists | Use `continue` for a new turn or `resume` for an unfinished turn, or choose a new problem ID. |
-| Paper build is `FAILED` or `UNAVAILABLE` | Read `build.json` and `build.log`; verify `xelatex`, `bibtex`, `pdffonts`, fonts and required packages, then resume the paper task. |
+| Paper build is `FAILED` or `UNAVAILABLE` | Read `build.json` and `build.log`. Verify `latexmk`, `pdffonts`, fonts and required TeX packages, then resume the paper task. |
 | Tool versions pass but `doctor --pdf` fails | Repair the TeX installation and required packages, then rerun the compilation check. Base classes, styles and fonts must be readable local files; cloud placeholders or an incomplete distribution can pass a version check and still fail compilation. |
 | Missing prompt/Skill after packaging | From a complete source directory, run `python -m pip install --force-reinstall .`; installed resources belong under `pace/resources/`. |
 

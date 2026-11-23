@@ -88,7 +88,7 @@ finding 编号表示一项持续完善的数学结果。核验完整稿件后，
 
 ### 1. 安装 PACE
 
-需要 **Python 3.11+**，以及能访问所选模型的 **Codex CLI** 或 [Chat Completions API](docs/configuration.md#chat-completions-api)。安装时会自动安装用于读取 PDF 文献的 `pypdf`；使用 Codex 时需单独安装 Codex CLI。下方 proof 模式示例无需 TeX 或 Poppler；显式请求论文交付时还需要 `xelatex`、BibTeX 和 `pdffonts`，详见 [PDF 工具安装](docs/installation.md#paper-pdf-tools)。
+需要 **Python 3.11+**，以及能访问所选模型的 **Codex CLI** 或 [Chat Completions API](docs/configuration.md#chat-completions-api)。安装时会自动安装用于读取 PDF 文献的 `pypdf`。使用 Codex 时需单独安装 Codex CLI。显式请求论文交付时还需要 `latexmk`、支持 XeLaTeX 的 TeX 发行版和 `pdffonts`，详见 [PDF 工具安装](docs/installation.md#paper-pdf-tools)。
 
 以下命令使用 Bash。当前在 macOS/Linux 上运行，Windows 用户请使用 WSL，详见[环境要求](docs/installation.md#requirements)。
 
@@ -129,7 +129,7 @@ PACE 使用 `--dangerously-bypass-approvals-and-sandbox` 调用 Codex 执行无�
 
 ### 3. 为按需论文写作准备 PDF 工具
 
-显式请求论文时，需安装提供 `xelatex`、`bibtex` 和 `pdffonts` 的 TeX 发行版与 Poppler，详见 [PDF 工具安装说明](docs/installation.md#paper-pdf-tools)。下方 proof 模式示例可跳过这一步；若之后为 proof 模式显式请求完整文稿，也需要这些工具。
+显式请求论文时，需安装 `latexmk`、支持 XeLaTeX 的 TeX 发行版和 Poppler，详见 [PDF 工具安装说明](docs/installation.md#paper-pdf-tools)。下方 proof 模式示例可跳过这一步。
 
 ### 4. 检查运行环境
 
