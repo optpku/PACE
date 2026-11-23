@@ -59,7 +59,7 @@ class TransportSuccess:
     text: str
     invocation_id: str
     call_name: str
-    exit_code: int
+    exit_code: int | None
     terminal_event_type: str
     accepted_output_source: str
     output_schema_valid: bool | None
@@ -711,6 +711,116 @@ class CodexLLM:
             return result
         raise AssertionError("transport retry loop terminated without a result")
 
+def recover_pending_completion(root, *, prompt, call_name, role, input_refs, metadata, output_schema):
+    """Reuse a completed Codex response when its Host died before semantic acceptance."""
+    from pace.runtime.output.workspace import path_has_symlink_component, stage_ref
+
+    root = Path(root).resolve()
+    meta = metadata or {}
+    owner = meta.get("stage_ref") or stage_ref(int(meta.get("round_index", 0) or 0), workdir=root)
+    events = read_events(root)
+    for event in reversed(events):
+        if (event["event_kind"] != "SEMANTIC_CALL_STARTED"
+                or event.get("role") != role or event.get("call_name") != call_name):
+            continue
+        ref = event.get("call_ref", "")
+        path = root / ref
+        if not path.is_relative_to(root) or ".." in path.parts or path_has_symlink_component(root, path):
+            return None
+        record = json.loads(path.read_text())
+        if record.get("stage_ref") != owner:
+            continue
+        # Only this latest invocation may resume; never bypass a later rejection.
+        expected = {key: str(meta.get(key) or "") for key in
+                    ("task_id", "parent_task_id", "target_contract_id", "parent_call_id")}
+        if (record.get("status") != "STARTED"
+                or any(record.get(key, "") != value for key, value in expected.items())
+                or record.get("input_refs") != list(dict.fromkeys(input_refs))
+                or record.get("archive_refs", []) != list(dict.fromkeys(meta.get("archive_refs", ())))):
+            return None
+        directory = path.parent
+        if (directory / "prompt.md").read_text() != prompt:
+            return None
+        schema = directory / "output_schema.json"
+        if not schema.is_file() or json.loads(schema.read_text()) != output_schema:
+            return None
+        manifest_path = directory / "protected_inputs/manifest.json"
+        if not manifest_path.is_file():
+            return None
+        manifest = json.loads(manifest_path.read_text())
+        if manifest.get("status") != "CLOSED" or manifest.get("restored_paths"):
+            return None
+        protected = set()
+        for row in manifest["entries"]:
+            original = Path(row["path"])
+            snapshot = manifest_path.parent / row["snapshot"]
+            if (not original.is_relative_to(root) or ".." in original.parts
+                    or path_has_symlink_component(root, original)
+                    or not snapshot.is_relative_to(manifest_path.parent) or ".." in snapshot.parts
+                    or path_has_symlink_component(root, snapshot)
+                    or not original.is_file() or not snapshot.is_file()
+                    or original.read_bytes() != snapshot.read_bytes()):
+                return None
+            protected.add(original.relative_to(root).as_posix())
+        if not protected.issuperset((*input_refs, record["prompt_ref"])):
+            return None
+        started = next((e for e in reversed(events)
+                        if e["event_kind"] == "TRANSPORT_ATTEMPT_STARTED"
+                        and e.get("call_id") == record["call_id"]), None)
+        if started is None:
+            return None
+        attempt_index = started["attempt_index"]
+        attempt = directory / "attempts" / f"{attempt_index:04d}"
+        if path_has_symlink_component(root, attempt):
+            return None
+        stdout = attempt / "stdout.jsonl"
+        if not stdout.is_file() or path_has_symlink_component(root, stdout):
+            return None
+        text = stdout.read_text()
+        timeline = reduce_codex_event_timeline(text)
+        if not timeline.terminal_success or timeline.invalid_jsonl_line_count:
+            return None
+        response = attempt / "response.txt"
+        if path_has_symlink_component(root, response):
+            return None
+        output = timeline.assistant_message.strip()
+        if response.is_file() and response.read_text().strip() != output:
+            return None
+        result = decide_transport_outcome(
+            completed=subprocess.CompletedProcess([], None, stdout=text, stderr=""),
+            timeline=timeline, current_output_text=output,
+            current_output_source="stdout.jsonl:agent_message",
+            output_schema=output_schema, invocation_id=started["invocation_id"],
+            call_name=call_name, attempt_count=attempt_index, artifact_dir=attempt,
+        )
+        if not isinstance(result, TransportSuccess):
+            return None
+        import hashlib
+
+        result = replace(result, authority_evidence={
+            **result.authority_evidence,
+            "recovered_after_host_exit": True,
+            "original_stdout_sha256": hashlib.sha256(stdout.read_bytes()).hexdigest(),
+            "os_exit_code_observed": False,
+        })
+        if not response.exists():
+            _write_text_atomic(response, output)
+        if record.get("agent_home"):
+            from pace.runtime.agent_environment import record_native_session
+
+            record_native_session(home=Path(record["agent_home"]), role=role,
+                                  stdout_path=stdout, record_path=path)
+        _write_transport_result(attempt, result, model="", reasoning_effort="")
+        record_transport_attempt_finished(root, result, call_id=record["call_id"], role=role,
+                                          stage=call_name, attempt_index=attempt_index)
+        append_event(root, "TRANSPORT_RESULT_RECOVERED", call_id=record["call_id"],
+                     role=role, stage=call_name, invocation_id=result.invocation_id,
+                     call_ref=ref, response_ref=response.relative_to(root).as_posix(),
+                     reason="completed response reused after an unobserved Host exit; semantic validation follows")
+        return record["call_id"], ref, result
+    return None
+
+
 def _record_call_interruption(
     root: Path,
     context: dict[str, Any],
@@ -1004,7 +1114,7 @@ def decide_transport_outcome(
         "timed out negotiating with the code-mode host"
         in (completed.stderr or "").lower()
     )
-    if completed.returncode != 0:
+    if completed.returncode is not None and completed.returncode != 0:
         warnings = warnings + (
             {
                 "warning_class": "PROCESS_EXIT_AFTER_TERMINAL_SUCCESS",

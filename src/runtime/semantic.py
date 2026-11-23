@@ -357,11 +357,16 @@ def _semantic_call_once(
         TransportFailure,
     )
     from pace.runtime.structured_output import complete_structured_result
+    from pace.runtime.llm import recover_pending_completion
 
     root = Path(workdir)
     allowed_inputs = tuple(str(item) for item in input_refs)
-    call_id = uuid.uuid4().hex
-    call_ref = begin_call(
+    recovered = recover_pending_completion(
+        root, prompt=prompt, call_name=call_name, role=spec.role,
+        input_refs=allowed_inputs, metadata=host_metadata, output_schema=spec.semantic_schema,
+    )
+    call_id = recovered[0] if recovered else uuid.uuid4().hex
+    call_ref = recovered[1] if recovered else begin_call(
         root,
         call_id=call_id,
         role=spec.role,
@@ -371,29 +376,30 @@ def _semantic_call_once(
         metadata=host_metadata,
     )
     initialize_events(root)
-    append_event(
-        root,
-        "SEMANTIC_CALL_STARTED",
-        call_id=call_id,
-        call_name=call_name,
-        role=spec.role,
-        stage=call_name,
-        call_ref=call_ref,
-        prompt_bytes=len(prompt.encode("utf-8")),
-        suggested_input_bytes=sum(
-            (root / ref).stat().st_size
-            for ref in allowed_inputs
-            if (root / ref).is_file()
-        ),
-        task_id=str((host_metadata or {}).get("task_id") or ""),
-        parent_task_id=str((host_metadata or {}).get("parent_task_id") or ""),
-    )
+    if not recovered:
+        append_event(
+            root,
+            "SEMANTIC_CALL_STARTED",
+            call_id=call_id,
+            call_name=call_name,
+            role=spec.role,
+            stage=call_name,
+            call_ref=call_ref,
+            prompt_bytes=len(prompt.encode("utf-8")),
+            suggested_input_bytes=sum(
+                (root / ref).stat().st_size
+                for ref in allowed_inputs
+                if (root / ref).is_file()
+            ),
+            task_id=str((host_metadata or {}).get("task_id") or ""),
+            parent_task_id=str((host_metadata or {}).get("parent_task_id") or ""),
+        )
     trace_dir = call_directory(root, call_ref)
     diagnostics: list[dict[str, Any]] = []
     invocation_ids: list[str] = []
     payload: dict[str, Any] = {}
     acceptance_failed = False
-    transport = complete_structured_result(
+    transport = recovered[2] if recovered else complete_structured_result(
         llm,
         str(prompt or ""),
         workdir=root,
