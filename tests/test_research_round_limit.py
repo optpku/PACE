@@ -51,6 +51,205 @@ class RoundLimitTransport(ProofPublicationTransport):
                            ledger_context=ledger_context, structured=True)
 
 
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_cli_whole_acceptance_delivers_without_six_optional_application_reviews(
+    tmp_path, monkeypatch, interrupted
+):
+    from pace.agents.director.findings import pending_finding_checks
+
+    scopes = ["target", *(f"lemma-{i}" for i in range(1, 6))]
+
+    class ManuscriptTransport(RoundLimitTransport):
+        def __init__(self):
+            super().__init__("prover")
+            self.publication = {"action": "CREATE"}
+            self.interrupt = interrupted
+
+        def complete_structured_result(
+            self, prompt, *, workdir, call_name, ledger_context, **kwargs
+        ):
+            root = Path(workdir)
+            if call_name.startswith("global_research_director_"):
+                planner = call_name.endswith("0001")
+                payload = {
+                    "action": "DISPATCH",
+                    "agent_id": "planner" if planner else "prover",
+                    "prompt_brief": "CREATE_ROUTE for the equality."
+                    if planner
+                    else "ASSEMBLE_CANDIDATE for every requested scope.",
+                    "input_refs": [work_ref(root, "input/problem.md")],
+                    "obligation_ids": ["target"] if planner else scopes,
+                    "branch_id": "b-target",
+                    "archive_refs": [],
+                    "change_refs": [],
+                    "next_step_kind": "INITIAL_PLAN" if planner else "CONTINUE",
+                }
+                return self._reply(
+                    json.dumps(payload),
+                    workdir=root,
+                    call_name=call_name,
+                    ledger_context=ledger_context,
+                    structured=True,
+                )
+            if call_name.startswith("research_reporter_"):
+                request_ref = next(
+                    ref
+                    for ref in ledger_context["input_refs"]
+                    if ref.endswith("/reporter_request.json")
+                )
+                request = json.loads((root / request_ref).read_text())
+                candidate = request["candidate_ref"]
+                payload = {
+                    "summary": "One original candidate supplies all six proposed applications.",
+                    "delta": {
+                        "schema_version": "research_delta/v1",
+                        "obligation_ids": scopes,
+                        "branch_id": request["branch_id"],
+                        "change_ref": candidate,
+                        "applications": [
+                            {
+                                "id": ident,
+                                "obligation_id": ident,
+                                "argument_ref": candidate,
+                                "premise_refs": [],
+                            }
+                            for ident in scopes
+                        ],
+                        "attempt": {
+                            "outcome": "APPLICATION_PROPOSED",
+                            "obstacle_ref": "",
+                            "reopen_condition_ref": "",
+                        },
+                    },
+                }
+                return self._reply(
+                    json.dumps(payload),
+                    workdir=root,
+                    call_name=call_name,
+                    ledger_context=ledger_context,
+                    structured=True,
+                )
+            if "proof_contract_auditor" in call_name and self.interrupt:
+                self.interrupt = False
+                raise KeyboardInterrupt
+            return super().complete_structured_result(
+                prompt,
+                workdir=root,
+                call_name=call_name,
+                ledger_context=ledger_context,
+                **kwargs,
+            )
+
+        def complete_unstructured_result(
+            self, prompt, *, workdir, call_name, ledger_context
+        ):
+            if call_name.startswith("director_led_planner_"):
+                output = (
+                    Path(workdir)
+                    / re.search(r"## Deliverable\nWrite `([^`]+)`", prompt)[1]
+                )
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_text(
+                    "# Route\n\nEvery scope asks for the literal equality 2+2=4."
+                )
+                ref = output.relative_to(workdir).as_posix()
+                output.with_name("route_relations.json").write_text(
+                    json.dumps(
+                        {
+                            "schema_version": "route_relations/v1",
+                            "change_ref": ref,
+                            "obligations": [
+                                {
+                                    "id": ident,
+                                    "kind": "ROUTE_SUFFICIENT",
+                                    "statement_ref": ref,
+                                    "scope_ref": ref,
+                                    "parent_ids": ["target"],
+                                    "branch_id": "b-target",
+                                    "premise_groups": [],
+                                }
+                                for ident in scopes[1:]
+                            ],
+                        }
+                    )
+                )
+                return self._reply(
+                    "Submitted the route.",
+                    workdir=workdir,
+                    call_name=call_name,
+                    ledger_context=ledger_context,
+                    structured=False,
+                )
+            result = super().complete_unstructured_result(
+                prompt,
+                workdir=workdir,
+                call_name=call_name,
+                ledger_context=ledger_context,
+            )
+            extra = Path(workdir) / work_ref(workdir, "round2/findings/optional.md")
+            extra.parent.mkdir(exist_ok=True)
+            extra.write_text(
+                "An optional auxiliary manuscript, not independently checked."
+            )
+            return result
+
+    transport = ManuscriptTransport()
+    monkeypatch.setattr("pace.agents.director.harness.build_llm", lambda **_: transport)
+    monkeypatch.setattr(
+        "pace.agents.director.findings.verify_finding",
+        lambda **_: pytest.fail(
+            "whole-target acceptance must not schedule optional reviews"
+        ),
+    )
+    problem = tmp_path / "problem.md"
+    problem.write_text("Prove 2+2=4.\n")
+    root = tmp_path / "whole"
+    assert cli.main(
+        [
+            "run",
+            "--problem",
+            str(problem),
+            "--problem-id",
+            root.name,
+            "--output",
+            str(tmp_path),
+            "--max-rounds",
+            "2",
+            "--json",
+        ]
+    ) == (130 if interrupted else 0)
+    if interrupted:
+        assert cli.main(["resume", "--run-dir", str(root), "--json"]) == 0
+    report = json.loads((root / work_ref(root, "final_report.json")).read_text())
+    assert report["result"] == "PASS" and report["run_status"] == "completed"
+    index = json.loads((root / "memory/research_index.json").read_text())
+    assert len(index["applications"]) == 6
+    assert index["obligations"]["target"]["status"] == "CLOSED"
+    assert all(index["obligations"][ident]["status"] == "OPEN" for ident in scopes[1:])
+    assert (
+        next(
+            app
+            for app in index["applications"].values()
+            if app["obligation_id"] == "target"
+        )["status"]
+        == "REVIEWED_AS_WHOLE"
+    )
+    assert not pending_finding_checks(root)
+    publications = json.loads((root / "work/state/findings.json").read_text())[
+        "publications"
+    ]
+    assert (
+        len(publications) == 1
+        and publications[0]["source_ref"] == report["artifact_refs"]["proof"]
+    )
+    assert not (
+        root / work_ref(root, "round2/findings/optional.verification.json")
+    ).exists()
+    calls = list(transport.calls)
+    assert cli.main(["resume", "--run-dir", str(root), "--json"]) == 0
+    assert transport.calls == calls
+
+
 def test_cli_stops_uncharged_research_and_saves_limits_per_turn(tmp_path, monkeypatch, capsys):
     transport = RoundLimitTransport()
     monkeypatch.setattr("pace.agents.director.harness.build_llm", lambda **settings: transport)
@@ -174,102 +373,7 @@ def test_failed_binding_after_kernel_pass_preserves_only_local_diagnostics(tmp_p
     assert transport.calls == calls
 
 
-@pytest.mark.parametrize("interrupted", [False, True])
-def test_whole_candidate_root_is_not_reviewed_again_but_other_argument_is(
-    tmp_path, monkeypatch, interrupted
-):
-    from pace.agents.director.findings import pending_finding_checks
-    from pace.runtime.semantic import StructuredSemanticResult
 
-    class WholeCandidateTransport(RoundLimitTransport):
-        def __init__(self):
-            super().__init__("prover")
-            self.interrupt = interrupted
-
-        def complete_unstructured_result(self, prompt, *, workdir, call_name, ledger_context):
-            result = super().complete_unstructured_result(
-                prompt, workdir=workdir, call_name=call_name, ledger_context=ledger_context)
-            folder = Path(workdir) / work_ref(workdir, "round1/findings")
-            folder.mkdir(exist_ok=True)
-            (folder / "alternate.md").write_text("A separate proof of the original equality.")
-            return result
-
-        def complete_structured_result(self, prompt, *, workdir, call_name, ledger_context, **kwargs):
-            if call_name.startswith("research_reporter_"):
-                root = Path(workdir)
-                request_ref = next(ref for ref in ledger_context["input_refs"]
-                                   if ref.endswith("/reporter_request.json"))
-                request = json.loads((root / request_ref).read_text())
-                originals = request["original_refs"]
-                candidate = next(ref for ref in originals if ref.endswith("/candidate_proof.md"))
-                alternate = next(ref for ref in originals if ref.endswith("/alternate.md"))
-                payload = {"summary": "There are two arguments for the original target.",
-                    "delta": {"schema_version": "research_delta/v1", "obligation_ids": request["obligation_ids"],
-                        "branch_id": request["branch_id"], "change_ref": candidate, "applications": [
-                            {"id": label, "obligation_id": "target", "argument_ref": argument, "premise_refs": []}
-                            for label, argument in (("whole", candidate), ("alternate", alternate))],
-                        "attempt": {"outcome": "APPLICATION_PROPOSED", "obstacle_ref": "",
-                                    "reopen_condition_ref": ""}}}
-                return self._reply(json.dumps(payload), workdir=root, call_name=call_name,
-                                   ledger_context=ledger_context, structured=True)
-            if "proof_contract_auditor" in call_name and self.interrupt:
-                self.interrupt = False
-                raise KeyboardInterrupt
-            return super().complete_structured_result(prompt, workdir=workdir, call_name=call_name,
-                                                      ledger_context=ledger_context, **kwargs)
-
-    app_calls = []
-    draft_calls = []
-    review_phases = []
-    def verify_application(**kwargs):
-        state_path = kwargs["workdir"] / work_ref(kwargs["workdir"], "state/director_state.json")
-        review_phases.append(json.loads(state_path.read_text())["phase"])
-        request = kwargs.get("application_request")
-        if request is None:
-            draft_calls.append(kwargs["draft_ref"])
-            assert kwargs["draft_ref"].endswith("/alternate.md")
-            return StructuredSemanticResult({"stage_status": "MATH_FAIL", "reuse_authorized": False,
-                                             "publication": {"action": "NONE"}}, {})
-        assert request["argument_ref"].endswith("/alternate.md")
-        app_calls.append(request["argument_ref"])
-        (kwargs["workdir"] / request["review_ref"]).write_text("Independent review of the separate argument.")
-        return StructuredSemanticResult({"stage_status": "MATH_FAIL", "reuse_authorized": False,
-            "application_checks": [{"obligation_id": request["obligation_id"],
-                                    "obligation_version": request["obligation_version"],
-                                    "review_ref": request["review_ref"], "status": "NOT_ESTABLISHED"}]}, {})
-
-    transport = WholeCandidateTransport()
-    monkeypatch.setattr("pace.agents.director.harness.build_llm", lambda **settings: transport)
-    monkeypatch.setattr("pace.agents.director.findings.verify_finding", verify_application)
-    problem = tmp_path / "problem.md"
-    problem.write_text("Prove 2+2=4.\n")
-    code = cli.main(["run", "--problem", str(problem), "--problem-id", "whole",
-                     "--output", str(tmp_path), "--max-rounds", "1", "--json"])
-    root = tmp_path / "whole"
-    turn = root / "work/turn001"
-    if interrupted:
-        assert code == 130
-        assert json.loads((turn / "state/director_state.json").read_text())["phase"] == "VERIFY"
-        assert not app_calls
-        code = cli.main(["resume", "--run-dir", str(root), "--json"])
-    assert code == 0
-    assert json.loads((turn / "final_report.json").read_text())["result"] == "PASS"
-    index = json.loads((root / "memory/research_index.json").read_text())
-    assert index["obligations"]["target"]["status"] == "OPEN"
-    whole = next(app for app in index["applications"].values() if app["argument_ref"].endswith("/candidate_proof.md"))
-    assert whole["status"] == "REVIEWED_AS_WHOLE"
-    assert (root / whole["whole_verification_ref"]).is_file()
-    assert review_phases == ["FINALIZE"] and not draft_calls
-    assert len(app_calls) == 1 and not pending_finding_checks(root)
-    assert transport.calls.count("director_led_prover_01") == 1
-    assert transport.calls.count("research_reporter_round1") == 1
-    assert len([call for call in transport.calls if "proof_contract_auditor" in call]) == 1
-    assert len([call for call in transport.calls if call.startswith("math_verifier_kernel_")]) == 1
-    assert cli.main(["resume", "--run-dir", str(root), "--json"]) == 0
-    assert len(app_calls) == 1 and not (root / "work/turn002").exists()
-
-
-@pytest.mark.parametrize("relabel", [False, True])
 def test_false_budget_stop_is_reconsidered_before_host_commits(tmp_path, monkeypatch, relabel):
     class FalseBudgetTransport(RoundLimitTransport):
         def complete_structured_result(self, prompt, *, workdir, call_name, ledger_context, **kwargs):

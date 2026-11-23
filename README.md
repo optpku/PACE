@@ -76,6 +76,15 @@ When `--mode` is omitted, the first target-location call selects `proof` only fo
 5. **Report and continue.** Checked findings update progress as the research proceeds. Explicit writing tasks produce a research-report outline and report, or an independent paper outline and LaTeX/PDF paper from saved evidence. The Web application owns user updates, reader briefs and downloads. [Resume](docs/user-guide.md#resume-an-interrupted-turn) continues unfinished stages while reusing completed work; [continue](docs/user-guide.md#continue-with-a-new-question) starts a new turn with prior findings.
 
 A finding identifier names a mathematical result that can be improved over time.
+
+Applications of the same immutable manuscript to the current target share one
+review, with a separate decision for each obligation and one publication decision.
+Reporter nominates original research manuscripts through `finding_refs` in its
+existing receipt. This nomination requests review and grants no approval.
+The Prover candidate remains the single original; Reporter applications reference
+that candidate rather than a duplicate finding draft. Once whole-target review
+passes, delivery follows the Kernel's publication decision. Optional route nodes
+retain their own review status and do not delay delivery or inherit approval.
 After checking the complete manuscript, the verifier explicitly chooses CREATE,
 UPDATE of an existing R entry, or NONE for supporting work and report assembly.
 An update replaces the current reading file while preserving every fixed work

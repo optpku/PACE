@@ -72,7 +72,9 @@ def verify_finding(
             **(
                 {
                     "purpose": "APPLICATION",
-                    "application_key": request["application_key"],
+                    "application_keys": [
+                        item["application_key"] for item in request["applications"]
+                    ],
                 }
                 if request
                 else {}
@@ -84,6 +86,7 @@ def verify_finding(
 def _finding_receipt_schema(request=None):
     check = open_object(
         {
+            "application_key": {"type": "string"},
             "obligation_id": {"type": "string"},
             "obligation_version": {"type": "string"},
             "status": {"type": "string", "enum": ["APPLICABLE", "NOT_ESTABLISHED"]},
@@ -93,7 +96,8 @@ def _finding_receipt_schema(request=None):
     check["required"] = list(check["properties"])
     checks = array_of(check)
     if request:
-        checks.update(minItems=1, maxItems=1)
+        count = len(request["applications"])
+        checks.update(minItems=count, maxItems=count)
     schema = open_object(
         {
             "stage_status": {
@@ -119,27 +123,48 @@ def validate_finding_application(payload, request, workdir):
     errors = _validate_finding_receipt(payload)
     if not request:
         return errors
-    checks = payload.get("application_checks")
-    if (
-        not isinstance(checks, list)
-        or len(checks) != 1
-        or not isinstance(checks[0], dict)
-        or checks[0].get("obligation_id") != request["obligation_id"]
-        or checks[0].get("obligation_version") != request["obligation_version"]
-        or checks[0].get("status") not in {"APPLICABLE", "NOT_ESTABLISHED"}
-        or checks[0].get("review_ref") != request["review_ref"]
-        or (
-            checks[0].get("status") == "APPLICABLE"
-            and (
-                payload.get("stage_status") != "PASS"
-                or payload.get("reuse_authorized") is not True
+    checks = payload.get("application_checks", [])
+    expected = {item["application_key"]: item for item in request["applications"]}
+    seen = set()
+    valid = isinstance(checks, list)
+    for check in checks if valid else ():
+        if not isinstance(check, dict):
+            valid = False
+            break
+        key = check.get("application_key")
+        item = expected.get(key)
+        if (
+            item is None
+            or key in seen
+            or check.get("obligation_id") != item["obligation_id"]
+            or check.get("obligation_version") != item["obligation_version"]
+            or check.get("status") not in {"APPLICABLE", "NOT_ESTABLISHED"}
+            or check.get("review_ref") != request["review_ref"]
+            or (
+                check.get("status") == "APPLICABLE"
+                and (
+                    payload.get("stage_status") != "PASS"
+                    or payload.get("reuse_authorized") is not True
+                )
             )
-        )
-    ):
+        ):
+            valid = False
+        seen.add(key)
+    if not valid or seen != set(expected):
         errors.append(
             {
                 "reason_code": "invalid_application_review",
                 "json_pointer": "/application_checks",
+            }
+        )
+    if (
+        not request["publication_requested"]
+        and _as_dict(payload.get("publication")).get("action") != "NONE"
+    ):
+        errors.append(
+            {
+                "reason_code": "application_only_publication",
+                "json_pointer": "/publication",
             }
         )
     from pace.contracts.research.memory import public_file

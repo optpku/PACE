@@ -14,6 +14,7 @@ from pace.contracts.research.memory import (
     check_binding,
     check_source_ownership,
     digest,
+    load_application_review,
     public_file,
     read_json,
 )
@@ -199,10 +200,9 @@ def freeze_context(root: Path, assignment_ref: str, decision, input_refs) -> dic
         if current and app["status"] != "INVALIDATED":
             if app["status"] == "APPLICABLE":
                 expected = application_review_bindings(app)
-                review = read_json(root, app["review_ref"])
+                review = load_application_review(root, app)
                 if (
-                    review["application_key"] != app["application_key"]
-                    or review["bindings"] != expected
+                    review is None
                     or not application_is_approved(app, review)
                     or (
                         app.get("review_text_ref")

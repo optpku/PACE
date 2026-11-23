@@ -1,2 +1,2 @@
 
-Independent application review: {{value_1}}
+Independent manuscript review with separately bound applications: {{value_1}}

@@ -372,6 +372,48 @@ def test_proof_reporter_does_not_create_unconsumed_application_queue(ws):
     assert len(llm.calls)==2
 
 
+def test_prover_reporter_repairs_a_duplicate_manuscript_reference(ws, monkeypatch):
+    use_reporter(ws)
+    ref = deliver(ws, 1, agent="prover")
+    candidate = str(Path(ref).with_name("research.md"))
+    duplicate = str(Path(ref).parent / "findings/copy.md")
+    ws.write_text(duplicate, ws.path(candidate).read_text())
+    result = json.loads(ws.path(ref).read_text())
+    ws.write_json(ref, {**result, "published_refs": [duplicate]})
+    llm = NativeFixture("research")
+    original_request = llm._request
+    proposed = {}
+
+    def reply(messages, tools):
+        response = original_request(messages, tools)
+        if not llm.calls[-1].endswith("_receipt_correction"):
+            function = response["choices"][0]["message"]["tool_calls"][0]["function"]
+            payload = json.loads(function["arguments"])
+            payload["delta"]["change_ref"] = duplicate
+            payload["delta"]["applications"] = [
+                {
+                    "id": "same-proof",
+                    "obligation_id": "target",
+                    "argument_ref": duplicate,
+                    "premise_refs": [],
+                }
+            ]
+            proposed.update(payload)
+            function["arguments"] = json.dumps(payload)
+            return response
+        payload = json.loads(json.dumps(proposed))
+        payload["delta"]["change_ref"] = candidate
+        payload["delta"]["applications"][0]["argument_ref"] = candidate
+        return NativeFixture.tool("submit_result", payload)
+
+    monkeypatch.setattr(llm, "_request", reply)
+    saved = run_research_reporter(llm=llm, workdir=ws.root, result_ref=ref)
+    assert len(llm.calls) == 2
+    assert saved["payload"]["delta"]["change_ref"] == candidate
+    assert saved["payload"]["delta"]["applications"][0]["argument_ref"] == candidate
+    assert saved["payload"]["summary"] == proposed["summary"]
+
+
 def test_all_annotated_references_repaired_once_with_frozen_meaning(ws, monkeypatch):
     use_reporter(ws); ref = deliver(ws, 1)
     llm = NativeFixture('research'); original_request = llm._request

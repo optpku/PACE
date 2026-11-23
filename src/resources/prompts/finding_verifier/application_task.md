@@ -1,2 +1,18 @@
 
-Check the exact premise versions, hypotheses, quantifiers and connecting argument against only the requested obligation. A request may cover multiple derivations in the same manuscript for this obligation. Review them together, state which derivations and premises actually support the obligation, and keep distinct scopes explicit. Return application_checks with exactly one entry containing obligation_id, obligation_version, status (APPLICABLE or NOT_ESTABLISHED), and review_ref. Write the detailed review to the assigned review_ref. PASS and reuse_authorized=true are required for APPLICABLE. publication.action=NONE is valid; do not create a new finding merely to authorize an application. Rejecting an application does not refute its premise theorem.
+Read the manuscript once and review all entries in applications together. For
+each entry, check its own bound premises, hypotheses, quantifiers and connecting
+argument. Keep the scopes separate: another application's premises do not
+silently establish this one. Return application_checks with exactly one entry
+per requested application_key, including that key, obligation_id,
+obligation_version, status (APPLICABLE or NOT_ESTABLISHED), and the shared
+review_ref. Write one detailed review to that review_ref with a separate
+explanation for each scope. A failed application does not invalidate a valid
+manuscript or another valid application. APPLICABLE requires stage_status=PASS
+and reuse_authorized=true.
+
+When publication_requested is true, decide CREATE, UPDATE or NONE once for the
+complete manuscript. Otherwise return publication.action=NONE; this call checks
+applications and does not reconsider the findings catalog. If an earlier finding
+review is supplied, retain its checked statement and assumptions, then examine
+the new applications. A prior PASS never establishes a new application by itself.
+Do not create a new manuscript or new mathematics during verification.

@@ -43,14 +43,17 @@ def reporter_schema(request=None):
         return field
 
     originals = (request or {}).get("original_refs", [])
+    arguments = (
+        [request["candidate_ref"]]
+        if request is not None and request.get("candidate_ref")
+        else [r for r in originals if Path(r).suffix == ".md"]
+    )
     dependencies = [row["ref"] for row in (request or {}).get("bindings", [])]
     application = closed_object(
         {
             "id": text,
             "obligation_id": text,
-            "argument_ref": reference(
-                [r for r in originals if Path(r).suffix == ".md"]
-            ),
+            "argument_ref": reference(arguments),
             "premise_refs": {"type": "array", "items": reference(dependencies)},
         }
     )
@@ -72,7 +75,15 @@ def reporter_schema(request=None):
     )
     if request is not None and not any(Path(r).suffix == ".md" for r in originals):
         delta["properties"]["applications"]["maxItems"] = 0
-    return closed_object({"summary": text, "delta": delta})
+    findings = {"type": "array", "items": reference(originals)}
+    if request and (
+        request.get("candidate_ref") or request.get("execution_mode") == "proof"
+    ):
+        findings["maxItems"] = 0
+    schema = closed_object({"summary": text, "delta": delta, "finding_refs": findings})
+    # Nomination is optional when this handoff has no standalone result.
+    schema["required"].remove("finding_refs")
+    return schema
 
 
 def _saved_response(root, folder):
@@ -119,6 +130,7 @@ def _without_references(payload):
                 "premise_refs",
                 "obstacle_ref",
                 "reopen_condition_ref",
+                "finding_refs",
             }
         }
     if isinstance(payload, list):
@@ -221,6 +233,9 @@ def run_research_reporter(*, llm, workdir: Path, result_ref: str) -> dict | None
             {
                 "schema_version": "research_reporter_request/v1",
                 "result_ref": result_ref,
+                "candidate_ref": result["deliverable_ref"]
+                if result["agent_id"] == "prover"
+                else "",
                 "execution_mode": read_json(
                     root, work_ref(root, "state/research_execution_policy.json")
                 ).get("mode", "research"),
@@ -289,6 +304,23 @@ def run_research_reporter(*, llm, workdir: Path, result_ref: str) -> dict | None
                 raise ValueError(
                     "change_ref must identify an original mathematical handoff"
                 )
+            if request["candidate_ref"] and (
+                delta["change_ref"] != request["candidate_ref"]
+                or any(
+                    app["argument_ref"] != request["candidate_ref"]
+                    for app in delta["applications"]
+                )
+            ):
+                raise ValueError(
+                    "Prover change_ref and application arguments must reference the single complete candidate"
+                )
+            if any(
+                ref not in request["original_refs"] or Path(ref).suffix != ".md"
+                for ref in payload.get("finding_refs", ())
+            ):
+                raise ValueError(
+                    "finding_refs must nominate complete original mathematical manuscripts"
+                )
             # Reporter must not supply an application proof in its own summary or a control file.
             for app in delta["applications"]:
                 if (
@@ -318,6 +350,7 @@ def run_research_reporter(*, llm, workdir: Path, result_ref: str) -> dict | None
             delta["attempt"]["obstacle_ref"],
             delta["attempt"]["reopen_condition_ref"],
         ]
+        references += payload.get("finding_refs", [])
         for app in delta["applications"]:
             references += [app["argument_ref"], *app["premise_refs"]]
         bindings = [

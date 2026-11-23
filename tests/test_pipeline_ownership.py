@@ -7,68 +7,7 @@ import pytest
 from pace import cli
 from pace.artifacts.workspace import work_ref
 from pace.runtime import prompts
-from test_research_round_limit import RoundLimitTransport
 from test_terminal_result import ResearchTransport
-
-
-def test_shared_publication_pause_preserves_author_and_verified_proof(
-    tmp_path, monkeypatch
-):
-    from pace.orchestrator.results import publish_stage_findings
-
-    transport = RoundLimitTransport("prover")
-    transport.publication = {"action": "CREATE"}
-    monkeypatch.setattr("pace.agents.director.harness.build_llm", lambda **_: transport)
-    publications = []
-
-    def interrupt_once(**kwargs):
-        publications.append(kwargs)
-        if len(publications) == 1:
-            raise OSError("shared publication interrupted")
-        return publish_stage_findings(**kwargs)
-
-    monkeypatch.setattr("pace.pipeline.publish_stage_findings", interrupt_once)
-    problem = tmp_path / "problem.md"
-    problem.write_text("Prove 2+2=4.\n")
-    root = tmp_path / "shared"
-    assert (
-        cli.main(
-            [
-                "run",
-                "--problem",
-                str(problem),
-                "--problem-id",
-                root.name,
-                "--output",
-                str(tmp_path),
-                "--max-rounds",
-                "1",
-                "--json",
-            ]
-        )
-        == 2
-    )
-    final = root / work_ref(root, "final_report.json")
-    report = json.loads(final.read_text())
-    assert report["result"] == "PASS"
-    assert report["run_status"] == "completed_with_operational_error"
-    original = (root / report["artifact_refs"]["proof"]).read_bytes()
-    calls = list(transport.calls)
-
-    for _ in range(2):
-        assert cli.main(["resume", "--run-dir", str(root), "--json"]) == 0
-    report = json.loads(final.read_text())
-    assert report["run_status"] == "completed"
-    assert transport.calls == calls
-    assert (root / report["artifact_refs"]["proof"]).read_bytes() == original
-    assert (
-        len(json.loads((root / "work/state/findings.json").read_text())["publications"])
-        == 1
-    )
-    assert (
-        len(json.loads((root / "memory/research_index.json").read_text())["attempts"])
-        == 1
-    )
 
 
 @pytest.mark.parametrize("requested_mode", [None, "research"])

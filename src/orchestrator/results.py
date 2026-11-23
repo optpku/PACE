@@ -14,6 +14,7 @@ from pace.artifacts.results import (
     FINDINGS_INDEX_REF,
     FINDINGS_STATE_REF,
     _read_state,
+    committed_finding_refs,
     finding_entries,
 )
 from pace.artifacts.results import publish_finding as persist_finding
@@ -113,8 +114,11 @@ def publish_stage_findings(
         ):
             continue
         folder = root / Path(result_ref).parent
-        for draft in sorted((folder / "findings").glob("*.md")):
+        for ref in committed_finding_refs(root, result_ref):
+            draft = root / ref
             receipt = draft.with_suffix(".verification.json")
+            if not receipt.is_file():
+                continue
             record = json.loads(receipt.read_text())
             if record.get("source_binding"):
                 check_binding(root, record["source_binding"])

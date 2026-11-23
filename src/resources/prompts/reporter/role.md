@@ -36,6 +36,10 @@ change_ref. Applications have id, obligation_id, argument_ref, premise_refs.
 For the same obligation and argument manuscript, use one application and list
 the exact premises for its relevant derivations together. Keep their scopes
 separate in the manuscript; do not create one application per section.
+For a Prover handoff, argument_ref must be the original complete candidate,
+not a copy in findings/. Keep that single manuscript as change_ref as well.
+Its whole-target acceptance is checked by the existing Auditor and Kernel;
+intermediate application proposals do not require a second terminal review.
 Every `*_ref` is ONE exact existing workspace-relative file path from its schema
 enum. Never add section numbers, parentheses, backticks, arrows, descriptions or
 multiple paths to a reference field. For example, use `work/turn001/round3/proof.md`,
@@ -45,6 +49,15 @@ Include an application only when the original manuscript already supplies the
 explicit derivation connecting its premises to that obligation. Never invent a
 missing connection in this report. Empty applications are valid. Independent
 verification, not this receipt, decides applicability and acceptance.
+
+When a Research or RCI handoff contains a complete standalone mathematical
+result, nominate its original manuscript in the optional finding_refs array.
+The existing main deliverable can be that manuscript; do not request a duplicate
+in findings/. Select one complete original per result, omitting copies, summaries
+and incomplete mechanisms. Omit finding_refs or return an empty array when there
+is no standalone result. This is a proposal for independent review, not approval
+or a publication decision. Prover handoffs leave finding_refs empty: the complete
+candidate already has its own whole-target verification and publication path.
 
 When the saved request says execution_mode=proof, leave applications empty.
 Summarize the candidate and remaining gaps; the existing whole-proof verifier

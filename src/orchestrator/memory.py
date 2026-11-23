@@ -402,7 +402,7 @@ def commit_research_memory(root: Path, result_refs=None) -> None:
 
 
 def _apply_research_commit(index, record, commit_ref):
-    from pace.contracts.research.memory import application_review_identity, digest
+    from pace.contracts.research.memory import application_review_identity
 
     payload = record["payload"]
     if "route" in payload:
@@ -445,22 +445,13 @@ def _apply_research_commit(index, record, commit_ref):
             }
         )
         applications = index["applications"]
-        legacy_keys = {
-            application_review_identity(app): key
-            for key, app in applications.items()
-            if "proposal_ids" not in app
-        }
         for app in delta["applications"]:
             entry = {
                 **app,
                 "result_ref": record["result_ref"],
                 "target": record["target"],
             }
-            if "proposal_ids" in app:
-                identity = application_review_identity(entry)
-                key = legacy_keys.get(identity, identity)
-            else:
-                key = digest({"target": record["target"], "application": app})
+            key = application_review_identity(entry)
             applications.setdefault(key, {**entry, "application_key": key})
     index["commits"][record["commit_id"]] = commit_ref
 
@@ -580,6 +571,7 @@ def refresh_application_memory(root: Path) -> None:
         application_review_bindings,
         check_binding,
         enabled,
+        load_application_review,
         read_json,
     )
 
@@ -611,23 +603,17 @@ def refresh_application_memory(root: Path) -> None:
             / "verification"
             / f"application-{app['application_key']}.json"
         )
-        if not (root / ref).is_file():
+        try:
+            record = load_application_review(root, app)
+        except (ValueError, OSError):
+            app["status"] = "INVALIDATED"
+            continue
+        if record is None:
             app["status"] = "PROPOSED"
             app.pop("review_ref", None)
             app.pop("review_text_ref", None)
             continue
-        record = read_json(root, ref)
-        if record.get("application_key") != app["application_key"]:
-            raise ValueError("application review binding mismatch")
-        if record["bindings"] != expected:
-            raise ValueError("application review has different dependencies")
-        try:
-            check_binding(root, record["request_binding"])
-            if record.get("review_binding"):
-                check_binding(root, record["review_binding"])
-        except (ValueError, OSError):
-            app["status"] = "INVALIDATED"
-            continue
+        ref = str(read_json(root, ref)["verification_binding"]["ref"])
         verdict = record["verdict"]
         if verdict.get("stage_status") == "VERIFIER_ERROR":
             app.update(status="PROPOSED", review_ref=ref)
@@ -650,7 +636,7 @@ def refresh_application_memory(root: Path) -> None:
             else (
                 "CLOSED"
                 if any(
-                    a["status"] == "APPLICABLE"
+                    a["status"] in {"APPLICABLE", "REVIEWED_AS_WHOLE"}
                     and a["obligation_id"] == obligation["id"]
                     and a["obligation_version"] == obligation["version"]
                     for a in index["applications"].values()

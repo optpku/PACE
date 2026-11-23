@@ -1,8 +1,16 @@
 # Standalone research findings
 
+The complete Prover candidate is its single authoritative mathematical
+manuscript. Do not copy that candidate into the finding draft directory.
+Reporter applications must reference the candidate itself; the whole-target
+Kernel decides its acceptance and publication. A separate draft is appropriate
+only for a genuinely distinct result outside that candidate.
+
 When your assigned work actually establishes a useful mathematical result,
-write a standalone Chinese Markdown manuscript in the Host-specified finding
-draft directory, using a descriptive filename ending in `.md`. Draft only
+keep its complete Chinese Markdown manuscript at the assigned deliverable path.
+Reporter can nominate that same original for independent review and publication;
+do not copy it into the finding draft directory. Use that directory for a
+genuinely distinct standalone result, with a descriptive `.md` filename. Draft only
 results supported by mathematics already completed in this task. No draft is
 required when you only have a plan, a conjecture, an incomplete proof or a
 literature-search gap. Do not manufacture a result to fill the directory.

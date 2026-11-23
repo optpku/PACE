@@ -247,13 +247,15 @@ class DirectorLedEngine(AssignmentExecutor):
             return
         try:
             self._publish_round_progress(state)
+            if state.terminal_result == "PASS":
+                # The accepted literal target and Kernel publication decision own
+                # terminal delivery; optional route certificates stay unauthorised.
+                clear_delivery_pause(self.workdir)
+                return
             if self.review_findings is not None:
                 complete = self.review_findings(
                     workdir=self.workdir,
                     completed_result_refs=state.completed_result_refs,
-                    accepted_candidate_ref=state.candidate_ref
-                    if state.terminal_result == "PASS"
-                    else "",
                     retry_errors=retry_errors,
                 )
                 if not complete:

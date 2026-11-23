@@ -13,6 +13,7 @@ from pace.artifacts.results import (
     FINDINGS_ARCHIVE_REF,
     FINDINGS_CATALOG_REF,
     FINDINGS_INDEX_REF,
+    committed_finding_refs,
 )
 from pace.artifacts.workspace import (
     _write_json_atomic,
@@ -35,11 +36,8 @@ def pending_finding_checks(workdir: Path) -> bool:
     accepted = (
         state.get("candidate_ref") if state.get("terminal_result") == "PASS" else ""
     )
-    completed = {
-        str(Path(ref).parent)
-        for ref in state.get("completed_result_refs", [])
-        if Path(ref).name == "agent_result.json"
-    }
+    if accepted:
+        return False
     from pace.contracts.research.memory import enabled
 
     if enabled(workdir):
@@ -58,23 +56,15 @@ def pending_finding_checks(workdir: Path) -> bool:
                     and obligation["version"] == app["obligation_version"]
                 ):
                     return True
-    for path in (Path(workdir) / work_ref(workdir)).glob(
-        "*/findings/*.verification.json"
-    ):
-        if path.parent.parent.relative_to(workdir).as_posix() not in completed:
+    for result_ref in state.get("completed_result_refs", []):
+        if Path(result_ref).name != "agent_result.json":
             continue
-        result_path = path.parent.parent / "agent_result.json"
-        if accepted and result_path.is_file():
-            if (
-                json.loads(result_path.read_text(encoding="utf-8")).get(
-                    "deliverable_ref"
-                )
-                == accepted
-            ):
-                continue
-        record = json.loads(path.read_text(encoding="utf-8"))
-        if record.get("verdict", {}).get("stage_status") == "VERIFIER_ERROR":
-            return True
+        for ref in committed_finding_refs(Path(workdir), result_ref):
+            path = (Path(workdir) / ref).with_suffix(".verification.json")
+            if path.is_file():
+                record = json.loads(path.read_text(encoding="utf-8"))
+                if record.get("verdict", {}).get("stage_status") == "VERIFIER_ERROR":
+                    return True
     return False
 
 
@@ -83,13 +73,12 @@ def check_stage_findings(
     llm: Any,
     workdir: Path,
     completed_result_refs: Iterable[str],
-    accepted_candidate_ref: str = "",
     retry_errors: bool = False,
 ) -> bool:
     """Check local findings; the outer orchestrator publishes their bound receipts.
 
-    Only the parent requests these checks. Drafts accompanying the accepted whole candidate
-    remain in its stage rather than receiving separate checks and result IDs.
+    The parent requests these checks while research is open. Whole-target
+    acceptance proceeds directly to the Kernel's terminal publication.
     """
 
     root = Path(workdir).resolve()
@@ -99,17 +88,12 @@ def check_stage_findings(
         if Path(result_ref).name != "agent_result.json":
             continue
         directory = Path(result_ref).parent
-        drafts = sorted((root / directory / "findings").glob("*.md"))
+        drafts = [root / ref for ref in committed_finding_refs(root, result_ref)]
         if not drafts:
             continue
         try:
             result = json.loads((root / result_ref).read_text(encoding="utf-8"))
             if result.get("status") != "SUCCEEDED":
-                continue
-            if (
-                accepted_candidate_ref
-                and result["deliverable_ref"] == accepted_candidate_ref
-            ):
                 continue
             assignment = json.loads(
                 (root / directory / "assignment/task.json").read_text(encoding="utf-8")
@@ -262,88 +246,29 @@ def _check_finding(
     return True
 
 
-def _recover_application_receipt(root, record, request, target_id):
-    """Revalidate an independently authored receipt against its unchanged owner bindings."""
-    from pace.agents.kernel import _finding_receipt_schema, validate_finding_application
+def _commit_application_reviews(root, request, verification_ref):
+    """Each scope references the same independently authored manuscript receipt."""
     from pace.artifacts.events import append_event
-    from pace.artifacts.workspace import path_has_symlink_component
-    from pace.contracts.research.memory import digest
-    from pace.runtime.json_values import decode_structured_fields
-    from pace.runtime.schema import validate_json_instance
+    from pace.contracts.research.memory import binding, digest
 
-    call_id = record.get("call_id", "")
-    if not call_id or Path(call_id).name != call_id or call_id in {".", ".."}:
-        return None
-    directory = root / Path(request["review_ref"]).parent.parent / "calls" / call_id
-    try:
-        call = json.loads((directory / "record.json").read_text())
-        host = json.loads((directory / "interface_result.json").read_text())["host"]
-        metadata = host["host_metadata"]
-        response = root / call["response_ref"]
-        if (
-            not response.resolve().is_relative_to(directory.resolve())
-            or any(
-                path_has_symlink_component(root, p)
-                for p in (
-                    response,
-                    directory / "record.json",
-                    directory / "interface_result.json",
-                )
-            )
-            or call["status"] != "REPRESENTATION_FAILED"
-            or call["role"] != "finding_verifier"
-            or host["call_id"] != call_id
-            or host["authority"] != "MathVerifierKernel"
-            or host["interface_status"] != "OK"
-            or metadata["transport"]["status"] != "SUCCESS"
-            or metadata.get("application_key") != request["application_key"]
-            or metadata.get("draft_ref") != request["argument_ref"]
-            or metadata.get("target_contract_id") != target_id
-            or not {record["request_ref"], *(row["ref"] for row in record["bindings"])}
-            <= set(call["input_refs"])
-        ):
-            return None
-        raw = response.read_text()
-        schema = _finding_receipt_schema(request)
-        payload, repairs = decode_structured_fields(json.loads(raw), schema)
-        if validate_json_instance(payload, schema) or validate_finding_application(
-            payload, request, root
-        ):
-            return None
-    except (OSError, ValueError, KeyError, TypeError):
-        return None
-    audit_ref = (
-        (directory / ("receipt_revalidation-" + digest(payload) + ".json"))
-        .relative_to(root)
-        .as_posix()
-    )
-    _write_json_atomic(
-        root / audit_ref,
-        {
-            "response_ref": call["response_ref"],
-            "response_sha256": digest(raw.encode()),
-            "json_pointers": repairs,
-            "payload": payload,
-            "request_binding": record["request_binding"],
-            "bindings": record["bindings"],
-        },
-    )
-    append_event(
-        root,
-        "SEMANTIC_RECEIPT_REVALIDATED",
-        call_id=call_id,
-        idempotency_key="receipt-revalidated:" + digest(payload),
-        audit_ref=audit_ref,
-    )
-    return {**record, "verdict": payload, "receipt_revalidation_ref": audit_ref}
+    version = binding(root, verification_ref)
+    for item in request["applications"]:
+        ref = item["application_ref"]
+        _write_json_atomic(root / ref, {"verification_binding": version})
+        append_event(
+            root,
+            "APPLICATION_REVIEW_COMMITTED",
+            idempotency_key="application:" + digest([item["application_key"], version]),
+            application_key=item["application_key"],
+            review_ref=verification_ref,
+            obligation_id=item["obligation_id"],
+        )
 
 
 def check_applications(*, llm, root, retry_errors=False):
-    """Independently check committed applications, including publication NONE."""
-    from pace.artifacts.events import append_event
+    """Review each manuscript once, retaining a decision for every requested scope."""
     from pace.contracts.research.memory import (
         application_review_bindings,
-        binding,
         check_binding,
         digest,
         enabled,
@@ -354,123 +279,164 @@ def check_applications(*, llm, root, retry_errors=False):
         whole_proof_application_routes,
     )
 
+    root = Path(root)
     if not enabled(root):
         return True
     index = read_json(root, RESEARCH_INDEX_REF)
     whole_routes = whole_proof_application_routes(root, index)
-    for key, app in index["applications"].items():
+    groups = {}
+    for key, app in sorted(index["applications"].items()):
+        obligation = index["obligations"][app["obligation_id"]]
         if (
-            index["obligations"][app["obligation_id"]].get("disposition", "OPEN")
-            != "OPEN"
+            obligation.get("disposition", "OPEN") != "OPEN"
+            or obligation["version"] != app["obligation_version"]
+            or key in whole_routes
         ):
             continue
+        for row in application_review_bindings(app):
+            check_binding(root, row)
+        group = digest([app["target"], app["argument"]])
+        groups.setdefault(group, []).append(app)
+
+    return all(
+        _check_application_group(
+            llm=llm, root=root, apps=apps, retry_errors=retry_errors
+        )
+        for apps in groups.values()
+    )
+
+
+def _check_application_group(*, llm, root, apps, retry_errors):
+    from pace.contracts.research.memory import (
+        application_review_bindings,
+        binding,
+        check_binding,
+        digest,
+        load_application_review,
+        read_json,
+    )
+
+    owner = apps[0]
+    directory = Path(owner["result_ref"]).parent / "verification"
+    batch_key = digest([app["application_key"] for app in apps])
+    stem = directory / f"finding-{batch_key}"
+    request_ref = str(stem.with_suffix(".request.json"))
+    request = read_json(root, request_ref) if (root / request_ref).is_file() else None
+    record = None
+    if request and (root / request["verification_ref"]).is_file():
+        record = read_json(root, request["verification_ref"])
+        check_binding(root, record["request_binding"])
+        for row in record["dependency_bindings"]:
+            check_binding(root, row)
+        if record.get("review_binding"):
+            check_binding(root, record["review_binding"])
+        if record["verdict"].get("stage_status") != "VERIFIER_ERROR":
+            _commit_application_reviews(root, request, request["verification_ref"])
+        elif not retry_errors:
+            return False
+        else:
+            history = root / directory / f"finding-{batch_key}.attempts"
+            _write_json_atomic(history / f"{uuid.uuid4().hex}.json", record)
+            record = None
+
+    pending = []
+    for app in apps:
+        reviewed = load_application_review(root, app)
         if (
-            index["obligations"][app["obligation_id"]]["version"]
-            != app["obligation_version"]
+            reviewed is None
+            or reviewed["verdict"].get("stage_status") == "VERIFIER_ERROR"
         ):
-            continue
-        if key in whole_routes:
-            continue
-        bindings = application_review_bindings(app)
+            pending.append(app)
+    if not pending:
+        return True
+    if request is None:
+        draft = root / owner["argument_ref"]
+        finding_receipt = draft.with_suffix(".verification.json")
+        publication = (
+            owner["argument_ref"] in committed_finding_refs(root, owner["result_ref"])
+            and not finding_receipt.exists()
+        )
+        verification_ref = (
+            finding_receipt.relative_to(root).as_posix()
+            if publication
+            else str(stem.with_suffix(".json"))
+        )
+        request = {
+            "argument_ref": owner["argument_ref"],
+            "review_ref": str(stem.with_suffix(".md")),
+            "verification_ref": verification_ref,
+            "publication_requested": publication,
+            "applications": [
+                {
+                    "application_key": app["application_key"],
+                    "obligation_id": app["obligation_id"],
+                    "obligation_version": app["obligation_version"],
+                    "bindings": application_review_bindings(app),
+                    "application_ref": str(
+                        Path(app["result_ref"]).parent
+                        / "verification"
+                        / f"application-{app['application_key']}.json"
+                    ),
+                }
+                for app in pending
+            ],
+        }
+        _write_json_atomic(root / request_ref, request)
+    bindings = list(
+        {
+            digest(row): row
+            for item in request["applications"]
+            for row in item["bindings"]
+        }.values()
+    )
+    verification_ref = request["verification_ref"]
+
+    saved_record = None
+
+    def save_review(verdict):
+        nonlocal saved_record
         for row in bindings:
             check_binding(root, row)
-        directory = Path(app["result_ref"]).parent / "verification"
-        ref = str(directory / f"application-{key}.json")
-        review_ref = str(directory / f"application-{key}.md")
-        request_ref = str(directory / f"application-{key}.request.json")
-        request = {
-            "schema_version": "application_request/v1",
-            "application_key": key,
-            "obligation_id": app["obligation_id"],
-            "obligation_version": app["obligation_version"],
-            "argument_ref": app["argument_ref"],
-            "bindings": bindings,
-            "review_ref": review_ref,
-            "purpose": "APPLICATION",
+        saved = {
+            "draft_ref": owner["argument_ref"],
+            "target_contract_id": read_json(root, owner["target"]["ref"])[
+                "contract_id"
+            ],
+            "source_binding": owner["argument"],
+            "dependency_bindings": bindings,
+            "request_ref": request_ref,
+            "request_binding": binding(root, request_ref),
+            "review_binding": binding(root, request["review_ref"])
+            if (root / request["review_ref"]).is_file()
+            else None,
+            "verdict": verdict,
         }
-        if (root / request_ref).is_file():
-            if read_json(root, request_ref) != request:
-                raise ValueError("application request binding changed")
-        else:
-            _write_json_atomic(root / request_ref, request)
-        record = read_json(root, ref) if (root / ref).is_file() else None
-        if record and record["application_key"] != key:
-            raise ValueError("wrong application review")
-        if record:
-            if record["bindings"] != bindings or record["request_binding"] != binding(
-                root, request_ref
-            ):
-                raise ValueError("application review dependencies changed")
-            if record.get("review_binding"):
-                check_binding(root, record["review_binding"])
-        if record and record["verdict"].get("stage_status") == "VERIFIER_ERROR":
-            if not retry_errors:
-                return False
-            _write_json_atomic(
-                root / directory / f"application-{key}.{uuid.uuid4().hex}.attempt.json",
-                record,
-            )
-            record = _recover_application_receipt(
-                root,
-                record,
-                request,
-                read_json(root, app["target"]["ref"])["contract_id"],
-            )
-            if record is not None:
-                _write_json_atomic(root / ref, record)
-        if record is None:
-            assignment = read_json(
-                root, str(Path(app["result_ref"]).parent / "assignment/task.json")
-            )
+        _write_json_atomic(root / verification_ref, saved)
+        saved_record = saved
+        return saved
 
-            def save_review(verdict, call_id=""):
-                for row in bindings:
-                    check_binding(root, row)
-                saved = {
-                    "application_key": key,
-                    "verdict": verdict,
-                    "bindings": bindings,
-                    "request_ref": request_ref,
-                    "request_binding": binding(root, request_ref),
-                    "review_binding": binding(root, review_ref)
-                    if (root / review_ref).is_file()
-                    else None,
-                    "call_id": call_id,
-                }
-                _write_json_atomic(root / ref, saved)
-                return saved
-
-            outcome = verify_finding(
-                llm=llm,
-                workdir=root,
-                draft_ref=app["argument_ref"],
-                input_refs=tuple(
-                    dict.fromkeys([request_ref, *(r["ref"] for r in bindings)])
-                ),
-                round_index=assignment["round_index"],
-                target_contract_id=read_json(root, app["target"]["ref"])["contract_id"],
-                application_request=request,
-                on_accept=save_review,
-            )
-            for row in bindings:
-                check_binding(root, row)
-            verdict = (
-                outcome.payload
-                if isinstance(outcome, StructuredSemanticResult)
-                else {
-                    "stage_status": "VERIFIER_ERROR",
-                    "diagnostics": list(outcome.diagnostics),
-                }
-            )
-            record = save_review(verdict, outcome.host.get("call_id", ""))
-        if record["verdict"].get("stage_status") == "VERIFIER_ERROR":
-            return False
-        append_event(
-            root,
-            "APPLICATION_REVIEW_COMMITTED",
-            idempotency_key="application:" + digest(record),
-            application_key=key,
-            review_ref=ref,
-            obligation_id=app["obligation_id"],
+    assignment = read_json(
+        root, str(Path(owner["result_ref"]).parent / "assignment/task.json")
+    )
+    outcome = verify_finding(
+        llm=llm,
+        workdir=root,
+        draft_ref=owner["argument_ref"],
+        input_refs=tuple(dict.fromkeys([request_ref, *(r["ref"] for r in bindings)])),
+        round_index=assignment["round_index"],
+        target_contract_id=read_json(root, owner["target"]["ref"])["contract_id"],
+        application_request=request,
+        on_accept=save_review,
+    )
+    if isinstance(outcome, StructuredSemanticResult):
+        # Acceptance persists the receipt before semantic completion. Replaying this
+        # same frozen group also repairs any interrupted per-scope references.
+        record = saved_record or save_review(outcome.payload)
+    else:
+        record = save_review(
+            {"stage_status": "VERIFIER_ERROR", "diagnostics": list(outcome.diagnostics)}
         )
+    _commit_application_reviews(root, request, verification_ref)
+    if record["verdict"].get("stage_status") == "VERIFIER_ERROR":
+        return False
     return True

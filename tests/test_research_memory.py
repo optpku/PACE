@@ -1,7 +1,5 @@
 """Research authority, committed replay and independent application checks."""
 
-from pace.orchestrator import memory as memory_owner
-
 from pace.orchestrator.memory import commit_round_memory
 from pace.orchestrator.results import publish_stage_findings
 import json
@@ -12,14 +10,12 @@ import pytest
 from pace.contracts.research.director_protocol import parse_director_decision
 from pace.contracts.research.memory import binding, digest, prepare_delta, prepare_route, public_file, repair_route_references
 from pace.agents.director.loop import DirectorLedEngine
-from pace.agents.director.findings import check_applications
 from pace.artifacts.events import read_events
 from pace.orchestrator.memory import (initialize_research_memory, commit_research_memory,
     rebuild_research_index, research_brief, refresh_application_memory)
 from pace.artifacts.workspace import RunWorkspace, work_ref
 from pace.agents.prompt_composer import PromptComposerResult
 from pace.agents.director.context import director_archive_refs, freeze_context, load_index
-from pace.runtime.semantic import StructuredSemanticResult
 
 
 @pytest.fixture
@@ -110,68 +106,6 @@ def test_missing_index_rebuilds_and_missing_event_is_repaired(ws):
     commit_research_memory(ws.root,[ref]); commit_research_memory(ws.root,[ref])
     assert len(read_events(ws.root))==1
 
-
-@pytest.mark.parametrize('verdict,status', [('PASS','APPLICABLE'),('MATH_FAIL','NOT_ESTABLISHED')])
-def test_application_acceptance_is_independent_of_publication(ws, monkeypatch, verdict, status):
-    ref=deliver(ws,1,application=True);commit_research_memory(ws.root,[ref])
-    calls=[]
-    def verify(**kw):
-        calls.append(kw)
-        r=kw['application_request'];ws.write_text(r['review_ref'],'Independent scope and implication review.')
-        return StructuredSemanticResult({'stage_status':verdict,'reuse_authorized':verdict=='PASS',
-            'publication':{'action':'NONE'},'application_checks':[{'obligation_id':r['obligation_id'],
-            'obligation_version':r['obligation_version'],'status':status,'review_ref':r['review_ref']}]},{})
-    monkeypatch.setattr('pace.agents.director.findings.verify_finding',verify)
-    assert check_applications(llm=object(),root=ws.root)
-    memory_owner.refresh_application_memory(ws.root)
-    assert check_applications(llm=object(),root=ws.root)
-    memory_owner.refresh_application_memory(ws.root)
-    assert len(calls)==1
-    assert next(iter(load_index(ws.root)['applications'].values()))['status']==status
-    assert not ws.path('work/state/findings.json').exists()
-    assert rebuild_research_index(ws.root)['obligations']['target']['status']==('CLOSED' if verdict=='PASS' else 'OPEN')
-    brief = json.loads(research_brief(ws.root).splitlines()[-1])
-    review_text = calls[0]['application_request']['review_ref']
-    assert [item['review_text_ref'] for item in brief['applicable_evidence']] == (
-        [review_text] if verdict == 'PASS' else [])
-    assert review_text in director_archive_refs(ws.root)
-    frozen = freeze_context(ws.root, ws.work_ref('round2/assignment/task.json'), task(), [])
-    assert review_text in frozen['required_refs']
-    from test_research_context import _local_obligation
-    _local_obligation(ws)
-    index = load_index(ws.root)
-    index['obligations']['lemma']['premise_groups'] = [['target']]
-    ws.write_json('memory/research_index.json', index)
-    downstream = freeze_context(ws.root, ws.work_ref('round3/assignment/task.json'),
-                                task(obligation_ids=['lemma']), [])
-    for source in (review_text, ws.work_ref('round1/research.md')):
-        assert (source in downstream['required_refs']) == (verdict == 'PASS')
-    # A cached status cannot stand in for a lost review receipt.
-    app = next(iter(index['applications'].values()))
-    receipt = ws.path(app['review_ref'])
-    saved = receipt.read_bytes()
-    if verdict == 'PASS':
-        altered = json.loads(saved)
-        altered['verdict']['reuse_authorized'] = False
-        receipt.write_text(json.dumps(altered))
-        with pytest.raises(ValueError, match='review differs'):
-            freeze_context(ws.root, ws.work_ref('round4/assignment/task.json'),
-                           task(obligation_ids=['lemma']), [])
-    receipt.unlink()
-    refresh_application_memory(ws.root)
-    index = load_index(ws.root)
-    assert next(iter(index['applications'].values()))['status'] == 'PROPOSED'
-    assert index['obligations']['target']['status'] == 'OPEN'
-    receipt.write_bytes(saved)
-    refresh_application_memory(ws.root)
-    assert next(iter(load_index(ws.root)['applications'].values()))['status'] == status
-    ws.write_text(ws.work_ref('round1/research.md'),'Changed argument')
-    if verdict == 'PASS':
-        with pytest.raises(ValueError, match='version changed'):
-            freeze_context(ws.root, ws.work_ref('round4/assignment/task.json'), task(), [])
-    refresh_application_memory(ws.root)
-    assert next(iter(load_index(ws.root)['applications'].values()))['status']=='INVALIDATED'
-    assert load_index(ws.root)['obligations']['target']['status']=='OPEN'
 
 
 def test_unrelated_archive_does_not_invalidate_and_no_false_progress(ws):

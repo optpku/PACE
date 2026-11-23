@@ -47,11 +47,25 @@ def committed_round_reading_refs(root: Path, result_ref: str) -> tuple[str, ...]
     ).is_file():
         refs.append((folder / "progress.md").relative_to(root).as_posix())
     refs.extend(
-        path.relative_to(root).as_posix()
-        for path in sorted((folder / "findings").glob("*.verification.json"))
-        if path.is_file() and not path.is_symlink()
+        str(Path(ref).with_suffix(".verification.json"))
+        for ref in committed_finding_refs(root, result_ref)
+        if (root / Path(ref).with_suffix(".verification.json")).is_file()
     )
     return tuple(refs)
+
+
+def committed_finding_refs(root: Path, result_ref: str) -> tuple[str, ...]:
+    """Read the submitted original manuscripts, without creating proof copies."""
+    folder = (root / result_ref).parent
+    reporter = folder / "reporter_result.json"
+    if reporter.is_file():
+        return tuple(
+            json.loads(reporter.read_text())["payload"].get("finding_refs", ())
+        )
+    return tuple(
+        path.relative_to(root).as_posix()
+        for path in sorted((folder / "findings").glob("*.md"))
+    )
 
 
 def relocate_links(

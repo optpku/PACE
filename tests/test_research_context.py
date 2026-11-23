@@ -88,6 +88,8 @@ def test_parallel_inputs_frozen_before_planner_finishes(ws, monkeypatch):
     # must be visible at the next scheduling boundary.
     reviews = [ws.work_ref(f"round{i}/findings/local.verification.json") for i in (1, 2, 3)]
     for ref in reviews:
+        ws.write_text(ref.replace(".verification.json", ".md"),
+                      "The original manuscript with a rejected application.")
         ws.write_json(ref, {"verdict": {"stage_status": "MATH_FAIL"}})
     inputs = engine._director_input_refs(engine._load_state())
     assert all(ref in inputs for ref in [*refs, *reviews[:2]])

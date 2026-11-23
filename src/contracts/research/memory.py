@@ -399,31 +399,63 @@ def prepare_delta(root: Path, ref: str, obligations: dict) -> dict:
 
 
 def application_review_bindings(app: dict) -> list[dict]:
-    """Keep legacy receipt shapes; deduplicate exact bindings in new reviews."""
+    """Bind an application to its exact target, manuscript, premises and scope."""
     bindings = [
         app["target"],
         app["argument"],
         *app["premises"],
         *app["obligation_bindings"],
     ]
-    if "proposal_ids" not in app:
-        return bindings
     return list({digest(row): row for row in bindings}.values())
+
+
+def load_application_review(root: Path, app: dict) -> dict | None:
+    """Resolve a scope's reference to the single, immutable manuscript review."""
+    ref = str(
+        Path(app["result_ref"]).parent
+        / "verification"
+        / f"application-{app['application_key']}.json"
+    )
+    if not (root / ref).is_file():
+        return None
+    pointer = read_json(root, ref)["verification_binding"]
+    if not (root / pointer["ref"]).is_file():
+        return None
+    check_binding(root, pointer)
+    record = read_json(root, pointer["ref"])
+    check_binding(root, record["request_binding"])
+    request = read_json(root, record["request_ref"])
+    item = next(
+        (
+            row
+            for row in request["applications"]
+            if row["application_key"] == app["application_key"]
+        ),
+        None,
+    )
+    if item is None or item["bindings"] != application_review_bindings(app):
+        raise ValueError("application review has different dependencies")
+    if record.get("review_binding"):
+        check_binding(root, record["review_binding"])
+    return record
 
 
 def application_is_approved(app: dict, record: dict) -> bool:
     verdict = record["verdict"]
     checks = verdict.get("application_checks", [])
     review = record.get("review_binding")
+    matching = [
+        row for row in checks if row.get("application_key") == app["application_key"]
+    ]
     return (
         verdict.get("stage_status") == "PASS"
         and verdict.get("reuse_authorized") is True
-        and len(checks) == 1
-        and checks[0].get("obligation_id") == app["obligation_id"]
-        and checks[0].get("obligation_version") == app["obligation_version"]
-        and checks[0].get("status") == "APPLICABLE"
+        and len(matching) == 1
+        and matching[0].get("obligation_id") == app["obligation_id"]
+        and matching[0].get("obligation_version") == app["obligation_version"]
+        and matching[0].get("status") == "APPLICABLE"
         and bool(review)
-        and checks[0].get("review_ref") == review["ref"]
+        and matching[0].get("review_ref") == review["ref"]
     )
 
 
