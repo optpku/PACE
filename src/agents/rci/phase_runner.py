@@ -34,6 +34,7 @@ from .receipts import host_receipt_fields, materialize_seed_revision, validate_r
 from .roles import (
     PHASE_ACTIONS,
     RCI_MODE,
+    RciRoleBinding,
     role_binding,
 )
 
@@ -153,6 +154,54 @@ class RciPhaseRunner:
             and not str(routing.get("mechanism_id") or "").strip()
         ):
             raise ValueError("Mechanism Critic requires a Host-assigned mechanism_id")
+        root = Path(workdir)
+        target_dir = Path(call_dir)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        progress_context = {
+            "task_id": _relative_ref(target_dir, root),
+            "stage": binding.phase.lower(),
+            "round_index": round_index,
+            "parent_task_id": f"round-{round_index:04d}",
+        }
+        publish_progress(root, **progress_context, status="started")
+        try:
+            result, artifact_refs = self._run_phase(
+                phase=phase,
+                binding=binding,
+                root=root,
+                target_dir=target_dir,
+                target_contract_id=target_contract_id,
+                input_refs=input_refs,
+                prompt_seed=prompt_seed,
+                skill_card_refs=skill_card_refs,
+                allowed_actions=allowed_actions,
+                routing=routing,
+                progress_context=progress_context,
+            )
+        except Exception:
+            publish_progress(root, **progress_context, status="failed")
+            raise
+        publish_progress(
+            root, **progress_context, status="completed", artifact_refs=artifact_refs
+        )
+        return result
+
+    def _run_phase(
+        self,
+        *,
+        phase: str,
+        binding: RciRoleBinding,
+        root: Path,
+        target_dir: Path,
+        target_contract_id: str,
+        input_refs: Mapping[str, str | Path | Iterable[str | Path]],
+        prompt_seed: str,
+        skill_card_refs: Iterable[str],
+        allowed_actions: Iterable[str],
+        routing: dict[str, Any],
+        progress_context: dict[str, Any],
+    ) -> tuple[RciPhaseResult, tuple[str, ...]]:
+        round_index = progress_context["round_index"]
         requested_actions = tuple(allowed_actions)
         actions = requested_actions or PHASE_ACTIONS.get(binding.phase, ())
         receipt_schema = open_object()
@@ -177,18 +226,8 @@ class RciPhaseRunner:
                 },
             }
             receipt_schema["required"] = ["decisions"]
-        root = Path(workdir)
-        target_dir = Path(call_dir)
-        target_dir.mkdir(parents=True, exist_ok=True)
-        progress_context = {
-            "task_id": _relative_ref(target_dir, root),
-            "stage": binding.phase.lower(),
-            "round_index": round_index,
-            "parent_task_id": f"round-{round_index:04d}",
-        }
         finding_dir = root / stage_ref(round_index, workdir=root) / "findings"
         previous_drafts = set(finding_dir.glob("*.md"))
-        publish_progress(root, **progress_context, status="started")
         normalized: dict[str, tuple[str, ...]] = {}
         for kind, value in input_refs.items():
             refs = _refs(value)
@@ -437,13 +476,7 @@ class RciPhaseRunner:
                 phase_ref=_relative_ref(target_dir, root),
                 reason="exact committed inputs and outputs unchanged",
             )
-            publish_progress(
-                root,
-                **progress_context,
-                status="completed",
-                artifact_refs=tuple(cached["outputs"]),
-            )
-            return RciPhaseResult(**cached["result"])
+            return RciPhaseResult(**cached["result"]), tuple(cached["outputs"])
         # Keep unfinished manuscripts at their original paths for this exact task.
         # Mathematical revisions already receive a new phase directory in the graph.
         calls = []
@@ -545,10 +578,10 @@ class RciPhaseRunner:
                 candidate_file_refs=(*predecessor_refs, *resource_refs),
                 required_file_refs=(*required_predecessors, *resource_refs),
                 contract_guide_refs=(
-                    work_ref(workdir, "resources/prompts/shared/contracts/research.md"),
+                    work_ref(root, "resources/prompts/shared/contracts/research.md"),
                 ),
                 artifact_guide_refs=(
-                    work_ref(workdir, "resources/prompts/shared/artifact_writing.md"),
+                    work_ref(root, "resources/prompts/shared/artifact_writing.md"),
                 ),
                 prompt_seed=str(prompt_seed),
                 output_artifact_ref=_relative_ref(output_path, root),
@@ -620,7 +653,6 @@ class RciPhaseRunner:
             else:
                 _write_text_atomic(prompt_path, final_prompt)
         except Exception as exc:
-            publish_progress(root, **progress_context, status="failed")
             raise RciPhaseError(
                 f"{binding.phase} prompt assembly failed",
                 phase=binding.phase,
@@ -686,7 +718,6 @@ class RciPhaseRunner:
                     },
                 )
         except Exception as exc:
-            publish_progress(root, **progress_context, status="failed")
             raise RciPhaseError(
                 f"{binding.phase} semantic call raised an interface error",
                 phase=binding.phase,
@@ -829,7 +860,6 @@ class RciPhaseRunner:
         if isinstance(
             result, (SemanticInterfaceFailure, SemanticRepresentationFailure)
         ):
-            publish_progress(root, **progress_context, status="failed")
             raise RciPhaseError(
                 f"{binding.phase} did not return a usable artifact",
                 phase=binding.phase,
@@ -838,7 +868,6 @@ class RciPhaseRunner:
             )
         payload = result.payload
         if not isinstance(payload, dict):
-            publish_progress(root, **progress_context, status="failed")
             raise RciPhaseError(
                 f"{binding.phase} JSON artifact must be an object",
                 phase=binding.phase,
@@ -860,13 +889,7 @@ class RciPhaseRunner:
             call_id=str(result.host.get("call_id") or ""),
             deliverable_ref=_relative_ref(output_path, root),
         )
-        publish_progress(
-            root,
-            **progress_context,
-            status="completed",
-            artifact_refs=tuple(json.loads(checkpoint.read_text())["outputs"]),
-        )
-        return committed
+        return committed, tuple(json.loads(checkpoint.read_text())["outputs"])
 
 
 def _saved_author_result(root: Path, call_ref: str):
