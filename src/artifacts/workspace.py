@@ -204,9 +204,16 @@ class RunWorkspace:
         self.path("work", turn_id).mkdir(exist_ok=False)
         for relative in ("input", "state"):
             self.path("work", turn_id, relative).mkdir()
+        from pace.runtime.processes import _process_identity
+
         self.write_json(
             CURRENT_TURN_REF,
-            {"turn_id": turn_id, "status": "running", "updated_at": utc_now()},
+            {
+                "turn_id": turn_id,
+                "status": "running",
+                "host_process": _process_identity(os.getpid()),
+                "updated_at": utc_now(),
+            },
         )
 
         from pace.artifacts.events import initialize_events
@@ -216,10 +223,12 @@ class RunWorkspace:
         return turn_id
 
     def finish_turn(self, status: str) -> None:
-        self.write_json(
-            CURRENT_TURN_REF,
-            {"turn_id": self.turn_id, "status": status, "updated_at": utc_now()},
-        )
+        state = json.loads(self.path(CURRENT_TURN_REF).read_text(encoding="utf-8"))
+        state.update(status=status, updated_at=utc_now())
+        if status == "running":
+            state.pop("interruption_reason", None)
+            state.pop("ended_at", None)
+        self.write_json(CURRENT_TURN_REF, state)
 
     @contextmanager
     def execution_lock(self):
@@ -239,12 +248,26 @@ class RunWorkspace:
                 from pace.runtime.processes import assert_no_active_model_processes
 
                 assert_no_active_model_processes(self.root)
+                from pace.runtime.processes import _process_identity
+
+                state = json.loads(
+                    self.path(CURRENT_TURN_REF).read_text(encoding="utf-8")
+                )
+                state.update(
+                    host_process=_process_identity(os.getpid()), updated_at=utc_now()
+                )
+                self.write_json(CURRENT_TURN_REF, state)
                 token = _OWNED_LOCKS.set((*_OWNED_LOCKS.get(), owner))
                 with _EXECUTION_FDS_MUTEX:
                     _EXECUTION_FDS[(owner[0], owner[2])] = stream.fileno()
                 yield
             finally:
                 if token is not None:
+                    state = json.loads(
+                        self.path(CURRENT_TURN_REF).read_text(encoding="utf-8")
+                    )
+                    if state.get("status") == "running":
+                        self.finish_turn("interrupted")
                     _OWNED_LOCKS.reset(token)
                     with _EXECUTION_FDS_MUTEX:
                         _EXECUTION_FDS.pop((owner[0], owner[2]), None)
@@ -252,13 +275,14 @@ class RunWorkspace:
 
     @classmethod
     def open_existing(cls, root: Path) -> "RunWorkspace":
-        """Open one run directory without creating or rewriting any artifact."""
+        """Open a run and reconcile an abandoned Host's execution status."""
 
         resolved = Path(root).expanduser().resolve()
         if not resolved.is_dir():
             raise ValueError(f"run directory does not exist: {resolved}")
         if not (resolved / work_ref(resolved, "input/problem.md")).is_file():
             raise ValueError(f"run directory is missing problem.md: {resolved}")
+        reconcile_run_status(resolved)
         return cls(
             root=resolved,
             problem_id=resolved.name,
@@ -318,7 +342,7 @@ def list_problems(output_root: Path) -> list[dict]:
     rows = []
     for record in sorted(Path(output_root).glob(f"*/{CURRENT_TURN_REF}")):
         root = record.parents[2]
-        state = json.loads(record.read_text(encoding="utf-8"))
+        state = reconcile_run_status(root)
         rows.append(
             {
                 "problem_id": root.name,
@@ -329,6 +353,63 @@ def list_problems(output_root: Path) -> list[dict]:
             }
         )
     return rows
+
+
+def reconcile_run_status(root: Path) -> dict:
+    """Repair an abandoned running flag only after exclusive ownership is available."""
+    root = Path(root).resolve()
+    record = root / CURRENT_TURN_REF
+    state = json.loads(record.read_text(encoding="utf-8"))
+    if state.get("status") != "running":
+        return state
+    with (root / "work/state/execution.lock").open("a") as stream:
+        try:
+            fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return state
+        try:
+            # Re-read after acquiring the lock, including a newly completed turn.
+            state = json.loads(record.read_text(encoding="utf-8"))
+            if state.get("status") != "running":
+                return state
+            from pace.runtime.processes import _process_identity
+
+            saved = state.get("host_process")
+            if saved:
+                actual = _process_identity(saved["pid"])
+                if (
+                    actual
+                    and not actual["state"].startswith("Z")
+                    and actual["started_identity"] == saved["started_identity"]
+                ):
+                    return state
+            # Model children may retain the inherited lock or an older process record.
+            from pace.runtime.processes import assert_no_active_model_processes
+
+            try:
+                assert_no_active_model_processes(root)
+            except ValueError:
+                return state
+            state.update(
+                status="interrupted",
+                updated_at=utc_now(),
+                interruption_reason="host_exit_unobserved",
+                ended_at=None,
+            )
+            _write_json_atomic(record, state)
+            sessions = root / work_ref(root, "state/sessions.json")
+            if sessions.is_file():
+                rows = json.loads(sessions.read_text(encoding="utf-8"))
+                for row in rows:
+                    if row.get("status") == "running" and not row.get("ended_at"):
+                        row.update(
+                            status="end_unobserved",
+                            measurement_gap="Host is no longer active; elapsed time and OS exit code are unknown.",
+                        )
+                _write_json_atomic(sessions, rows)
+            return state
+        finally:
+            fcntl.flock(stream, fcntl.LOCK_UN)
 
 
 def _write_json_atomic(path: Path, payload: Any) -> None:
