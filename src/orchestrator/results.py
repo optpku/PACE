@@ -96,7 +96,7 @@ def publish_stage_findings(
     *, workdir: Path, completed_result_refs, accepted_candidate_ref: str = ""
 ) -> None:
     """Publish only the receipts already delivered by independent turn-level checks."""
-    from pace.contracts.research.memory import check_binding
+    from pace.contracts.research.memory import check_binding, check_joint_finding_record
     from pace.orchestrator.memory import (
         refresh_application_memory,
         refresh_memory_index,
@@ -120,6 +120,7 @@ def publish_stage_findings(
             if not receipt.is_file():
                 continue
             record = json.loads(receipt.read_text())
+            check_joint_finding_record(root, ref, record)
             if record.get("source_binding"):
                 check_binding(root, record["source_binding"])
                 for binding in record.get("dependency_bindings", []):

@@ -61,10 +61,11 @@ def pending_finding_checks(workdir: Path) -> bool:
             continue
         for ref in committed_finding_refs(Path(workdir), result_ref):
             path = (Path(workdir) / ref).with_suffix(".verification.json")
-            if path.is_file():
-                record = json.loads(path.read_text(encoding="utf-8"))
-                if record.get("verdict", {}).get("stage_status") == "VERIFIER_ERROR":
-                    return True
+            if not path.is_file():
+                return True
+            record = json.loads(path.read_text(encoding="utf-8"))
+            if record.get("verdict", {}).get("stage_status") == "VERIFIER_ERROR":
+                return True
     return False
 
 
@@ -82,51 +83,55 @@ def check_stage_findings(
     """
 
     root = Path(workdir).resolve()
-    if not check_applications(llm=llm, root=root, retry_errors=retry_errors):
-        return False
+    # A manuscript may be nominated by a different handoff from the one
+    # proposing its application. Resolve publication work before either review.
+    findings = {}
     for result_ref in dict.fromkeys(completed_result_refs):
         if Path(result_ref).name != "agent_result.json":
             continue
-        directory = Path(result_ref).parent
-        drafts = [root / ref for ref in committed_finding_refs(root, result_ref)]
+        drafts = committed_finding_refs(root, result_ref)
         if not drafts:
             continue
+        result = json.loads((root / result_ref).read_text())
+        if result.get("status") != "SUCCEEDED":
+            continue
+        assignment = json.loads(
+            (root / Path(result_ref).parent / "assignment/task.json").read_text()
+        )
+        for draft_ref in drafts:
+            findings.setdefault(
+                draft_ref, {"round_index": int(assignment["round_index"]), "refs": []}
+            )
+            findings[draft_ref]["refs"].extend(
+                [
+                    work_ref(root, "input/problem.md"),
+                    work_ref(root, "input/target_contract.json"),
+                    result["deliverable_ref"],
+                    *assignment.get("input_refs", ()),
+                    *result.get("published_refs", ()),
+                ]
+            )
+    if not check_applications(
+        llm=llm, root=root, retry_errors=retry_errors, findings=findings
+    ):
+        return False
+    for draft_ref, finding in findings.items():
         try:
-            result = json.loads((root / result_ref).read_text(encoding="utf-8"))
-            if result.get("status") != "SUCCEEDED":
-                continue
-            assignment = json.loads(
-                (root / directory / "assignment/task.json").read_text(encoding="utf-8")
-            )
-            round_index = int(assignment["round_index"])
             target = json.loads(
-                (root / work_ref(workdir, "input/target_contract.json")).read_text(
-                    encoding="utf-8"
-                )
+                (root / work_ref(root, "input/target_contract.json")).read_text()
             )
-            target_id = target["contract_id"]
-            context_refs = (
-                work_ref(workdir, "input/problem.md"),
-                work_ref(workdir, "input/target_contract.json"),
-                result["deliverable_ref"],
-                *assignment.get("input_refs", ()),
-                *result.get("published_refs", ()),
-            )
-            for draft in drafts:
-                if not _check_finding(
-                    llm=llm,
-                    root=root,
-                    draft=draft,
-                    context_refs=context_refs,
-                    round_index=round_index,
-                    target_id=target_id,
-                    retry_errors=retry_errors,
-                ):
-                    return False
+            if not _check_finding(
+                llm=llm,
+                root=root,
+                draft=root / draft_ref,
+                context_refs=tuple(dict.fromkeys(finding["refs"])),
+                round_index=finding["round_index"],
+                target_id=target["contract_id"],
+                retry_errors=retry_errors,
+            ):
+                return False
         except Exception:
-            # A finding publication cannot change the task or final proof
-            # verdict. Leave its draft and call records available to review.
-            logger.warning("Finding publication failed: %s", result_ref, exc_info=True)
+            logger.warning("Finding verification failed: %s", draft_ref, exc_info=True)
             return False
     return True
 
@@ -144,11 +149,17 @@ def _check_finding(
     draft_ref = draft.relative_to(root).as_posix()
     verification_path = draft.with_suffix(".verification.json")
     record = None
-    from pace.contracts.research.memory import binding, check_binding, enabled
+    from pace.contracts.research.memory import (
+        binding,
+        check_binding,
+        check_joint_finding_record,
+        enabled,
+    )
 
     version = binding(root, draft_ref) if enabled(root) else None
     if verification_path.is_file():
         record = json.loads(verification_path.read_text(encoding="utf-8"))
+        check_joint_finding_record(root, draft_ref, record)
         if record.get("source_binding"):
             check_binding(root, record["source_binding"])
             for row in record.get("dependency_bindings", []):
@@ -252,9 +263,27 @@ def _commit_application_reviews(root, request, verification_ref):
     from pace.contracts.research.memory import binding, digest
 
     version = binding(root, verification_ref)
+    publication_ref = request.get("publication_ref")
+    if publication_ref:
+        # Scope pointers bind the immutable joint receipt. A later standalone
+        # retry may replace only the manuscript projection.
+        path = root / publication_ref
+        prior = json.loads(path.read_text()) if path.is_file() else None
+        if prior is None or (
+            prior.get("joint_receipt_ref") == verification_ref
+            and prior["verdict"]["stage_status"] == "VERIFIER_ERROR"
+        ):
+            receipt = json.loads((root / verification_ref).read_text())
+            _write_json_atomic(path, {**receipt, "joint_receipt_ref": verification_ref})
     for item in request["applications"]:
         ref = item["application_ref"]
-        _write_json_atomic(root / ref, {"verification_binding": version})
+        current = None
+        if (root / ref).is_file():
+            current = json.loads((root / ref).read_text())["verification_binding"]
+            if current["ref"] not in (verification_ref, request.get("retry_of")):
+                continue  # A more recent scoped repair already owns this pointer.
+        if current != version:
+            _write_json_atomic(root / ref, {"verification_binding": version})
         append_event(
             root,
             "APPLICATION_REVIEW_COMMITTED",
@@ -265,7 +294,7 @@ def _commit_application_reviews(root, request, verification_ref):
         )
 
 
-def check_applications(*, llm, root, retry_errors=False):
+def check_applications(*, llm, root, retry_errors=False, findings=None):
     """Review each manuscript once, retaining a decision for every requested scope."""
     from pace.contracts.research.memory import (
         application_review_bindings,
@@ -300,15 +329,22 @@ def check_applications(*, llm, root, retry_errors=False):
 
     return all(
         _check_application_group(
-            llm=llm, root=root, apps=apps, retry_errors=retry_errors
+            llm=llm,
+            root=root,
+            apps=apps,
+            retry_errors=retry_errors,
+            finding=(findings or {}).get(apps[0]["argument_ref"]),
         )
         for apps in groups.values()
     )
 
 
-def _check_application_group(*, llm, root, apps, retry_errors):
+def _check_application_group(
+    *, llm, root, apps, retry_errors, finding=None, retry_of=None
+):
     from pace.contracts.research.memory import (
         application_review_bindings,
+        application_review_incomplete,
         binding,
         check_binding,
         digest,
@@ -319,6 +355,8 @@ def _check_application_group(*, llm, root, apps, retry_errors):
     owner = apps[0]
     directory = Path(owner["result_ref"]).parent / "verification"
     batch_key = digest([app["application_key"] for app in apps])
+    if retry_of:
+        batch_key = digest([batch_key, retry_of])
     stem = directory / f"finding-{batch_key}"
     request_ref = str(stem.with_suffix(".request.json"))
     request = read_json(root, request_ref) if (root / request_ref).is_file() else None
@@ -330,7 +368,17 @@ def _check_application_group(*, llm, root, apps, retry_errors):
             check_binding(root, row)
         if record.get("review_binding"):
             check_binding(root, record["review_binding"])
-        if record["verdict"].get("stage_status") != "VERIFIER_ERROR":
+        if (
+            record["request_ref"] != request_ref
+            or record["request_binding"] != binding(root, request_ref)
+            or record["source_binding"] != owner["argument"]
+        ):
+            raise ValueError(
+                "saved review belongs to a different request or manuscript"
+            )
+        if record["verdict"].get("stage_status") != "VERIFIER_ERROR" or record[
+            "verdict"
+        ].get("application_checks"):
             _commit_application_reviews(root, request, request["verification_ref"])
         elif not retry_errors:
             return False
@@ -340,31 +388,46 @@ def _check_application_group(*, llm, root, apps, retry_errors):
             record = None
 
     pending = []
+    repairs = []
     for app in apps:
         reviewed = load_application_review(root, app)
-        if (
-            reviewed is None
-            or reviewed["verdict"].get("stage_status") == "VERIFIER_ERROR"
-        ):
+        if reviewed is None:
             pending.append(app)
+        elif application_review_incomplete(app, reviewed):
+            prior = read_json(root, reviewed["request_ref"])["verification_ref"]
+            if retry_of or (
+                request
+                and request["verification_ref"] == prior
+                and not reviewed["verdict"].get("application_checks")
+            ):
+                pending.append(app)
+            else:
+                repairs.append((app, prior))
+    if repairs:
+        if not retry_errors:
+            return False
+        for app, previous in repairs:
+            if not _check_application_group(
+                llm=llm, root=root, apps=[app], retry_errors=True, retry_of=previous
+            ):
+                return False
     if not pending:
         return True
     if request is None:
         draft = root / owner["argument_ref"]
         finding_receipt = draft.with_suffix(".verification.json")
-        publication = (
-            owner["argument_ref"] in committed_finding_refs(root, owner["result_ref"])
-            and not finding_receipt.exists()
-        )
-        verification_ref = (
-            finding_receipt.relative_to(root).as_posix()
-            if publication
-            else str(stem.with_suffix(".json"))
+        publication = bool(
+            finding is not None and not finding_receipt.exists() and not retry_of
         )
         request = {
             "argument_ref": owner["argument_ref"],
+            "separate_scope_decisions": True,
+            "retry_of": retry_of,
             "review_ref": str(stem.with_suffix(".md")),
-            "verification_ref": verification_ref,
+            "verification_ref": str(stem.with_suffix(".json")),
+            "publication_ref": finding_receipt.relative_to(root).as_posix()
+            if publication
+            else None,
             "publication_requested": publication,
             "applications": [
                 {
@@ -372,6 +435,7 @@ def _check_application_group(*, llm, root, apps, retry_errors):
                     "obligation_id": app["obligation_id"],
                     "obligation_version": app["obligation_version"],
                     "bindings": application_review_bindings(app),
+                    "premise_refs": app["premise_refs"],
                     "application_ref": str(
                         Path(app["result_ref"]).parent
                         / "verification"
@@ -381,6 +445,30 @@ def _check_application_group(*, llm, root, apps, retry_errors):
                 for app in pending
             ],
         }
+        refs = finding["refs"] if publication else []
+        request["manuscript_inputs"] = list(
+            dict.fromkeys(
+                r
+                for r in refs
+                if (root / r).is_file()
+                and (root / r).resolve().is_relative_to(root)
+                and not is_call_path(root / r)
+            )
+        )
+        if not publication and finding_receipt.is_file():
+            previous = json.loads(finding_receipt.read_text())
+            if (
+                previous.get("source_binding") == owner["argument"]
+                and previous["verdict"]["stage_status"] != "VERIFIER_ERROR"
+            ):
+                request["manuscript_inputs"].append(
+                    finding_receipt.relative_to(root).as_posix()
+                )
+        request["manuscript_bindings"] = [
+            binding(root, r)
+            for r in request["manuscript_inputs"]
+            if not r.startswith(("results/", "memory/")) and "/state/" not in r
+        ]
         _write_json_atomic(root / request_ref, request)
     bindings = list(
         {
@@ -389,12 +477,15 @@ def _check_application_group(*, llm, root, apps, retry_errors):
             for row in item["bindings"]
         }.values()
     )
+    bindings.extend(request.get("manuscript_bindings", []))
     verification_ref = request["verification_ref"]
 
+    frozen_request = binding(root, request_ref)
     saved_record = None
 
     def save_review(verdict):
         nonlocal saved_record
+        check_binding(root, frozen_request)
         for row in bindings:
             check_binding(root, row)
         saved = {
@@ -405,11 +496,12 @@ def _check_application_group(*, llm, root, apps, retry_errors):
             "source_binding": owner["argument"],
             "dependency_bindings": bindings,
             "request_ref": request_ref,
-            "request_binding": binding(root, request_ref),
+            "request_binding": frozen_request,
             "review_binding": binding(root, request["review_ref"])
             if (root / request["review_ref"]).is_file()
             else None,
             "verdict": verdict,
+            "separate_scope_decisions": request.get("separate_scope_decisions", False),
         }
         _write_json_atomic(root / verification_ref, saved)
         saved_record = saved
@@ -422,7 +514,15 @@ def _check_application_group(*, llm, root, apps, retry_errors):
         llm=llm,
         workdir=root,
         draft_ref=owner["argument_ref"],
-        input_refs=tuple(dict.fromkeys([request_ref, *(r["ref"] for r in bindings)])),
+        input_refs=tuple(
+            dict.fromkeys(
+                [
+                    request_ref,
+                    *(r["ref"] for r in bindings),
+                    *request.get("manuscript_inputs", []),
+                ]
+            )
+        ),
         round_index=assignment["round_index"],
         target_contract_id=read_json(root, owner["target"]["ref"])["contract_id"],
         application_request=request,
@@ -437,6 +537,4 @@ def _check_application_group(*, llm, root, apps, retry_errors):
             {"stage_status": "VERIFIER_ERROR", "diagnostics": list(outcome.diagnostics)}
         )
     _commit_application_reviews(root, request, verification_ref)
-    if record["verdict"].get("stage_status") == "VERIFIER_ERROR":
-        return False
-    return True
+    return not any(application_review_incomplete(app, record) for app in pending)

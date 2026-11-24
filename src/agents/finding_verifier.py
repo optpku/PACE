@@ -94,6 +94,10 @@ def _finding_receipt_schema(request=None):
         }
     )
     check["required"] = list(check["properties"])
+    if request and request.get("separate_scope_decisions"):
+        check["properties"]["status"]["enum"].append("VERIFIER_ERROR")
+        check["properties"]["reuse_authorized"] = {"type": "boolean"}
+        check["required"].append("reuse_authorized")
     checks = array_of(check)
     if request:
         count = len(request["applications"])
@@ -125,6 +129,10 @@ def validate_finding_application(payload, request, workdir):
         return errors
     checks = payload.get("application_checks", [])
     expected = {item["application_key"]: item for item in request["applications"]}
+    separate = request.get("separate_scope_decisions", False)
+    statuses = {"APPLICABLE", "NOT_ESTABLISHED"} | (
+        {"VERIFIER_ERROR"} if separate else set()
+    )
     seen = set()
     valid = isinstance(checks, list)
     for check in checks if valid else ():
@@ -138,12 +146,19 @@ def validate_finding_application(payload, request, workdir):
             or key in seen
             or check.get("obligation_id") != item["obligation_id"]
             or check.get("obligation_version") != item["obligation_version"]
-            or check.get("status") not in {"APPLICABLE", "NOT_ESTABLISHED"}
+            or check.get("status") not in statuses
+            or (separate and type(check.get("reuse_authorized")) is not bool)
+            or (
+                check.get("status") != "APPLICABLE"
+                and check.get("reuse_authorized") is True
+            )
             or check.get("review_ref") != request["review_ref"]
             or (
                 check.get("status") == "APPLICABLE"
                 and (
-                    payload.get("stage_status") != "PASS"
+                    check.get("reuse_authorized") is not True
+                    if separate
+                    else payload.get("stage_status") != "PASS"
                     or payload.get("reuse_authorized") is not True
                 )
             )

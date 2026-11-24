@@ -409,6 +409,27 @@ def application_review_bindings(app: dict) -> list[dict]:
     return list({digest(row): row for row in bindings}.values())
 
 
+def check_joint_finding_record(root: Path, draft_ref: str, record: dict) -> None:
+    joint = record.get("joint_receipt_ref")
+    if not joint:
+        return
+    receipt = read_json(root, joint)
+    check_binding(root, receipt["request_binding"])
+    request = read_json(root, receipt["request_ref"])
+    if (
+        record != {**receipt, "joint_receipt_ref": joint}
+        or request.get("verification_ref") != joint
+        or request.get("publication_ref")
+        != str(Path(draft_ref).with_suffix(".verification.json"))
+        or request.get("argument_ref") != draft_ref
+        or receipt["request_binding"]["ref"] != receipt["request_ref"]
+        or not request.get("publication_requested")
+    ):
+        raise ValueError(
+            "finding publication differs from the independently accepted manuscript review"
+        )
+
+
 def load_application_review(root: Path, app: dict) -> dict | None:
     """Resolve a scope's reference to the single, immutable manuscript review."""
     ref = str(
@@ -433,11 +454,32 @@ def load_application_review(root: Path, app: dict) -> dict | None:
         ),
         None,
     )
-    if item is None or item["bindings"] != application_review_bindings(app):
+    if (
+        item is None
+        or item["bindings"] != application_review_bindings(app)
+        or item["application_ref"] != ref
+        or request["verification_ref"] != pointer["ref"]
+        or record["request_binding"]["ref"] != record["request_ref"]
+        or record["source_binding"] != app["argument"]
+        or request["argument_ref"] != app["argument_ref"]
+        or (
+            record.get("review_binding")
+            and record["review_binding"]["ref"] != request["review_ref"]
+        )
+    ):
         raise ValueError("application review has different dependencies")
     if record.get("review_binding"):
         check_binding(root, record["review_binding"])
     return record
+
+
+def application_review_incomplete(app: dict, record: dict) -> bool:
+    verdict = record["verdict"]
+    if record.get("separate_scope_decisions"):
+        for row in verdict.get("application_checks", []):
+            if row.get("application_key") == app["application_key"]:
+                return row.get("status") == "VERIFIER_ERROR"
+    return verdict["stage_status"] == "VERIFIER_ERROR"
 
 
 def application_is_approved(app: dict, record: dict) -> bool:
@@ -448,9 +490,16 @@ def application_is_approved(app: dict, record: dict) -> bool:
         row for row in checks if row.get("application_key") == app["application_key"]
     ]
     return (
-        verdict.get("stage_status") == "PASS"
-        and verdict.get("reuse_authorized") is True
-        and len(matching) == 1
+        len(matching) == 1
+        and (
+            record.get("separate_scope_decisions")
+            and matching[0].get("reuse_authorized") is True
+            or (
+                verdict.get("stage_status") == "PASS"
+                and verdict.get("reuse_authorized") is True
+                and not record.get("separate_scope_decisions")
+            )
+        )
         and matching[0].get("obligation_id") == app["obligation_id"]
         and matching[0].get("obligation_version") == app["obligation_version"]
         and matching[0].get("status") == "APPLICABLE"
@@ -550,6 +599,7 @@ def prepare_delta_payload(
             obligation["version"],
             argument["ref"],
             argument["sha256"],
+            tuple(sorted(digest(row) for row in premises)),
         )
         review = grouped.setdefault(
             key,

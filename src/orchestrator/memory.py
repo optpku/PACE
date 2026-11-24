@@ -568,6 +568,7 @@ def refresh_application_memory(root: Path) -> None:
     from pace.artifacts.workspace import _write_json_atomic
     from pace.contracts.research.memory import (
         application_is_approved,
+        application_review_incomplete,
         application_review_bindings,
         check_binding,
         enabled,
@@ -614,8 +615,7 @@ def refresh_application_memory(root: Path) -> None:
             app.pop("review_text_ref", None)
             continue
         ref = str(read_json(root, ref)["verification_binding"]["ref"])
-        verdict = record["verdict"]
-        if verdict.get("stage_status") == "VERIFIER_ERROR":
+        if application_review_incomplete(app, record):
             app.update(status="PROPOSED", review_ref=ref)
             app.pop("review_text_ref", None)
             continue

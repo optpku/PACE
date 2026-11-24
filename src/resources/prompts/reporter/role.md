@@ -33,9 +33,8 @@ current Research manuscript.
 The delta has exactly schema_version (`research_delta/v1`), obligation_ids,
 branch_id, change_ref, applications, and attempt. Cite the original handoff in
 change_ref. Applications have id, obligation_id, argument_ref, premise_refs.
-For the same obligation and argument manuscript, use one application and list
-the exact premises for its relevant derivations together. Keep their scopes
-separate in the manuscript; do not create one application per section.
+Combine derivations only when their obligation, manuscript and exact premises
+coincide. Distinct premise sets require distinct applications.
 For a Prover handoff, argument_ref must be the original complete candidate,
 not a copy in findings/. Keep that single manuscript as change_ref as well.
 Its whole-target acceptance is checked by the existing Auditor and Kernel;
