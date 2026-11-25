@@ -1,1 +1,0 @@
-Repair only the defects named in the supplied critic briefs. Preserve all unrelated passages, do not add a new branch or parameter family. Record original defect, actual edits and affected dependencies; the Host assigns operation REVISE.

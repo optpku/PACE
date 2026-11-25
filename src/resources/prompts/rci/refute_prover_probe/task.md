@@ -1,1 +1,2 @@
-Attack only probe_target from the same mechanism-free view. Distinguish a failed local construction from a refutation of the original target; do not repeat generic positive special cases.
+Test the precise statement in PROBE_TASK for a counterexample independently.
+Save the calculations and their scope in `review.md`.

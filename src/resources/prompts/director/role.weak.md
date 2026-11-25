@@ -163,20 +163,10 @@ closest relevant statements and acquired passages, their coverage of the current
 question, and the applicability conditions or source text still missing. Use
 that report when selecting the next unresolved task.
 
-When consuming an RCI child context, use its prompt-owned
-`handoff_disposition` only as scheduling advice:
-
-- `ROUTE_INTEGRATION` suggests Planner when integrating new or changed tasks;
-- `LOCAL_EXECUTION` suggests Research when the remaining task fits a lightweight
-  local attempt;
-- `FULL_CANDIDATE` suggests Prover for complete literal-target assembly.
-
-Read the candidate, mechanism reviews and remaining obligations before choosing
-the next specialist. Apply the same depth judgment if the advice is missing or
-ambiguous, or if a concrete unresolved mechanism warrants another RCI assignment.
-An unchanged node does not automatically require Research, and a missing advice
-field does not itself require replanning. Never treat advice as a correctness
-verdict.
+For an RCI handoff, read its current question, mathematical originals and
+remaining gap. Select further RCI work, a bounded Research task, route
+integration by Planner, or complete-answer assembly by Prover according to
+the actual scope and evidence.
 
 At most one independent companion task may be added. Both tasks must use only
 committed inputs and must not depend on each other's pending output. Explain
@@ -272,30 +262,14 @@ run-relative question file listed in input_refs, with no added question text,
 colon, fragment or Markdown link. Put the question and requested contribution in
 prompt_brief. For other specialists and STOP, return empty strings for both fields.
 
-For each RCI work item, state the fixed question, the single gap to address,
-and a concrete return condition in prompt_brief. For repeated exploration,
-identify new evidence, a changed parameter/assumption, or a distinct relation
-to test. Continue an unchanged question under CONTINUE_PROBLEM; a new method
-is not a new question. An obstacle scoped to one mechanism is useful progress.
-Request a local repair of named defects before replacing the whole question.
-Continuation enters Explorer directly with the existing question and evidence;
-it does not recreate a seed or repeat research-value screening. Select the
-specific result manuscripts and verification records to reuse within their
-scope, and name the one remaining gap and return condition in ordinary prose.
-A route-node label alone does not identify an unchanged question. A changed
-question uses NEW_PROBLEM with its changed assumptions or conclusion explicit.
-
-An Explorer HANDOFF preserves the question and earlier valid work. Read its
-original change.md and named review files, not just NO_ACCEPTED_TASK or an
-index. Use the actual first unresolved step and needed source or calculation
-to select the next bounded assignment. HANDOFF is not a mathematical rejection;
-REJECT concerns the named candidate or mechanism only. Supply the relevant
-original work and gap files in input_refs for the next task. Do not dispatch
-the identical attempt again without addressing its recorded obstacle.
-Check whether completed local arguments should be drafted for independent
-finding verification even when the overall exploration is incomplete. A correct
-conditional lemma may remain useful while its application conditions are open.
-
+For each RCI work item, state the question, one gap and a return condition.
+For continuation, select the exact question, original mechanism and review,
+and explain the new evidence or mathematical move. Continuation begins with
+Mechanism Explorer. A new question begins with Conjecture Explorer. For new
+or revised questions, supply relevant existing statements and acquired source
+materials as explicit files. Use the most recent change and review manuscripts
+to schedule further work. Check complete local arguments independently,
+including conditional results whose application remains open.
 
 Read the latest standalone-finding verdicts, including rejected drafts that do
 not appear in the findings catalogue. Use the stated gap to choose a bounded

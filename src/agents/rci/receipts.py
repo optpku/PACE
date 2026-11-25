@@ -1,322 +1,97 @@
-"""Validate RCI delivery interfaces without interpreting mathematical claims."""
+"""Bind scheduled actions to the input and output files used by the Host."""
 
-import json
-from pathlib import Path, PureWindowsPath
+from pathlib import Path
 
-from pace.artifacts.workspace import (
-    _write_text_atomic,
-    is_call_path,
-    path_has_symlink_component,
-)
-from pace.runtime.text_revisions import render_revision
-
-REVIEW_PHASES = frozenset(
-    {
-        "RAW_SEED_CRITIC_MATH",
-        "RAW_SEED_CRITIC_RESEARCH",
-        "MECHANISM_CRITIC",
-        "COVERAGE_JUDGE",
-        "FINAL_CHALLENGER",
-        "FRONTIER_REFUTE_PROBE",
-        "BLIND_PROVER_PROBE",
-        "REFUTE_PROVER_PROBE",
-    }
-)
+from .roles import AUTHORS
 
 
-def host_receipt_fields(root, directory, phase, action, *, routing_context):
-    """Bind deterministic delivery paths and the assigned mechanism identity."""
-    files = {}
-    if phase in REVIEW_PHASES:
-        files["review_ref"] = "review.md"
-    if phase == "SEED_SCOUT":
-        files["seed_ref"] = "seed.md"
-        if routing_context["seed_operation"] == "REVISE":
-            files.update(patch_ref="patch.json", change_ref="change.md")
-    elif phase == "FRONTIER_EXPLORER":
-        files["change_ref"] = "change.md"
-        if action in {"PROPOSE_MECHANISM", "ADD_MECHANISM"}:
-            files["mechanism_ref"] = "mechanism.md"
-        elif action == "REQUEST_REFUTATION_PROBE":
-            files["probe_task_ref"] = "probe_task.md"
-    elif phase == "COVERAGE_JUDGE" and action == "FULL_COVERAGE":
-        files["closure_brief_ref"] = "closure_brief.md"
-    elif phase == "FINAL_CHALLENGER" and action == "RUN_PROBES":
-        files["probe_task_ref"] = "probe_task.md"
-    elif phase == "FRONTIER_HARDENER" and action == "HARDEN":
-        files["candidate_ref"] = "candidate.md"
-    fields = {
-        key: (directory / name).relative_to(root).as_posix()
-        for key, name in files.items()
-    }
-    if phase == "SEED_SCOUT":
-        fields["seed_operation"] = routing_context["seed_operation"]
-    if phase == "MECHANISM_CRITIC":
-        fields["mechanism_id"] = routing_context["mechanism_id"]
-    return fields
+def output_names(phase):
+    if phase == "CONJECTURE_EXPLORER":
+        return ("change.md", "candidate.md", "probe_task.md")
+    if phase == "MECHANISM_EXPLORER":
+        return ("change.md", "mechanism.md")
+    return ("review.md",)
 
 
-def validate_receipt(
-    root, directory, phase, payload, *, routing_context, seed_base="", inputs=()
-):
-    """Check Host-consumed routing and files; retain additional model context."""
-    fixed = host_receipt_fields(
-        root, directory, phase, payload.get("action"), routing_context=routing_context
-    )
-    payload = {**payload, **fixed}
-    errors = []
+def host_receipt_fields(root, directory, phase, payload, routing):
+    action = payload.get("action")
+    references = {}
 
-    def error(key, message, *, reason_code="phase_receipt_invalid"):
-        errors.append(
-            {
-                "stage": "receipt",
-                "json_pointer": "/" + key,
-                "reason_code": reason_code,
-                "message": message,
-            }
+    def own(name):
+        ref = (directory / name).relative_to(root).as_posix()
+        references[Path(name).stem + "_ref"] = ref
+        return ref
+
+    if phase in AUTHORS:
+        own("change.md")
+    else:
+        own("review.md")
+    if action == "PROPOSE_CONJECTURE":
+        own("candidate.md")
+    elif action in {"PROBE_PROOF", "PROBE_REFUTATION"}:
+        own("probe_task.md")
+    elif action == "PROPOSE_MECHANISM":
+        ref = own("mechanism.md")
+        base = routing.get("base_mechanism_ref") or payload.get("base_mechanism_ref")
+        if base:
+            references["base_mechanism_ref"] = base
+        references["mechanism_id"] = routing.get("mechanism_ids", {}).get(base, ref)
+    if "candidate_ref" in routing:
+        key = "candidate_ref" if phase in AUTHORS else "reviewed_candidate_ref"
+        references[key] = routing["candidate_ref"]
+    if "mechanism_ref" in routing:
+        references["reviewed_mechanism_ref"] = routing["mechanism_ref"]
+    return references
+
+
+def validate_receipt(root, directory, phase, payload, *, inputs, routing):
+    action = payload.get("action")
+    issues = []
+
+    def error(key, message, reason="phase_receipt_invalid"):
+        issues.append(
+            {"json_pointer": f"/{key}", "message": message, "reason_code": reason}
         )
 
-    def file(key, ref, *, owned=False):
-        if (
-            not isinstance(ref, str)
-            or not ref
-            or Path(ref).is_absolute()
-            or PureWindowsPath(ref).drive
-            or (".." in Path(ref).parts)
-            or ("\\" in ref)
-        ):
-            error(key, "expected a run-relative file reference")
-            return False
+    artifacts = set(output_names(phase))
+    for key, ref in host_receipt_fields(
+        root, directory, phase, payload, routing
+    ).items():
         path = root / ref
         if (
-            not path.resolve().is_relative_to(root.resolve())
-            or path_has_symlink_component(root, path)
-            or is_call_path(Path(ref))
+            path.parent == directory
+            and path.name in artifacts
+            and (not path.is_file() or not path.read_bytes().strip())
         ):
-            error(key, "file reference leaves the permitted artifact scope")
-            return False
-        if owned and (not path.resolve().is_relative_to(directory.resolve())):
-            error(key, "new artifact must belong to this phase directory")
-            return False
-        if not path.is_file() or not path.read_bytes().strip():
             error(
                 key,
-                f"artifact is missing or empty: {ref}",
-                reason_code=(
-                    "phase_artifact_missing"
-                    if key in fixed
-                    else "phase_receipt_invalid"
-                ),
+                f"Write the mathematical manuscript at {ref}.",
+                "phase_artifact_missing",
             )
-            return False
-        return True
 
-    action = (
-        payload["seed_operation"] if phase == "SEED_SCOUT" else payload.get("action")
-    )
-    routing = routing_context or {}
-    if phase == "COVERAGE_JUDGE" and "mechanism_ids" in routing:
-        selected = payload.get("selected_mechanism_ids", [])
+    if phase == "CONJECTURE_EXPLORER":
+        selected = payload.get("mechanism_ref")
         if (
-            not isinstance(selected, list)
-            or any(
-                (
-                    not isinstance(item, str) or item not in routing["mechanism_ids"]
-                    for item in selected
-                )
-            )
-            or len(set(map(str, selected))) != len(selected)
+            action == "REVIEW_MECHANISM"
+            or (action == "EXPLORE_MECHANISM" and selected is not None)
+        ) and selected not in inputs.get("MECHANISM", ()):
+            error("mechanism_ref", "Select an exact MECHANISM input file.")
+    elif action == "PROPOSE_MECHANISM":
+        base = payload.get("base_mechanism_ref")
+        assigned = routing.get("base_mechanism_ref")
+        if base is not None and (
+            base not in inputs.get("MECHANISM", ()) or (assigned and base != assigned)
         ):
             error(
-                "selected_mechanism_ids", "select distinct promoted mechanism IDs only"
+                "base_mechanism_ref",
+                "Select the mechanism being repaired from the supplied files.",
             )
-        representative = payload.get("representative_mechanism_id", "")
-        if representative and (
-            not isinstance(selected, list) or representative not in selected
+    elif action == "REUSE":
+        if payload.get("existing_candidate_ref") not in inputs.get(
+            "RELATED_CANDIDATE", ()
         ):
             error(
-                "representative_mechanism_id",
-                "representative must be a selected mechanism",
+                "existing_candidate_ref",
+                "Select an exact RELATED_CANDIDATE input file.",
             )
-    if phase == "SEMANTIC_DEDUP" and "tasks" in routing:
-        rows = payload.get("decisions", [])
-        ids = (
-            [row.get("task_id") for row in rows if isinstance(row, dict)]
-            if isinstance(rows, list)
-            else []
-        )
-        expected = [row["task_id"] for row in routing["tasks"]]
-        if len(ids) != len(expected) or set(map(str, ids)) != set(expected):
-            error(
-                "decisions", "return each assigned task ID exactly once, with no extras"
-            )
-        else:
-            by_id = {row["task_id"]: row for row in rows}
-            predecessors = set(routing.get("prior_refs", ()))
-            for task in routing["tasks"]:
-                row = by_id[task["task_id"]]
-                if (
-                    row.get("action") == "DUPLICATE"
-                    and row.get("duplicate_of_ref") not in predecessors
-                ):
-                    error(
-                        "decisions",
-                        "a duplicate must reference a prior or earlier new task",
-                    )
-                predecessors.add(task["candidate_ref"])
-    if phase == "SEED_SCOUT" and action == "REVISE":
-        if file("patch_ref", payload.get("patch_ref"), owned=True) and file(
-            "change_ref", payload.get("change_ref"), owned=True
-        ):
-            try:
-                patch = json.loads((root / payload["patch_ref"]).read_text())
-                if not isinstance(patch, dict) or not isinstance(
-                    patch.get("edits"), list
-                ):
-                    raise ValueError("revision requires an edits list")
-            except (ValueError, TypeError) as exc:
-                error("patch_ref", str(exc), reason_code="phase_artifact_invalid")
-                return errors
-            if not seed_base:
-                error(
-                    "patch_ref",
-                    "supplied seed base is missing",
-                    reason_code="phase_artifact_invalid",
-                )
-            elif any(
-                (
-                    edit.get("old") == (root / seed_base).read_text()
-                    for edit in patch.get("edits", [])
-                    if isinstance(edit, dict)
-                )
-            ):
-                error(
-                    "patch_ref",
-                    "whole-seed replacement requires a new research task",
-                    reason_code="phase_artifact_invalid",
-                )
-            else:
-                try:
-                    path = directory / "seed.md"
-                    if path_has_symlink_component(root, path):
-                        raise ValueError("revision output must not contain a symlink")
-                    text = render_revision(
-                        root, payload["patch_ref"], base_ref=seed_base
-                    )
-                    if path.is_file() and path.read_text() != text:
-                        raise ValueError(
-                            "revision would overwrite an existing mathematical draft"
-                        )
-                except (OSError, ValueError, TypeError, KeyError) as exc:
-                    error("patch_ref", str(exc), reason_code="phase_artifact_invalid")
-    required = []
-    if phase == "SEED_SCOUT":
-        if action == "CREATE":
-            file(
-                "seed_ref",
-                (directory / "seed.md").relative_to(root).as_posix(),
-                owned=True,
-            )
-    elif phase == "FRONTIER_EXPLORER":
-        if action not in {"REJECT", "HANDOFF", "SPLIT"}:
-            required.append("candidate_ref")
-        if action in {"PROPOSE_MECHANISM", "ADD_MECHANISM"}:
-            required.append("mechanism_ref")
-        if action == "REQUEST_REFUTATION_PROBE":
-            required.append("probe_task_ref")
-    elif phase == "COVERAGE_JUDGE" and action == "FULL_COVERAGE":
-        required = ["closure_brief_ref"]
-    elif phase == "FINAL_CHALLENGER" and action == "RUN_PROBES":
-        required = ["probe_task_ref"]
-    elif phase == "FRONTIER_HARDENER" and action == "HARDEN":
-        required = ["candidate_ref"]
-    elif phase == "STATEMENT_NORMALIZER" and action == "NORMALIZE":
-        required = ["candidate_ref"]
-    if phase in REVIEW_PHASES:
-        required.append("review_ref")
-    if phase == "FRONTIER_EXPLORER":
-        required.append("change_ref")
-    for key in required:
-        ref = payload.get(key)
-        file(key, ref, owned=not (key == "candidate_ref" and ref in inputs))
-    if action == "SPLIT" and phase == "FRONTIER_EXPLORER":
-        refs = payload.get("child_candidate_refs")
-        if (
-            not isinstance(refs, list)
-            or len(refs) != 2
-            or len(set(map(str, refs))) != 2
-        ):
-            error(
-                "child_candidate_refs", "SPLIT requires exactly two distinct task files"
-            )
-        else:
-            for ref in refs:
-                file("child_candidate_refs", ref, owned=True)
-    for key, value in payload.items():
-        if phase == "SEED_SCOUT" and key == "seed_ref":
-            continue
-        if (
-            key.endswith("_ref")
-            and value
-            and (key not in required)
-            and (key != "route_node_ref")
-        ):
-            file(key, value)
-        elif key.endswith("_refs") and value:
-            if not isinstance(value, list):
-                error(key, "expected a list of file references")
-            else:
-                for ref in value:
-                    file(key, ref)
-    refs = payload.get("dependency_refs")
-    if (
-        phase in REVIEW_PHASES
-        or phase == "FRONTIER_EXPLORER"
-        or "dependency_refs" in payload
-    ) and (not isinstance(refs, list) or not all(isinstance(ref, str) for ref in refs)):
-        error(
-            "dependency_refs",
-            "declare the actually used inputs as a list, including an empty list",
-        )
-    if phase == "MECHANISM_CRITIC" and action == "PROMOTE":
-        if payload.get("support_disposition") not in {
-            "LOCAL_SUPPORT",
-            "COMPOSITION_NEEDED",
-        }:
-            error("support_disposition", "PROMOTE requires its support disposition")
-    if phase == "COVERAGE_JUDGE" and action in {"SUBSTANTIVE_PARTIAL", "FULL_COVERAGE"}:
-        selected = payload.get("selected_mechanism_ids")
-        if (
-            not isinstance(selected, list)
-            or not selected
-            or (not all((isinstance(x, str) and x for x in selected)))
-        ):
-            error(
-                "selected_mechanism_ids",
-                "coverage action requires selected promoted mechanism IDs",
-            )
-    if phase == "SEMANTIC_DEDUP":
-        for row in payload.get("decisions", ()):
-            if row.get("action") == "DUPLICATE":
-                ref = row.get("duplicate_of_ref")
-                if ref not in inputs:
-                    error("duplicate_of_ref", "duplicate must identify a supplied task")
-                else:
-                    file("duplicate_of_ref", ref)
-    return errors
-
-
-def materialize_seed_revision(root, directory, *, seed_base):
-    """Acceptance hook: write a fully checked derived seed once, never during validation."""
-    output = directory / "seed.md"
-    if path_has_symlink_component(root, output):
-        raise ValueError("invalid derived seed output")
-    patch_ref = (directory / "patch.json").relative_to(root).as_posix()
-    text = render_revision(root, patch_ref, base_ref=seed_base)
-    if output.exists():
-        if output.read_text() != text:
-            raise ValueError(
-                "derived seed differs from the existing mathematical draft"
-            )
-        return
-    _write_text_atomic(output, text)
+    return issues

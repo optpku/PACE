@@ -1,6 +1,6 @@
 # Mechanism Skill: Critic-Guided Repair
 
-Use this Skill when Frontier Explorer receives a Mechanism Critic `REPAIR`
+Use this Skill when Mechanism Explorer is assigned a specific mechanism and a repair
 brief. The Critic diagnoses the defect; Explorer owns the revised mechanism.
 
 Preserve the mechanism ID and candidate unless the brief explicitly identifies

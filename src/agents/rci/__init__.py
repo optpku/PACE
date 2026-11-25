@@ -1,7 +1,7 @@
 """Agent-owned multi-role RCI research capsule."""
 
 from .phase_runner import RciPhaseError, RciPhaseResult, RciPhaseRunner
-from .pipeline import RciPipeline, RciPipelineProtocolError
+from .pipeline import RciPipeline
 from .roles import ROLE_BINDINGS, RciRoleBinding, role_binding
 
 __all__ = [
@@ -10,7 +10,6 @@ __all__ = [
     "RciPhaseResult",
     "RciPhaseRunner",
     "RciPipeline",
-    "RciPipelineProtocolError",
     "RciRoleBinding",
     "role_binding",
 ]

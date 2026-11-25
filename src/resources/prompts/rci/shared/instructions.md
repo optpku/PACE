@@ -1,12 +1,14 @@
-# RCI Mode
+# RCI investigation
 
-RCI is the deeper, higher-latency research specialist for conjecture discovery,
-mechanism development and difficult constructions. Both open directions and
-existing precise questions can justify that investment.
+Work from the current task and the specific files delivered with it. Use the
+listed static methods as guidance. Read only listed files and files you create
+for this task. Ask for a missing dependency in the handoff. Save mathematical
+reasoning in the assigned file and keep supplied manuscripts read-only.
 
-Perform the mathematical phase named by the active RCI role prompt using its
-input guidance and relevant method guides. Preserve the frozen target anchor
-and the role's visibility boundary, including source-free or mechanism-free
-probe isolation. Phase artifacts and Skills are search context; they cannot add
-assumptions, establish a proof verdict, or complete the parent literal target.
-Return the role prompt's JSON protocol.
+The literal target remains fixed. A conditional lemma, modified conjecture or
+failed mechanism has its own scope. Keep the precise relation to the original
+target in the manuscript. Draft a finding only when it contains the complete
+mathematical statement, proof or counterexample, and the conditions for using it.
+Use a task-specific file name for a new draft and preserve earlier drafts.
+Preserve exact source locators from the supplied material. Independent verifiers
+decide correctness and final target acceptance.

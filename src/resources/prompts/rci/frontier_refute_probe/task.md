@@ -1,1 +1,0 @@
-Attack only the concrete construction or precise lemma in probe_target. A positive special case does not refute an existential target. If no focused target is supplied, return NO_COUNTEREXAMPLE with the missing obligation; do not re-explore the original open problem.

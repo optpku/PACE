@@ -30,19 +30,12 @@ _ROLE_PATHS = {
     "THEORY_PAPER_WRITER": "writing/paper_writer",
     "RESEARCH_REPORTER": "reporter",
     "WEB_REPORTER": "writing/web_reporter",
-    "RCI_SEED_SCOUT": "rci/seed_scout",
-    "RCI_RAW_SEED_CRITIC_MATH": "rci/raw_seed_critic_math",
-    "RCI_RAW_SEED_CRITIC_RESEARCH": "rci/raw_seed_critic_research",
-    "RCI_FRONTIER_EXPLORER": "rci/frontier_explorer",
-    "RCI_FRONTIER_REFUTE_PROBE": "rci/frontier_refute_probe",
+    "RCI_CONJECTURE_EXPLORER": "rci/conjecture_explorer",
+    "RCI_MECHANISM_EXPLORER": "rci/mechanism_explorer",
+    "RCI_CANDIDATE_CRITIC": "rci/candidate_critic",
     "RCI_MECHANISM_CRITIC": "rci/mechanism_critic",
-    "RCI_COVERAGE_JUDGE": "rci/coverage_judge",
-    "RCI_FINAL_CHALLENGER": "rci/final_challenger",
-    "RCI_FRONTIER_HARDENER": "rci/frontier_hardener",
     "RCI_BLIND_PROVER_PROBE": "rci/blind_prover_probe",
     "RCI_REFUTE_PROVER_PROBE": "rci/refute_prover_probe",
-    "RCI_STATEMENT_NORMALIZER": "rci/statement_normalizer",
-    "RCI_SEMANTIC_DEDUP": "rci/semantic_dedup",
 }
 
 

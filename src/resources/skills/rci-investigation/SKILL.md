@@ -1,6 +1,6 @@
 ---
 name: rci-investigation
-description: Develop a candidate statement and its supporting mechanism through seed review, support review, coverage checks, and independent probes.
+description: Develop and revise conjectures and mechanisms through independent mathematical review and focused probes.
 ---
 
 # RCI investigation
@@ -14,35 +14,24 @@ to the current phase. The phase prompt owns the requested files and receipt.
 
 ## Procedure and method map
 
-1. **Form a precise candidate.** State objects, assumptions, quantifiers,
-   conclusion, and refutation target. Read [claim shape](references/raw_seed/claim_shape_contract.md)
-   and [source gaps](references/raw_seed/source_gap_seed_discovery.md).
-2. **Review the seed.** Separate mathematical plausibility from research
-   value. Read [critic guidance](references/critic/index.md) and
-   [contribution boundaries](references/raw_seed/contribution_boundary.md).
-3. **Develop a mechanism.** Expose intermediate claims and their independent
-   support. Read [mechanism construction](references/mechanism/proof_mechanism.md)
-   and [interfaces](references/multi_mechanism/capability_interface_contract.md).
-4. **Check support and coverage separately.** A justified lemma may still be
-   insufficient for the candidate. Read [mechanism review](references/multi_mechanism/mechanism_audit.md)
-   and [coverage](references/multi_mechanism/bundle_closure_audit.md).
-5. **Challenge and revise.** Use independent statement-only probes to expose
-   easy proofs, counterexamples, or ambiguous formulations. Revise the mechanism,
-   candidate, or decomposition in response to the actual failed relation.
-   Read [challenge review](references/multi_mechanism/semi_open_audit.md).
+1. **Form and review the conjecture.** Use the [claim shape](references/raw_seed/claim_shape_contract.md)
+   and [contribution boundaries](references/raw_seed/contribution_boundary.md).
+2. **Develop and review mechanisms.** Use [mechanism construction](references/mechanism/proof_mechanism.md),
+   [mechanism review](references/multi_mechanism/mechanism_audit.md) and
+   [composition checks](references/multi_mechanism/bundle_closure_audit.md).
+3. **Choose the next mathematical move.** Repair a derivation, find another
+   mechanism, revise the conjecture or request an independent statement-only
+   test according to the actual evidence. Compare [repair and revision](examples/support-versus-coverage.md).
 
-Only Survey may retrieve external sources. RCI analyzes the supplied sources
-and reports missing evidence to the Director. Blind phases remain limited to
-the supplied probe task and static methods. Never consult hidden candidate mechanisms, source leads, reviews,
-sibling work, or history through this library.
+Each role works from its delivered files and static methods. The Host supplies
+source material and preserves the exact scope of each original statement.
 
 ## Output and handoff
 
 Write the phase's requested original mathematical artifacts and return their
 references using its existing receipt format. Keep statement manuscripts
 separate from mechanism and review files. Conditional candidates retain their
-added assumptions; they do not replace the original target. Support/coverage
-receipts remain research guidance, with final acceptance reserved for the
+added assumptions; they do not replace the original target. Mechanism and candidate reviews remain research guidance, with final acceptance reserved for the
 complete proof's fresh Auditor/Kernel review.
 
 - [Shared phase discipline](references/rci_search_core.md)

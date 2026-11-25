@@ -1,1 +1,0 @@
-Use the work item and explicit closure trigger to choose resolution handoff, in-scope hardening, or rejection.

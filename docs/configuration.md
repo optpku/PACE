@@ -160,9 +160,9 @@ PACE isolates per-call Codex configuration while reusing authentication. Persona
 
 Research, proof and writing have their own saved tasks. Runtime events contain factual identities, status and output references. The Web application reads these records to create user updates and reports; a presentation failure does not change the mathematical verdict or repeat completed work.
 
-RCI checks the existing call/time budget before every new subphase and reserves at most 64 distinct new phase slots per dispatch. Recovery reuses committed phases. The Host records CREATE or REVISE and assigned output paths for seed work. Continuing an existing question enters Explorer directly; a changed mathematical statement requires an explicit new question.
+RCI checks the existing call/time budget before every new subphase and reserves at most 64 distinct new phase slots per dispatch. Recovery reuses committed phases. Mechanism Explorer starts a continued question with its original statement. A new conjecture is authored and independently reviewed before it becomes the active question.
 
-RCI receipts carry only routing fields and artifact references. Review/change Markdown holds mathematical content. One receipt correction can fix missing controls without creating missing mathematics. An Explorer HANDOFF preserves useful work and its first unresolved gap for Director scheduling; it does not refute the candidate.
+RCI receipts carry only routing fields and artifact references. Review/change Markdown holds mathematical content. One receipt correction can fix missing controls without creating missing mathematics. A handoff returns original work and the remaining gap to the Director. A local advance can go to independent finding verification.
 
 Scope-review reuse compares the actual question, target, review rules, recorded dependencies and objections. New or changed relevant evidence triggers a fresh review. Reuse is search context and does not authorize a final proof verdict.
 

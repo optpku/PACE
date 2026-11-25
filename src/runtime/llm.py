@@ -1814,7 +1814,6 @@ def _build_file_driven_cli_instruction(
     if role.upper() in {
         "RCI_BLIND_PROVER_PROBE",
         "RCI_REFUTE_PROVER_PROBE",
-        "RCI_FRONTIER_REFUTE_PROBE",
     }:
         base += (
             f"Read `{prompt_file}` for your statement-only probe task. "
@@ -1832,11 +1831,11 @@ def _build_file_driven_cli_instruction(
         )
     elif read_scope == "declared":
         base += (
-            f"Read `{prompt_file}` for this bounded correction task. Read only that prompt, "
-            "the output schema if supplied, and the explicit input/output files below. "
-            "Do not browse the workspace, memory, source archives or prior task prompts. "
-            "Input manuscripts are read-only; do not revise mathematical content, plans or verdicts. "
-            "If a mathematical revision is necessary, report it instead of performing it.\n\n"
+            f"Read `{prompt_file}` for this bounded task. Read only that prompt, "
+            "the output schema if supplied, the explicit inputs below and files you create for this task. "
+            "Do not browse the workspace, memory, source archives or prior task prompts, "
+            "or use links to read unlisted files. Keep input manuscripts read-only. "
+            "Write the artifacts assigned by the task in its writable locations.\n\n"
         )
     else:
         base += (

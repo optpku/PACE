@@ -1,1 +1,0 @@
-Review only the seed's mathematical validity.

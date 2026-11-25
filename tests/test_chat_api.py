@@ -49,16 +49,15 @@ def test_only_survey_gets_network_tools(tmp_path):
     assert not WorkspaceTools(tmp_path,{'role':'SURVEY'},web_search=False).web
 
 
-@pytest.mark.parametrize('phase,action', [('BLIND_PROVER_PROBE','NO_FIRST_STEP'),
-    ('REFUTE_PROVER_PROBE','NO_COUNTEREXAMPLE'), ('FRONTIER_REFUTE_PROBE','NO_COUNTEREXAMPLE')])
-def test_actual_blind_phase_has_no_memory_and_resumes_without_model(ws,monkeypatch,phase,action):
+@pytest.mark.parametrize('phase', ['BLIND_PROVER_PROBE', 'REFUTE_PROVER_PROBE'])
+def test_actual_blind_phase_has_no_memory_and_resumes_without_model(ws,monkeypatch,phase):
     from pace.agents.rci.phase_runner import RciPhaseRunner
     from pace.agents.director.context import freeze_context
     from test_research_memory import task
     freeze_context(ws.root,ws.work_ref('round1/assignment/task.json'),task(),[ws.work_ref('input/problem.md')])
     ws.write_text('probe.md','Self-contained problem with permitted assumptions.')
     ws.write_text('memory/secret.md','PRIVATE_METHOD_SENTINEL')
-    directory=ws.path(ws.work_ref('round1/rci/attempt_001/candidate_01/'+phase.lower()))
+    directory=ws.path(ws.work_ref('round1/rci/attempt_001/001_'+phase.lower()))
     review=str(directory.relative_to(ws.root)/'review.md'); requests=[]
     llm=ChatCompletionsLLM(model='fixture',base_url='https://example.invalid/v1',web_search=False)
     def respond(messages,tools):
@@ -69,60 +68,18 @@ def test_actual_blind_phase_has_no_memory_and_resumes_without_model(ws,monkeypat
         if len(requests)==1:
             msg={'role':'assistant','content':None,'tool_calls':[{'id':'write','type':'function','function':{
                 'name':'write_file','arguments':json.dumps({'path':review,'content':'No complete proof found; this is not a refutation.'})}}]}
-        else: msg={'role':'assistant','content':json.dumps({'action':action,'dependency_refs':[]})}
+        else: msg={'role':'assistant','content':'{}'}
         return {'choices':[{'message':msg,'finish_reason':'tool_calls' if len(requests)==1 else 'stop'}]}
     monkeypatch.setattr(llm,'_request',respond)
     runner=RciPhaseRunner(llm=llm)
     kwargs=dict(phase=phase,workdir=ws.root,call_dir=directory,target_contract_id='TARGET',
         input_refs={'PROBE_TASK':['probe.md'],'MECHANISM':['memory/secret.md']},prompt_seed='Check the fixed problem.',round_index=1)
     result=runner.run(**kwargs)
-    assert result.payload['action']==action and len(requests)==2
+    assert result.payload == {'review_ref': review} and len(requests)==2
     assert runner.run(**kwargs)==result and len(requests)==2
 
 
 from test_research_memory import ws
-
-
-@pytest.mark.parametrize('separate_reporter', [False, True])
-def test_explorer_delta_and_originals_are_reused_together(ws, monkeypatch, separate_reporter):
-    from pace.agents.rci.phase_runner import RciPhaseRunner
-    from pace.agents.director.context import freeze_context
-    from test_research_memory import task
-    if separate_reporter:
-        ws.write_json(ws.work_ref('state/research_execution_policy.json'),
-                      {'research_memory_version': 1, 'research_delta_owner': 'reporter'})
-    freeze_context(ws.root, ws.work_ref('round1/assignment/task.json'), task(), [ws.work_ref('input/problem.md')])
-    ws.write_json(ws.work_ref('round1/assignment/task.json'), {'round_index': 1})
-    ws.write_text('seed.md', 'A fixed self-contained local mathematical question.')
-    directory=ws.path(ws.work_ref('round1/rci/attempt_001/candidate_01/frontier_explorer'))
-    change=str(directory.relative_to(ws.root)/'change.md')
-    delta={'schema_version':'research_delta/v1','obligation_ids':['target'],'branch_id':'b-target',
-        'change_ref':change,'applications':[],'attempt':{'outcome':'NOT_ESTABLISHED','obstacle_ref':change,'reopen_condition_ref':change}}
-    calls=[]; llm=ChatCompletionsLLM(model='fixture')
-    def respond(messages,tools):
-        calls.append(messages[:])
-        if len(calls)==1:
-            files={'change.md':'The missing connection and a concrete next test.', 'mechanism.md':'A proposed route, not a proved lemma.',
-                   'research_delta.json':json.dumps(delta)}
-            if separate_reporter:
-                del files['research_delta.json']
-            message={'role':'assistant','content':None,'tool_calls':[{'id':name,'type':'function','function':{
-                'name':'write_file','arguments':json.dumps({'path':str(directory.relative_to(ws.root)/name),'content':content})}}
-                for name,content in files.items()]}
-        else: message={'role':'assistant','content':json.dumps({'action':'PROPOSE_MECHANISM','candidate_ref':'seed.md','dependency_refs':[]})}
-        return {'choices':[{'message':message,'finish_reason':'tool_calls' if len(calls)==1 else 'stop'}]}
-    monkeypatch.setattr(llm,'_request',respond)
-    runner=RciPhaseRunner(llm=llm)
-    kwargs=dict(phase='FRONTIER_EXPLORER',workdir=ws.root,call_dir=directory,target_contract_id='TARGET',
-        input_refs={'TARGET_ANCHOR':[ws.work_ref('input/problem.md')],'REVIEWED_SEED':['seed.md']},
-        prompt_seed='Investigate this fixed gap.',round_index=1)
-    result=runner.run(**kwargs)
-    if separate_reporter:
-        assert 'research_delta_ref' not in result.payload
-        assert not (directory / 'research_delta.json').exists()
-    else:
-        assert result.payload['research_delta_ref'].endswith('/research_delta.json')
-    assert runner.run(**kwargs)==result and len(calls)==2
 
 
 def test_kernel_native_writable_paths_match_prompt_without_host_receipt(ws, monkeypatch):
@@ -212,7 +169,7 @@ def test_both_call_interfaces_pass_readonly_archives(ws, monkeypatch, kind):
 
 
 @pytest.mark.parametrize('role', ['RESEARCH', 'PLANNER', 'WHOLE_PROVER', 'RESEARCH_REPORTER',
-                                 'RCI_FRONTIER_EXPLORER', 'finding_verifier'])
+                                 'finding_verifier'])
 def test_declared_archives_are_readonly_and_do_not_authorize_siblings(ws, role):
     archive = ws.work_ref('round1/archive.md')
     sibling = ws.work_ref('round1/private_draft.md')
@@ -231,7 +188,7 @@ def test_declared_archives_are_readonly_and_do_not_authorize_siblings(ws, role):
         tools.execute('read_file', {'path':sibling})
 
 
-@pytest.mark.parametrize('role', ['RCI_BLIND_PROVER_PROBE', 'RCI_REFUTE_PROVER_PROBE', 'RCI_FRONTIER_REFUTE_PROBE'])
+@pytest.mark.parametrize('role', ['RCI_BLIND_PROVER_PROBE', 'RCI_REFUTE_PROVER_PROBE'])
 def test_blind_views_ignore_archive_permissions(ws, role):
     ws.write_text('probe.md', 'Self-contained statement.')
     ws.write_text('mechanism.md', 'Do not expose this mechanism.')
@@ -434,46 +391,6 @@ def test_specialist_uses_frozen_archive_even_when_live_navigation_changes(ws, mo
     completed_count = count
     assert run_specialist(**kwargs)['status'] == 'SUCCEEDED'
     assert count == completed_count
-
-
-def test_rci_archive_is_readable_but_not_required_and_recovery_reuses_phase(ws, monkeypatch):
-    from pace.agents.rci.phase_runner import RciPhaseRunner
-    from pace.agents.director.context import freeze_context
-    from test_research_memory import task
-    from test_research_reporter import NativeFixture, use_reporter
-    use_reporter(ws)
-    freeze_context(ws.root, ws.work_ref('round1/assignment/task.json'), task(), [ws.work_ref('input/problem.md')])
-    ws.write_json(ws.work_ref('round1/assignment/task.json'), {'round_index':1})
-    ws.write_text('seed.md', 'Self-contained local question.')
-    archive = ws.work_ref('orientation/optional-definition.md')
-    ws.write_text(archive, 'A direct archived definition.')
-    directory = ws.path(ws.work_ref('round1/rci/attempt_001/candidate_01/frontier_explorer'))
-    llm = ChatCompletionsLLM(model='fixture'); calls = []
-    def reply(messages, tools):
-        calls.append(messages[:])
-        if len(calls) == 1:
-            assert archive not in messages[-1]['content']
-            return NativeFixture.tool('read_file', {'path':archive})
-        if len(calls) == 2:
-            assert 'error' not in json.loads(messages[-1]['content'])
-            return NativeFixture.tool('write_file', {'path':str(directory.relative_to(ws.root)/'change.md'),
-                                                   'content':'The local obstruction is still unresolved.'})
-        if len(calls) == 3:
-            return NativeFixture.tool('write_file', {'path':str(directory.relative_to(ws.root)/'mechanism.md'),
-                                                   'content':'A new proposed mechanism, not a theorem.'})
-        return NativeFixture.tool('submit_result', {'action':'PROPOSE_MECHANISM','candidate_ref':'seed.md',
-                                                   'dependency_refs':[archive]})
-    monkeypatch.setattr(llm, '_request', reply)
-    runner = RciPhaseRunner(llm=llm)
-    kwargs = dict(phase='FRONTIER_EXPLORER', workdir=ws.root, call_dir=directory, target_contract_id='TARGET',
-        input_refs={'TARGET_ANCHOR':[ws.work_ref('input/problem.md')], 'REVIEWED_SEED':['seed.md'],
-                    'ARCHIVE_SOURCE':[archive]}, prompt_seed='Investigate the fixed task.', round_index=1)
-    result = runner.run(**kwargs)
-    assert runner.run(**kwargs) == result and len(calls) == 4
-    ws.write_text(archive, 'Changed archived definition.')
-    with pytest.raises(ValueError, match='version changed'):
-        runner.run(**kwargs)
-    assert len(calls) == 4
 
 
 def test_reporter_can_read_request_context_and_optional_archive(ws, monkeypatch):

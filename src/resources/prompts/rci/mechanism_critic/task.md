@@ -1,1 +1,3 @@
-Independently review only {{value_1}}. Internal probe results are visible search context, not verified premises. When PREVIOUS_REVIEW is present, compare the old candidate and mechanism, prior review, repair response, and current artifacts. For local example or citation changes, audit the delta and its dependency impact. If assumptions, core claims, derivation, or dependencies changed, perform a full review. You decide the mathematical scope, not the Host.
+Check the supplied MECHANISM against the current CANDIDATE. Evaluate its
+connections to RELATED_MECHANISM files when they affect this review. Deliver
+the complete diagnosis in `review.md`.

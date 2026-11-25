@@ -32,24 +32,23 @@ def phase_task(tmp_path, monkeypatch):
     target = ws.write_text(
         ws.work_ref("input/problem.md"), "Investigate this exact local question."
     )
-    seed = ws.write_text(
-        "seed.md", "# Precise candidate\nThe original question remains fixed."
+    candidate = ws.write_text(
+        "candidate.md", "# Precise candidate\nThe original question remains fixed."
     )
-    directory = ws.path(
-        ws.work_ref("round1/rci/attempt_001/candidate_01/raw_seed_critic_research")
-    )
-    task = dict(
-        phase="RAW_SEED_CRITIC_RESEARCH",
-        workdir=ws.root,
-        call_dir=directory,
-        target_contract_id="TARGET",
-        round_index=1,
-        input_refs={
+    directory = ws.path(ws.work_ref("round1/rci/attempt_001/001_candidate_critic"))
+    task = {
+        "phase": "CANDIDATE_CRITIC",
+        "workdir": ws.root,
+        "call_dir": directory,
+        "target_contract_id": "TARGET",
+        "round_index": 1,
+        "input_refs": {
             "TARGET_ANCHOR": str(target.relative_to(ws.root)),
-            "SEED": str(seed.relative_to(ws.root)),
+            "CANDIDATE": str(candidate.relative_to(ws.root)),
+            "WORK_ITEM": str(target.relative_to(ws.root)),
         },
-        prompt_seed="Review only research value and readiness.",
-    )
+        "prompt_seed": "Independently review the supplied candidate.",
+    }
     return ws, directory, task
 
 
@@ -61,10 +60,12 @@ class NativePhases:
         interrupt=(),
         interrupt_before_thread=(),
         invalid_first=False,
+        write_review=True,
     ):
         self.calls = []
         self.interrupt = set(interrupt)
         self.invalid_first = invalid_first
+        self.write_review = write_review
         self.interrupt_before_thread = set(interrupt_before_thread)
         monkeypatch.setattr("pace.runtime.llm._run_cli_process", self.run)
 
@@ -77,14 +78,15 @@ class NativePhases:
         thread = cmd[3] if cmd[2] == "resume" else f"rci-thread-{index}"
         prompt = (root / record["prompt_ref"]).read_text()
         self.calls.append(
-            dict(
-                cmd=cmd,
-                home=Path(env["CODEX_HOME"]),
-                record=record,
-                ref=str(record_path.relative_to(root)),
-                thread=thread,
-                prompt=prompt,
-            )
+            {
+                "cmd": cmd,
+                "home": Path(env["CODEX_HOME"]),
+                "record": record,
+                "ref": str(record_path.relative_to(root)),
+                "thread": thread,
+                "prompt": prompt,
+                "instruction": input,
+            }
         )
         if index in self.interrupt_before_thread:
             raise KeyboardInterrupt
@@ -94,36 +96,27 @@ class NativePhases:
         assert "--ephemeral" not in cmd
         if record["source_prompt_ref"]:
             directory = (root / record["source_prompt_ref"]).parent
-            if record["role"] == "rci_frontier_explorer":
+            if record["role"] == "rci_mechanism_explorer":
                 (directory / "change.md").write_text(
                     f"# Actual attempt {index}\nUNRESOLVED_GAP_{index}: a local estimate remains open.\n"
                 )
-            elif record["role"] == "rci_seed_scout":
-                (directory / "seed.md").write_text(
+            elif record["role"] == "rci_conjecture_explorer":
+                (directory / "candidate.md").write_text(
                     "# Exact local question\nProve the original integer equality."
                 )
-            elif not (directory / "review.md").exists():
+            elif self.write_review and not (directory / "review.md").exists():
                 (directory / "review.md").write_text(REVIEW)
         if index in self.interrupt:
             raise KeyboardInterrupt
-        if record["role"] == "rci_frontier_explorer":
-            inputs = json.loads((directory / "prompt_assembly.json").read_text())[
-                "phase_inputs"
-            ]["input_refs"]
-            payload = {
-                "action": "HANDOFF",
-                "candidate_ref": inputs["REVIEWED_SEED"][0],
-                "dependency_refs": [],
-            }
-        elif record["role"] == "rci_seed_scout":
-            payload = {"dependency_refs": []}
-        else:
-            kind = (
-                "MATHEMATICAL"
-                if record["role"] == "rci_raw_seed_critic_math"
-                else "RESEARCH"
+        if record["role"] == "rci_mechanism_explorer":
+            payload = {"action": "HANDOFF"}
+        elif record["role"] == "rci_conjecture_explorer":
+            (directory / "change.md").write_text(
+                "Investigate the exact proposed equality."
             )
-            payload = {"action": "ACCEPT", "review_kind": kind, "dependency_refs": []}
+            payload = {"action": "PROPOSE_CONJECTURE"}
+        else:
+            payload = {"action": "ACCEPT"}
             if self.invalid_first and index == 0:
                 payload["action"] = "INVALID"
         response.write_text(json.dumps(payload))
@@ -143,7 +136,7 @@ class NativePhases:
 def test_all_phase_homes_use_frozen_role_resources(tmp_path, monkeypatch, variant):
     packaged = tmp_path / "packaged"
     shutil.copytree(prompts._PACKAGED_RESOURCES, packaged)
-    source = packaged / "prompts/rci/frontier_explorer/role.md"
+    source = packaged / "prompts/rci/mechanism_explorer/role.md"
     source.write_text(source.read_text() + "\nORIGINAL_RCI_RULE\n")
     monkeypatch.setattr(prompts, "_PACKAGED_RESOURCES", packaged)
     monkeypatch.setenv("PACE_CODEX_ENV_ROOT", str(tmp_path / "homes"))
@@ -157,30 +150,28 @@ def test_all_phase_homes_use_frozen_role_resources(tmp_path, monkeypatch, varian
         homes.add(home)
         assert (home / "AGENTS.md").read_text() == instructions
         assert "{{" not in instructions
-    assert len(homes) == len(ROLE_BINDINGS) == 13
-    math = (role_home(ws.root, "RCI_RAW_SEED_CRITIC_MATH") / "AGENTS.md").read_text()
-    research = (
-        role_home(ws.root, "RCI_RAW_SEED_CRITIC_RESEARCH") / "AGENTS.md"
-    ).read_text()
-    assert "Perform only the `MATHEMATICAL` review" in math
-    assert "Perform only the `RESEARCH` review" in research
-    first_home = role_home(ws.root, "RCI_FRONTIER_EXPLORER")
+    assert len(homes) == len(ROLE_BINDINGS) == 6
+    candidate = (role_home(ws.root, "RCI_CANDIDATE_CRITIC") / "AGENTS.md").read_text()
+    mechanism = (role_home(ws.root, "RCI_MECHANISM_CRITIC") / "AGENTS.md").read_text()
+    assert "Independently review the exact proposed statement" in candidate
+    assert "Independently check the named mechanism" in mechanism
+    first_home = role_home(ws.root, "RCI_MECHANISM_EXPLORER")
     source.write_text(source.read_text().replace("ORIGINAL_RCI_RULE", "NEW_RCI_RULE"))
     assert "ORIGINAL_RCI_RULE" in build_instructions(
-        phase="FRONTIER_EXPLORER", workdir=ws.root
+        phase="MECHANISM_EXPLORER", workdir=ws.root
     )
     ws.start_turn()
     prompts.materialize_run_resources(ws.root, resource_variant=variant)
     assert "NEW_RCI_RULE" in build_instructions(
-        phase="FRONTIER_EXPLORER", workdir=ws.root
+        phase="MECHANISM_EXPLORER", workdir=ws.root
     )
-    assert role_home(ws.root, "RCI_FRONTIER_EXPLORER") != first_home
+    assert role_home(ws.root, "RCI_MECHANISM_EXPLORER") != first_home
 
 
 def test_native_phase_recovery_preserves_work_and_starts_new_phase_sessions(
     phase_task, monkeypatch
 ):
-    ws, directory, task = phase_task
+    _, directory, task = phase_task
     native = NativePhases(monkeypatch, interrupt={0})
     runner = RciPhaseRunner(llm=CodexLLM(max_retries=0))
     with pytest.raises(KeyboardInterrupt):
@@ -193,7 +184,9 @@ def test_native_phase_recovery_preserves_work_and_starts_new_phase_sessions(
     assert native.calls[1]["record"]["resume_from_call_ref"] == native.calls[0]["ref"]
     assert (directory / "review.md").read_bytes() == original
     assert not (directory / "interrupted_attempts").exists()
-    assert "# RCI Raw Seed Critic" not in native.calls[0]["prompt"]
+    assert "# RCI Candidate Critic" not in native.calls[0]["prompt"]
+    assert "explicit inputs below" in native.calls[0]["instruction"]
+    assert "You may list and search" not in native.calls[0]["instruction"]
     assert not (native.calls[0]["home"] / "session.json").exists()
     runner.run(**{**task, "call_dir": directory.with_name(directory.name + "_02")})
     assert native.calls[-1]["thread"] != native.calls[0]["thread"]
@@ -205,7 +198,7 @@ def test_native_phase_recovery_preserves_work_and_starts_new_phase_sessions(
 def test_native_resume_keeps_known_thread_when_a_restart_stops_before_start_event(
     phase_task, monkeypatch
 ):
-    ws, directory, task = phase_task
+    _, directory, task = phase_task
     native = NativePhases(monkeypatch, interrupt={0}, interrupt_before_thread={1})
     runner = RciPhaseRunner(llm=CodexLLM(max_retries=0))
     for _ in range(2):
@@ -226,7 +219,7 @@ def test_phase_reuse_binds_fixed_rules_and_methods(phase_task, monkeypatch, reso
     runner.run(**task)
     original = (directory / "review.md").read_bytes()
     if resource == "common_instructions":
-        changed = prompts.prompt_root(ws.root) / "rci/shared/raw_seed_critic.md"
+        changed = prompts.prompt_root(ws.root) / "rci/shared/instructions.md"
     else:
         from pace.agents.rci.prompt_composer import skill_refs
 
@@ -241,7 +234,7 @@ def test_phase_reuse_binds_fixed_rules_and_methods(phase_task, monkeypatch, reso
 def test_interrupted_native_receipt_correction_reuses_author_and_session(
     phase_task, monkeypatch
 ):
-    ws, directory, task = phase_task
+    _, directory, task = phase_task
     native = NativePhases(monkeypatch, invalid_first=True, interrupt={1})
     runner = RciPhaseRunner(llm=CodexLLM(max_retries=0))
     with pytest.raises(KeyboardInterrupt):
@@ -254,6 +247,22 @@ def test_interrupted_native_receipt_correction_reuses_author_and_session(
     assert native.calls[2]["record"]["resume_from_call_ref"] == native.calls[1]["ref"]
     assert (directory / "review.md").read_text() == REVIEW
     assert runner.run(**task) == result and len(native.calls) == 3
+
+
+def test_missing_original_review_closes_phase_without_receipt_retry(
+    phase_task, monkeypatch
+):
+    ws, directory, task = phase_task
+    native = NativePhases(monkeypatch, write_review=False)
+    with pytest.raises(RciPhaseError) as failure:
+        RciPhaseRunner(llm=CodexLLM(max_retries=0)).run(**task)
+    assert failure.value.reason_code == "phase_artifact_missing"
+    assert len(native.calls) == 1
+    assert not (directory / "completed_phase.json").exists()
+    assert any(
+        event.get("stage") == "candidate_critic" and event.get("status") == "failed"
+        for event in read_events(ws.root)
+    )
 
 
 def api_tool(name, args):
@@ -306,9 +315,7 @@ def test_api_phase_resumes_exact_conversation_without_rewriting_math(
         if len(requests) == 2:
             if not correction:
                 raise KeyboardInterrupt
-            return api_tool(
-                "submit_result", {"action": "INVALID", "dependency_refs": []}
-            )
+            return api_tool("submit_result", {"action": "INVALID"})
         if mode == "interrupted_correction" and len(requests) == 3:
             raise KeyboardInterrupt
         assert any(
@@ -325,7 +332,7 @@ def test_api_phase_resumes_exact_conversation_without_rewriting_math(
             assert "RCI_RESEARCH" not in messages[0]["content"]
         return api_tool(
             "submit_result",
-            {"action": "ACCEPT", "review_kind": "RESEARCH", "dependency_refs": []},
+            {"action": "ACCEPT"},
         )
 
     monkeypatch.setattr(llm, "_request", reply)
@@ -375,7 +382,7 @@ class ContinuedRciTransport(RoundLimitTransport):
                 refs = [
                     str(
                         next(
-                            root.glob(work_ref(root, "round1/rci/**/seed.md"))
+                            root.glob(work_ref(root, "round1/rci/**/candidate.md"))
                         ).relative_to(root)
                     )
                 ]
@@ -443,20 +450,17 @@ def test_cli_continued_question_keeps_original_work_but_uses_new_round_sessions(
         == 0
     )
     root = tmp_path / "continued"
-    count = 5 if new_problem else 2
+    count = 4 if new_problem else 2
     assert len(native.calls) == count
     assert len({c["thread"] for c in native.calls}) == count
     explorers = [
-        c for c in native.calls if c["record"]["role"] == "rci_frontier_explorer"
+        c for c in native.calls if c["record"]["role"] == "rci_mechanism_explorer"
     ]
     assert len(explorers) == 2
     if new_problem:
-        critics = [
-            c
-            for c in native.calls
-            if c["record"]["role"].startswith("rci_raw_seed_critic_")
-        ]
-        assert len(critics) == 2 and critics[0]["home"] != critics[1]["home"]
+        assert native.calls[0]["record"]["role"] == "rci_conjecture_explorer"
+        assert native.calls[1]["record"]["role"] == "rci_candidate_critic"
+        assert native.calls[0]["home"] != native.calls[1]["home"]
     assert all(c["record"]["resume_from_call_ref"] == "" for c in native.calls)
     second = explorers[1]["record"]
     assert second["round_index"] == 2

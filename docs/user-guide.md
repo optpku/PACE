@@ -59,18 +59,12 @@ Read `work/turnNNN/final_report.json` for the recorded mathematical result and e
 PACE records mathematical originals and runtime events. The Web application generates the user-facing brief, thematic results overview, activity cards, reader copies and downloads. These presentation documents are not required inputs for core execution or recovery. Explicit report and paper tasks are described below.
 
 The core stores `orientation/`, `round1/`, `round2/` and `finalization/` directly
-under each `work/turnNNN/`. RCI candidates are direct children of `rci/attempt_NNN/`;
-each phase writes its files directly in a named directory, such as
-`candidate_01/seed_scout/seed.md`. Distinct phase iterations use sibling names
-such as `frontier_explorer/` and `frontier_explorer_02/`. Internal attempts remain
-immutable for resume. Core reader-path rules remove the attempt directory and
-the redundant `reports/round-NNNN/` container, so a report snapshot appears as
-`work/turn001/round3/current_report.md`. Reader publication selects the last
-successful committed attempt; a later failure does not replace it. Seed manuscripts
-are published directly as `round4/seed.md`; other candidates and seed revisions use
-names such as `seed-candidate_02.md` and `seed-revision_02.md` to preserve distinct
-manuscripts without extra directories. The original files remain available for resume. Web uses
-these core rules when rendering and placing the reading files.
+under each `work/turnNNN/`. RCI keeps original manuscripts in numbered
+phase directories such as `rci/attempt_001/001_conjecture_explorer/candidate.md`
+and `rci/attempt_001/004_mechanism_critic/review.md`. The round's research
+handoff links the active question, latest evidence and committed phase files.
+Web reader links point to those originals. Core resumes from the saved phase
+checkpoints.
 
 ## Continue with a new question
 
@@ -98,8 +92,6 @@ pace resume --run-dir outputs/even-square \
 ```
 
 `resume` continues the selected saved task. It preserves the target, mode, resource snapshot, proof-loop limit and committed outputs. `--resource-variant`, `--max-proof-states` and `--mode` are not resume options. Completed mathematical work is reused without another model call. An unfinished writing request takes priority, including a paper awaiting its PDF. After delivery, resume returns to the saved mathematical checkpoint.
-
-Resume turns created before the RCI rename with the PACE installation saved for that run. The checkpoint and resource snapshot refer to the role IDs and paths from that version.
 
 A service failure retains its concrete diagnostic and stops subsequent model dispatches in that Host session. Correct the service or environment before resuming. A new literal question uses `continue` or a new problem ID, preserving the committed original.
 

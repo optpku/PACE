@@ -1,1 +1,0 @@
-Optional dependency index: `{{archive_ref}}`. Read it only when a specific missing definition, source or objection requires an archived dependency. Follow relevant source references as needed; Record any additional dependency used in dependency_refs so it is bound to this review. If it cannot be supplied, report the missing dependency to the Director.

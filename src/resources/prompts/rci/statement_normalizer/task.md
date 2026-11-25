@@ -1,1 +1,0 @@
-Normalize only the reported presentation defect.

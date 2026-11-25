@@ -1,1 +1,2 @@
-Attempt only the concrete construction or precise lemma in probe_target, independently of mechanisms. Report local progress separately from a complete solution of the original target.
+Attempt the precise positive statement in PROBE_TASK independently. Save the
+derivation and the exact point reached in `review.md`.

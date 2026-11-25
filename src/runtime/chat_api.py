@@ -458,7 +458,6 @@ class WorkspaceTools:
         self.blind = self.role in {
             "RCI_BLIND_PROVER_PROBE",
             "RCI_REFUTE_PROVER_PROBE",
-            "RCI_FRONTIER_REFUTE_PROBE",
         }
         self.archives = (
             set() if self.blind else set(filter(None, context.get("archive_refs", ())))
