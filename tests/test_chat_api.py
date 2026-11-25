@@ -74,9 +74,12 @@ def test_actual_blind_phase_has_no_memory_and_resumes_without_model(ws,monkeypat
     monkeypatch.setattr(llm,'_request',respond)
     runner=RciPhaseRunner(llm=llm)
     kwargs=dict(phase=phase,workdir=ws.root,call_dir=directory,target_contract_id='TARGET',
-        input_refs={'PROBE_TASK':['probe.md'],'MECHANISM':['memory/secret.md']},prompt_seed='Check the fixed problem.',round_index=1)
+        input_refs={'PROBE_TASK':['probe.md'],'MECHANISM':['memory/secret.md'],'SEED_REVIEW':['memory/secret.md']},prompt_seed='Check the fixed problem.',round_index=1)
     result=runner.run(**kwargs)
     assert result.payload['action']==action and len(requests)==2
+    selection = json.loads((directory / "input_selection.json").read_text())
+    assert set(selection["selected"]) == set(selection["archive"]) == {"PROBE_TASK"}
+
     assert runner.run(**kwargs)==result and len(requests)==2
 
 
@@ -84,7 +87,8 @@ from test_research_memory import ws
 
 
 @pytest.mark.parametrize('separate_reporter', [False, True])
-def test_explorer_delta_and_originals_are_reused_together(ws, monkeypatch, separate_reporter):
+@pytest.mark.parametrize('action', ['PROPOSE_MECHANISM', 'CLAIM_RESOLVED'])
+def test_explorer_delta_and_originals_are_reused_together(ws, monkeypatch, separate_reporter, action):
     from pace.agents.rci.phase_runner import RciPhaseRunner
     from pace.agents.director.context import freeze_context
     from test_research_memory import task
@@ -104,12 +108,14 @@ def test_explorer_delta_and_originals_are_reused_together(ws, monkeypatch, separ
         if len(calls)==1:
             files={'change.md':'The missing connection and a concrete next test.', 'mechanism.md':'A proposed route, not a proved lemma.',
                    'research_delta.json':json.dumps(delta)}
+            if action == 'CLAIM_RESOLVED':
+                files['closure_brief.md'] = 'The complete proof with an explicit application.'
             if separate_reporter:
                 del files['research_delta.json']
             message={'role':'assistant','content':None,'tool_calls':[{'id':name,'type':'function','function':{
                 'name':'write_file','arguments':json.dumps({'path':str(directory.relative_to(ws.root)/name),'content':content})}}
                 for name,content in files.items()]}
-        else: message={'role':'assistant','content':json.dumps({'action':'PROPOSE_MECHANISM','candidate_ref':'seed.md','dependency_refs':[]})}
+        else: message={'role':'assistant','content':json.dumps({'action':action,'candidate_ref':'seed.md','dependency_refs':[]})}
         return {'choices':[{'message':message,'finish_reason':'tool_calls' if len(calls)==1 else 'stop'}]}
     monkeypatch.setattr(llm,'_request',respond)
     runner=RciPhaseRunner(llm=llm)
@@ -117,6 +123,8 @@ def test_explorer_delta_and_originals_are_reused_together(ws, monkeypatch, separ
         input_refs={'TARGET_ANCHOR':[ws.work_ref('input/problem.md')],'REVIEWED_SEED':['seed.md']},
         prompt_seed='Investigate this fixed gap.',round_index=1)
     result=runner.run(**kwargs)
+    if action == 'CLAIM_RESOLVED':
+        assert result.payload['manuscript_refs'] == [str(directory.relative_to(ws.root) / 'closure_brief.md')]
     if separate_reporter:
         assert 'research_delta_ref' not in result.payload
         assert not (directory / 'research_delta.json').exists()

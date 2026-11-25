@@ -17,6 +17,7 @@ from typing import Any, Protocol
 from pace.artifacts.workspace import (
     _write_json_atomic as _write_json,
 )
+from pace.contracts.research.memory import binding, check_binding
 from pace.runtime.prompts import render_prompt_template
 
 from .context import objection_key, scope_matches, scope_snapshot
@@ -211,6 +212,8 @@ class RciPipeline:
             lineage=_LineageBudget(),
         )
         self.scope_records = []
+        self.seed_reviews = {}
+        self.prior_seed_reviews = {}
         self.scope_objections = {}
         self.scope_objection_refs = []
         for ref in source_refs:
@@ -233,6 +236,7 @@ class RciPipeline:
         for ref in prior_batch_refs:
             saved = json.loads((root / ref).read_text())
             self.prior_scope_records.extend(saved.get("dependency_scope_reviews", ()))
+            self.prior_seed_reviews.update(saved.get("seed_derivations", {}))
         try:
             if research_operation == "CONTINUE_PROBLEM":
                 reviewed_seed_ref, seed_reason = research_problem_ref, ""
@@ -540,6 +544,17 @@ class RciPipeline:
             if "REJECT" in actions:
                 return "", "raw_seed_rejected"
             if actions == ("ACCEPT", "ACCEPT"):
+                self.seed_reviews[seed_ref] = {
+                    "seed": binding(workdir, seed_ref),
+                    "reviews": [
+                        binding(
+                            workdir,
+                            review.payload["review_ref"],
+                            kind="SEARCH_CONTEXT_ONLY",
+                        )
+                        for review in reviews
+                    ],
+                }
                 return seed_ref, ""
             if attempt == 1:
                 return "", "raw_seed_repair_exhausted"
@@ -812,6 +827,15 @@ class RciPipeline:
             "WORK_ITEM": self.work_item_ref,
             "REVIEWED_SEED": reviewed_seed_ref,
         }
+        record = self.seed_reviews.get(
+            reviewed_seed_ref
+        ) or self.prior_seed_reviews.get(reviewed_seed_ref)
+        if record:
+            check_binding(workdir, record["seed"])
+            for review in record["reviews"]:
+                check_binding(workdir, review)
+            inputs["SEED_REVIEW"] = tuple(row["ref"] for row in record["reviews"])
+            self.seed_reviews[reviewed_seed_ref] = record
         if state.candidate_ref:
             inputs["CANDIDATE"] = state.candidate_ref
         if source_refs:
@@ -1708,10 +1732,14 @@ class RciPipeline:
         reasons: tuple[str, ...] = (),
     ) -> str:
         scope_ref = ""
-        if getattr(self, "scope_records", ()):
+        if getattr(self, "scope_records", ()) or getattr(self, "seed_reviews", {}):
             scope_ref = _relative_ref(artifact_root / "scope_reviews.json", workdir)
             _write_json(
-                workdir / scope_ref, {"dependency_scope_reviews": self.scope_records}
+                workdir / scope_ref,
+                {
+                    "dependency_scope_reviews": self.scope_records,
+                    "seed_derivations": self.seed_reviews,
+                },
             )
         outcome_path = artifact_root / "outcome.json"
         _write_json(

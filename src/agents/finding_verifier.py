@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from pace.agents.prompt_composer import render_role_task
+from pace.artifacts.workspace import is_rci_critic_material
 from pace.agents.roles import SemanticRoleSpec, run_semantic_role
 from pace.contracts.verification.decision import validate_publication
 from pace.runtime.prompts import render_prompt_template
@@ -28,6 +29,8 @@ def verify_finding(
 ) -> SemanticCallResult:
     """Check one standalone result without granting whole-target acceptance."""
 
+    if is_rci_critic_material(draft_ref):
+        raise ValueError("independent review cannot use RCI Critic material")
     prompt = render_role_task(
         "finding_verifier/role.md",
         workdir=workdir,

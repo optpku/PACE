@@ -18,6 +18,7 @@ from pace.artifacts.results import (
 from pace.artifacts.workspace import (
     _write_json_atomic,
     is_call_path,
+    is_rci_critic_material,
     work_ref,
 )
 from pace.runtime.semantic import SemanticInterfaceFailure, StructuredSemanticResult
@@ -58,6 +59,11 @@ def pending_finding_checks(workdir: Path) -> bool:
                     return True
     for result_ref in state.get("completed_result_refs", []):
         if Path(result_ref).name != "agent_result.json":
+            continue
+        if (
+            json.loads((Path(workdir) / result_ref).read_text()).get("status")
+            != "SUCCEEDED"
+        ):
             continue
         for ref in committed_finding_refs(Path(workdir), result_ref):
             path = (Path(workdir) / ref).with_suffix(".verification.json")
@@ -102,14 +108,18 @@ def check_stage_findings(
             findings.setdefault(
                 draft_ref, {"round_index": int(assignment["round_index"]), "refs": []}
             )
+            dependencies = result.get("manuscript_dependencies", {}).get(draft_ref)
+            if dependencies is None:
+                dependencies = [result["deliverable_ref"], *result.get("published_refs", ())]
             findings[draft_ref]["refs"].extend(
-                [
+                ref
+                for ref in (
                     work_ref(root, "input/problem.md"),
                     work_ref(root, "input/target_contract.json"),
-                    result["deliverable_ref"],
                     *assignment.get("input_refs", ()),
-                    *result.get("published_refs", ()),
-                ]
+                    *dependencies,
+                )
+                if not is_rci_critic_material(ref)
             )
     if not check_applications(
         llm=llm, root=root, retry_errors=retry_errors, findings=findings
@@ -151,26 +161,14 @@ def _check_finding(
     record = None
     from pace.contracts.research.memory import (
         binding,
-        check_binding,
-        check_joint_finding_record,
+        check_finding_record,
         enabled,
     )
 
-    version = binding(root, draft_ref) if enabled(root) else None
+    version = binding(root, draft_ref)
     if verification_path.is_file():
         record = json.loads(verification_path.read_text(encoding="utf-8"))
-        check_joint_finding_record(root, draft_ref, record)
-        if record.get("source_binding"):
-            check_binding(root, record["source_binding"])
-            for row in record.get("dependency_bindings", []):
-                check_binding(root, row)
-        if (
-            record["draft_ref"] != draft_ref
-            or record["target_contract_id"] != target_id
-        ):
-            raise ValueError(
-                "finding verification belongs to another manuscript or target"
-            )
+        check_finding_record(root, draft_ref, target_id, record)
         if record.get("verdict", {}).get("stage_status") == "VERIFIER_ERROR":
             if not retry_errors:
                 return False
@@ -190,9 +188,30 @@ def _check_finding(
                 relative = path.relative_to(root).as_posix()
                 if relative not in refs:
                     refs.append(relative)
-        body = draft.read_text(encoding="utf-8")
-        if not body.strip():
+        if not draft.read_text(encoding="utf-8").strip():
             return True
+        dependencies = [
+            binding(root, ref)
+            for ref in refs
+            if ref != draft_ref
+            and not ref.startswith(("memory/", "results/"))
+            and "/state/" not in ref
+        ]
+
+        def save(verdict, call_id=""):
+            nonlocal record
+            candidate = {
+                "draft_ref": draft_ref,
+                "target_contract_id": target_id,
+                "call_id": call_id,
+                "verdict": verdict,
+                "source_binding": version,
+                "dependency_bindings": dependencies,
+            }
+            check_finding_record(root, draft_ref, target_id, candidate)
+            _write_json_atomic(verification_path, candidate)
+            record = candidate
+
         try:
             outcome = verify_finding(
                 llm=llm,
@@ -201,6 +220,7 @@ def _check_finding(
                 input_refs=tuple(refs),
                 round_index=round_index,
                 target_contract_id=target_id,
+                on_accept=save,
             )
         except Exception as exc:
             outcome = SemanticInterfaceFailure(
@@ -213,44 +233,23 @@ def _check_finding(
                     },
                 ),
             )
-        if draft.read_text(encoding="utf-8") != body:
-            raise ValueError(
-                "finding manuscript changed during independent verification"
-            )
-        verdict = (
-            outcome.payload
-            if isinstance(outcome, StructuredSemanticResult)
-            else {
-                "stage_status": "VERIFIER_ERROR",
-                "diagnostics": list(outcome.diagnostics),
-                "receipt_corrections": int(
-                    outcome.host.get("host_metadata", {}).get("receipt_corrections", 0)
-                ),
-            }
-        )
-        record = {
-            "draft_ref": draft_ref,
-            "target_contract_id": target_id,
-            "call_id": outcome.host.get("call_id", ""),
-            "verdict": verdict,
-            **(
+        if isinstance(outcome, StructuredSemanticResult):
+            call_id = outcome.host.get("call_id", "")
+            if record is None or call_id:
+                save(outcome.payload, call_id)
+        elif record is None:
+            save(
                 {
-                    "source_binding": version,
-                    "dependency_bindings": [
-                        binding(root, r)
-                        for r in context_refs
-                        if (root / r).is_file()
-                        and not r.startswith(("memory/", "results/"))
-                        and "/state/" not in r
-                    ],
-                }
-                if version
-                else {}
-            ),
-        }
-        _write_json_atomic(verification_path, record)
-    if record["draft_ref"] != draft_ref or record["target_contract_id"] != target_id:
-        raise ValueError("finding verification belongs to another manuscript or target")
+                    "stage_status": "VERIFIER_ERROR",
+                    "diagnostics": list(outcome.diagnostics),
+                    "receipt_corrections": int(
+                        outcome.host.get("host_metadata", {}).get(
+                            "receipt_corrections", 0
+                        )
+                    ),
+                },
+                outcome.host.get("call_id", ""),
+            )
     verdict = record["verdict"]
     if verdict.get("stage_status") == "VERIFIER_ERROR":
         return False
@@ -277,12 +276,14 @@ def _commit_application_reviews(root, request, verification_ref):
             _write_json_atomic(path, {**receipt, "joint_receipt_ref": verification_ref})
     for item in request["applications"]:
         ref = item["application_ref"]
-        current = None
-        if (root / ref).is_file():
-            current = json.loads((root / ref).read_text())["verification_binding"]
-            if current["ref"] not in (verification_ref, request.get("retry_of")):
-                continue  # A more recent scoped repair already owns this pointer.
-        if current != version:
+        link = json.loads((root / ref).read_text()) if (root / ref).is_file() else {}
+        current = link.get("verification_binding")
+        if current and current["ref"] not in (
+            verification_ref,
+            request.get("retry_of"),
+        ):
+            continue  # A more recent scoped repair already owns this pointer.
+        if current != version or "pending_request_binding" in link:
             _write_json_atomic(root / ref, {"verification_binding": version})
         append_event(
             root,
@@ -292,6 +293,22 @@ def _commit_application_reviews(root, request, verification_ref):
             review_ref=verification_ref,
             obligation_id=item["obligation_id"],
         )
+
+
+def _check_group_record(root, record, request_ref, argument):
+    from pace.contracts.research.memory import binding, check_binding
+
+    check_binding(root, record["request_binding"])
+    for row in record["dependency_bindings"]:
+        check_binding(root, row)
+    if record.get("review_binding"):
+        check_binding(root, record["review_binding"])
+    if (
+        record["request_ref"] != request_ref
+        or record["request_binding"] != binding(root, request_ref)
+        or record["source_binding"] != argument
+    ):
+        raise ValueError("saved review belongs to a different request or manuscript")
 
 
 def check_applications(*, llm, root, retry_errors=False, findings=None):
@@ -314,6 +331,7 @@ def check_applications(*, llm, root, retry_errors=False, findings=None):
     index = read_json(root, RESEARCH_INDEX_REF)
     whole_routes = whole_proof_application_routes(root, index)
     groups = {}
+    restored = set()
     for key, app in sorted(index["applications"].items()):
         obligation = index["obligations"][app["obligation_id"]]
         if (
@@ -324,6 +342,30 @@ def check_applications(*, llm, root, retry_errors=False, findings=None):
             continue
         for row in application_review_bindings(app):
             check_binding(root, row)
+        # Group membership can change after acceptance but before the Host has
+        # projected every scope. Locate the original receipt by the frozen request.
+        link_ref = (
+            Path(app["result_ref"]).parent / "verification" / f"application-{key}.json"
+        )
+        if (root / link_ref).is_file():
+            pending = read_json(root, str(link_ref)).get("pending_request_binding")
+            if pending and pending["ref"] not in restored:
+                check_binding(root, pending)
+                request = read_json(root, pending["ref"])
+                if not any(
+                    item["application_key"] == key
+                    and item["application_ref"] == str(link_ref)
+                    and item["bindings"] == application_review_bindings(app)
+                    for item in request["applications"]
+                ):
+                    raise ValueError("pending review belongs to another application")
+                if (root / request["verification_ref"]).is_file():
+                    record = read_json(root, request["verification_ref"])
+                    _check_group_record(root, record, pending["ref"], app["argument"])
+                    _commit_application_reviews(
+                        root, request, request["verification_ref"]
+                    )
+                    restored.add(pending["ref"])
         group = digest([app["target"], app["argument"]])
         groups.setdefault(group, []).append(app)
 
@@ -363,19 +405,7 @@ def _check_application_group(
     record = None
     if request and (root / request["verification_ref"]).is_file():
         record = read_json(root, request["verification_ref"])
-        check_binding(root, record["request_binding"])
-        for row in record["dependency_bindings"]:
-            check_binding(root, row)
-        if record.get("review_binding"):
-            check_binding(root, record["review_binding"])
-        if (
-            record["request_ref"] != request_ref
-            or record["request_binding"] != binding(root, request_ref)
-            or record["source_binding"] != owner["argument"]
-        ):
-            raise ValueError(
-                "saved review belongs to a different request or manuscript"
-            )
+        _check_group_record(root, record, request_ref, owner["argument"])
         if record["verdict"].get("stage_status") != "VERIFIER_ERROR" or record[
             "verdict"
         ].get("application_checks"):
@@ -394,7 +424,9 @@ def _check_application_group(
         if reviewed is None:
             pending.append(app)
         elif application_review_incomplete(app, reviewed):
-            prior = read_json(root, reviewed["request_ref"])["verification_ref"]
+            prior = read_json(root, reviewed["request_ref"]).get(
+                "verification_ref", str(Path(reviewed["request_ref"]).with_suffix("").with_suffix(".json"))
+            )
             if retry_of or (
                 request
                 and request["verification_ref"] == prior
@@ -481,6 +513,12 @@ def _check_application_group(
     verification_ref = request["verification_ref"]
 
     frozen_request = binding(root, request_ref)
+    for item in request["applications"]:
+        ref = item["application_ref"]
+        link = read_json(root, ref) if (root / ref).is_file() else {}
+        _write_json_atomic(
+            root / ref, {**link, "pending_request_binding": frozen_request}
+        )
     saved_record = None
 
     def save_review(verdict):
@@ -528,10 +566,10 @@ def _check_application_group(
         application_request=request,
         on_accept=save_review,
     )
-    if isinstance(outcome, StructuredSemanticResult):
-        # Acceptance persists the receipt before semantic completion. Replaying this
-        # same frozen group also repairs any interrupted per-scope references.
-        record = saved_record or save_review(outcome.payload)
+    if saved_record is not None:
+        record = saved_record
+    elif isinstance(outcome, StructuredSemanticResult):
+        record = save_review(outcome.payload)
     else:
         record = save_review(
             {"stage_status": "VERIFIER_ERROR", "diagnostics": list(outcome.diagnostics)}

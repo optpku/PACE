@@ -245,7 +245,7 @@ def _verify_candidate(
 
         verification_call_ids: dict[str, str] = {}
 
-        def audit_runner() -> dict[str, Any]:
+        def audit_runner(on_accept) -> dict[str, Any]:
             from pace.agents.auditor import (
                 run_proof_contract_auditor,
             )
@@ -259,6 +259,7 @@ def _verify_candidate(
                 output_ref=auditor_ref,
                 target_contract_id=str(context.get("target_contract_id") or ""),
                 call_metadata=verification_call_ids,
+                on_accept=on_accept,
             )
 
         verification_context = VerificationContext(

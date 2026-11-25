@@ -227,7 +227,14 @@ class RciPhaseRunner:
             }
             receipt_schema["required"] = ["decisions"]
         finding_dir = root / stage_ref(round_index, workdir=root) / "findings"
-        previous_drafts = set(finding_dir.glob("*.md"))
+        critic_phase = binding.phase in {
+            "RAW_SEED_CRITIC_MATH",
+            "RAW_SEED_CRITIC_RESEARCH",
+            "MECHANISM_CRITIC",
+        }
+        previous_drafts = sorted(
+            _relative_ref(path, root) for path in finding_dir.glob("*.md")
+        )
         normalized: dict[str, tuple[str, ...]] = {}
         for kind, value in input_refs.items():
             refs = _refs(value)
@@ -254,7 +261,9 @@ class RciPhaseRunner:
                 stage_ref(round_index, workdir=root) + "/assignment/route_context.json",
             )
         selected = select_inputs(binding.phase, normalized, root)
-        archive_inputs = normalized
+        archive_inputs = (
+            selected if binding.required_inputs == ("PROBE_TASK",) else normalized
+        )
         normalized = selected
         if binding.required_inputs != ("PROBE_TASK",):
             if frozen:
@@ -276,6 +285,11 @@ class RciPhaseRunner:
             }
         selection_path = target_dir / "input_selection.json"
         selection = {
+            **(
+                {"existing_finding_refs": previous_drafts}
+                if binding.required_inputs != ("PROBE_TASK",)
+                else {}
+            ),
             "selected": normalized,
             "archive": archive_inputs,
             "policy": "declared role dependencies; no byte truncation",
@@ -385,6 +399,18 @@ class RciPhaseRunner:
                 seed = target_dir / "seed.md"
                 if not seed.is_file() or not seed.read_bytes().strip():
                     raise ValueError("seed.md is missing or empty after seed creation")
+            previous = set(selection.get("existing_finding_refs", previous_drafts))
+            new_drafts = sorted(
+                ref
+                for path in finding_dir.glob("*.md")
+                if (ref := _relative_ref(path, root)) not in previous
+            )
+            committed_payload["manuscript_refs"] = (
+                [committed_payload["resolution_ref"]]
+                if binding.phase == "FRONTIER_EXPLORER"
+                and payload.get("action") == "CLAIM_RESOLVED"
+                else ([] if critic_phase else new_drafts)
+            )
             _write_json(output_path, committed_payload)
             committed = RciPhaseResult(
                 phase=binding.phase,
@@ -401,8 +427,8 @@ class RciPhaseRunner:
                     for ref in value if isinstance(value, list) else [value]:
                         if isinstance(ref, str) and ref and (root / ref).is_file():
                             output_files[ref] = (root / ref).read_bytes().hex()
-            for draft in sorted(set(finding_dir.glob("*.md")) - previous_drafts):
-                output_files[_relative_ref(draft, root)] = draft.read_bytes().hex()
+            for ref in new_drafts:
+                output_files[ref] = (root / ref).read_bytes().hex()
             _write_json(
                 checkpoint,
                 {
@@ -711,7 +737,9 @@ class RciPhaseRunner:
                             )
                         ],
                         "phase": binding.phase,
-                        "output_dirs": [_relative_ref(finding_dir, root)],
+                        "output_dirs": []
+                        if critic_phase
+                        else [_relative_ref(finding_dir, root)],
                         "receipt_correction_owner": "RCI_PHASE",
                         "allowed_actions": list(actions),
                         "prompt_assembly_ref": _relative_ref(assembly_path, root),

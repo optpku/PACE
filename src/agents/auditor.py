@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +29,7 @@ def run_proof_contract_auditor(
     output_ref: str = "",
     target_contract_id: str = "",
     call_metadata: dict[str, str] | None = None,
+    on_accept: Callable[[dict], None] | None = None,
 ) -> dict[str, Any]:
     """Execute the model-facing Auditor role behind the agents boundary."""
 
@@ -40,7 +43,7 @@ def run_proof_contract_auditor(
         call_name=call_name,
         input_refs=input_refs,
         semantic_call_fn=semantic_call,
-        role=_PROOF_CONTRACT_AUDITOR_ROLE,
+        role=replace(_PROOF_CONTRACT_AUDITOR_ROLE, on_accept=on_accept),
         host_metadata={
             "agent_id": "proof_contract_auditor",
             "task_id": f"round-{int(round_index or 0):04d}-auditor",

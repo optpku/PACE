@@ -149,6 +149,30 @@ def path_has_symlink_component(root: Path, path: Path) -> bool:
     return False
 
 
+INDEPENDENT_REVIEW_ROLES = frozenset(
+    {"FINDING_VERIFIER", "MATH_VERIFIER_KERNEL", "PROOF_CONTRACT_AUDITOR"}
+)
+
+
+def is_rci_critic_material(ref: str | Path) -> bool:
+    """RCI reviews and phase envelopes that can embed them are exploration inputs."""
+    path = Path(ref)
+    if "rci" not in path.parts:
+        return False
+    parts = path.parts[path.parts.index("rci") + 1 :]
+    return any(
+        re.fullmatch(
+            r"(?:raw_seed_critic_(?:math|research)|mechanism_critic)(?:_[0-9]+)?", part
+        )
+        for part in parts
+    ) or path.name in {
+        "scope_reviews.json",
+        "research_task_batch.json",
+        "completed_phase.json",
+        "prompt_assembly.json",
+    }
+
+
 def is_call_path(path: Path) -> bool:
     """Call traces are provenance, never mathematical artifact inputs."""
     return "calls" in path.parts

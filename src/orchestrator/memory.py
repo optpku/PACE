@@ -614,7 +614,8 @@ def refresh_application_memory(root: Path) -> None:
             app.pop("review_ref", None)
             app.pop("review_text_ref", None)
             continue
-        ref = str(read_json(root, ref)["verification_binding"]["ref"])
+        if "application_key" not in record:
+            ref = str(read_json(root, ref)["verification_binding"]["ref"])
         if application_review_incomplete(app, record):
             app.update(status="PROPOSED", review_ref=ref)
             app.pop("review_text_ref", None)

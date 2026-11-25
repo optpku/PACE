@@ -78,3 +78,5 @@ save the scoped obstacle and return control rather than repeating the same test.
 A failure of this argument is not a refutation of the question. A negative
 result applies only to the claim, mechanism, and conditions actually checked.
 Keep mathematical changes separate from control-field or formatting repairs.
+
+Keep the full mathematical derivation in review.md. Give reusable calculations, counterexamples and unresolved implications descriptive section headings. At the point of use name the assumptions and the first step that still needs proof. This lets a later researcher cite the calculation precisely without treating a scope verdict as a proved lemma.

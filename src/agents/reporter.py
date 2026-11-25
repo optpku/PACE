@@ -8,7 +8,12 @@ from pathlib import Path
 from typing import Any
 
 from pace.agents.director.context import task_context
-from pace.artifacts.workspace import _write_json_atomic, _write_text_atomic, work_ref
+from pace.artifacts.workspace import (
+    _write_json_atomic,
+    _write_text_atomic,
+    is_rci_critic_material,
+    work_ref,
+)
 from pace.contracts.research.memory import (
     OUTCOMES,
     binding,
@@ -46,9 +51,16 @@ def reporter_schema(request=None):
     arguments = (
         [request["candidate_ref"]]
         if request is not None and request.get("candidate_ref")
-        else [r for r in originals if Path(r).suffix == ".md"]
+        else (request or {}).get(
+            "manuscript_refs", [r for r in originals if Path(r).suffix == ".md"]
+        )
     )
-    dependencies = [row["ref"] for row in (request or {}).get("bindings", [])]
+    arguments = [ref for ref in arguments if not is_rci_critic_material(ref)]
+    dependencies = [
+        row["ref"]
+        for row in (request or {}).get("bindings", [])
+        if not is_rci_critic_material(row["ref"])
+    ]
     application = closed_object(
         {
             "id": text,
@@ -73,13 +85,23 @@ def reporter_schema(request=None):
             ),
         }
     )
-    if request is not None and not any(Path(r).suffix == ".md" for r in originals):
+    if request is not None and not arguments:
         delta["properties"]["applications"]["maxItems"] = 0
-    findings = {"type": "array", "items": reference(originals)}
-    if request and (
-        request.get("candidate_ref") or request.get("execution_mode") == "proof"
-    ):
-        findings["maxItems"] = 0
+    nominations = [
+        ref
+        for ref in (request or {}).get("manuscript_refs", originals)
+        if Path(ref).suffix == ".md" and not is_rci_critic_material(ref)
+    ]
+    findings = {"type": "array", "items": reference(nominations)}
+    if request is not None:
+        if not dependencies:
+            application["properties"]["premise_refs"]["maxItems"] = 0
+        if (
+            not nominations
+            or request.get("candidate_ref")
+            or request.get("execution_mode") == "proof"
+        ):
+            findings["maxItems"] = 0
     schema = closed_object({"summary": text, "delta": delta, "finding_refs": findings})
     # Nomination is optional when this handoff has no standalone result.
     schema["required"].remove("finding_refs")
@@ -201,7 +223,9 @@ def run_research_reporter(*, llm, workdir: Path, result_ref: str) -> dict | None
             dict.fromkeys(
                 r
                 for r in originals
-                if (root / r).is_file() and Path(r).is_relative_to(folder)
+                if (root / r).is_file()
+                and Path(r).is_relative_to(folder)
+                and not is_rci_critic_material(r)
             )
         )
         required = originals
@@ -211,21 +235,39 @@ def run_research_reporter(*, llm, workdir: Path, result_ref: str) -> dict | None
                 for r in originals
                 if r == result["deliverable_ref"]
                 or Path(r).name in {"change.md", "outcome.json"}
-                or "findings" in Path(r).parts
+                or r in result.get("manuscript_refs", ())
+                or ("manuscript_refs" not in result and "findings" in Path(r).parts)
             ]
+        evidence = [
+            ref
+            for manuscript in result.get("manuscript_refs", ())
+            for ref in result.get("manuscript_dependencies", {}).get(manuscript, ())
+            if not is_rci_critic_material(ref)
+        ]
         refs = list(
             dict.fromkeys(
                 [
                     result_ref,
                     *required,
-                    *context["required_refs"],
+                    *(
+                        r
+                        for r in context["required_refs"]
+                        if not is_rci_critic_material(r)
+                    ),
                     context["route_context"]["ref"],
                 ]
             )
         )
         archives = list(
             dict.fromkeys(
-                [*(r for r in originals if r not in refs), *context["archive_refs"]]
+                [
+                    *(r for r in (*originals, *evidence) if r not in refs),
+                    *(
+                        r
+                        for r in context["archive_refs"]
+                        if not is_rci_critic_material(r)
+                    ),
+                ]
             )
         )
         _write_json_atomic(
@@ -242,6 +284,15 @@ def run_research_reporter(*, llm, workdir: Path, result_ref: str) -> dict | None
                 "obligation_ids": context["obligation_ids"],
                 "branch_id": context["branch_id"],
                 "original_refs": originals,
+                **(
+                    {
+                        "manuscript_refs": [
+                            r for r in result["manuscript_refs"] if r in originals
+                        ]
+                    }
+                    if "manuscript_refs" in result
+                    else {}
+                ),
                 "required_refs": refs,
                 "archive_refs": archives,
                 "bindings": [
@@ -315,7 +366,9 @@ def run_research_reporter(*, llm, workdir: Path, result_ref: str) -> dict | None
                     "Prover change_ref and application arguments must reference the single complete candidate"
                 )
             if any(
-                ref not in request["original_refs"] or Path(ref).suffix != ".md"
+                ref not in request.get("manuscript_refs", request["original_refs"])
+                or Path(ref).suffix != ".md"
+                or is_rci_critic_material(ref)
                 for ref in payload.get("finding_refs", ())
             ):
                 raise ValueError(
@@ -324,7 +377,8 @@ def run_research_reporter(*, llm, workdir: Path, result_ref: str) -> dict | None
             # Reporter must not supply an application proof in its own summary or a control file.
             for app in delta["applications"]:
                 if (
-                    app["argument_ref"] not in request["original_refs"]
+                    app["argument_ref"]
+                    not in request.get("manuscript_refs", request["original_refs"])
                     or Path(app["argument_ref"]).suffix != ".md"
                 ):
                     raise ValueError(

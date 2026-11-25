@@ -207,3 +207,151 @@ def test_public_cli_keeps_publication_separate_from_pass_and_updates_on_continue
     assert len(state["entries"]) == 1 and len(state["publications"]) == 2
     assert state["entries"][0]["source_ref"].startswith("work/turn002/")
     assert (root / "work/turn001/round1/proof.md").read_bytes() == first
+
+
+@pytest.mark.parametrize("wrong", ["draft_ref", "source_binding", "target_contract_id"])
+def test_standalone_finding_resume_and_publication_check_same_identity(
+    tmp_path, monkeypatch, wrong
+):
+    from pace.artifacts.workspace import RunWorkspace
+    from pace.contracts.research.memory import binding
+
+    ws = RunWorkspace.create(tmp_path, "stages")
+    folder = ws.work_ref("round1")
+    source = f"{folder}/findings/sample.md"
+    ref = f"{folder}/agent_result.json"
+    ws.write_json(ws.work_ref("input/target_contract.json"), {"contract_id": "TARGET"})
+    ws.write_text(source, "A standalone lemma.")
+    ws.write_json(ref, {"status": "SUCCEEDED", "deliverable_ref": source})
+    ws.write_json(f"{folder}/assignment/task.json", {"round_index": 1})
+    count = []
+
+    def interrupt(**kw):
+        count.append(1)
+        kw["on_accept"](
+            {
+                "stage_status": "PASS",
+                "reuse_authorized": True,
+                "publication": {"action": "CREATE"},
+            }
+        )
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr("pace.agents.director.findings.verify_finding", interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        check_stage_findings(llm=None, workdir=ws.root, completed_result_refs=[ref])
+    assert (
+        check_stage_findings(llm=None, workdir=ws.root, completed_result_refs=[ref])
+        and len(count) == 1
+    )
+    receipt = ws.path(source).with_suffix(".verification.json")
+    record = json.loads(receipt.read_text())
+    record[wrong] = binding(ws.root, ref) if wrong == "source_binding" else "unrelated"
+    receipt.write_text(json.dumps(record))
+    with pytest.raises(ValueError, match="another manuscript|different manuscript"):
+        publish_stage_findings(workdir=ws.root, completed_result_refs=[ref])
+    assert not finding_entries(ws.root)
+
+
+@pytest.mark.parametrize("mode", ["proof", "research"])
+@pytest.mark.parametrize("role", ["proof_contract_auditor", "math_verifier_kernel"])
+def test_accepted_verifier_resumes_without_repeating_inference(
+    tmp_path, monkeypatch, mode, role
+):
+    from pace.runtime import semantic
+    from test_research_round_limit import RoundLimitTransport
+
+    transport = (
+        ProofPublicationTransport("CREATE")
+        if mode == "proof"
+        else RoundLimitTransport("prover")
+    )
+    monkeypatch.setattr(
+        "pace.agents.director.harness.build_llm", lambda **kw: transport
+    )
+    monkeypatch.setattr("pace.pipeline.build_llm", lambda **kw: transport)
+    problem = tmp_path / "p.md"
+    problem.write_text("Prove 2+2=4.")
+    root = tmp_path / "result"
+    finish = semantic.finish_call
+
+    def interrupt(workdir, record_ref, **kw):
+        finish(workdir, record_ref, **kw)
+        if json.loads((Path(workdir) / record_ref).read_text())["role"] == role:
+            raise KeyboardInterrupt()
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(semantic, "finish_call", interrupt)
+        assert (
+            cli.main(
+                [
+                    "run",
+                    "--problem",
+                    str(problem),
+                    "--output",
+                    str(tmp_path),
+                    "--problem-id",
+                    root.name,
+                    "--mode",
+                    mode,
+                    "--json",
+                ]
+            )
+            == 130
+        )
+    from pace.runtime.agent_environment import role_home
+
+    roles = ("RESEARCH_REPORTER", "PROOF_CONTRACT_AUDITOR", "MATH_VERIFIER_KERNEL")
+    instructions = {role_home(root, name) / "AGENTS.md" for name in roles}
+    expected = {path: path.read_bytes() for path in instructions}
+    for path in instructions:
+        path.unlink()
+    assert cli.main(["resume", "--run-dir", str(root), "--json"]) == 0
+    assert all(path.read_bytes() == content for path, content in expected.items())
+    assert sum(role in name for name in transport.calls) == 1
+    assert (
+        json.loads((root / "work/turn001/final_report.json").read_text())["result"]
+        == "PASS"
+    )
+
+
+def test_terminal_rejects_swapped_kernel_and_changed_auditor(tmp_path, monkeypatch):
+    from pace.artifacts.workspace import RunWorkspace
+
+    transport = ProofPublicationTransport("CREATE")
+    monkeypatch.setattr(
+        "pace.agents.director.harness.build_llm", lambda **kw: transport
+    )
+    monkeypatch.setattr("pace.pipeline.build_llm", lambda **kw: transport)
+    problem = tmp_path / "problem.md"
+    problem.write_text("Prove 2+2=4.")
+    root = tmp_path / "example"
+    assert (
+        cli.main(
+            [
+                "run",
+                "--problem",
+                str(problem),
+                "--output",
+                str(tmp_path),
+                "--problem-id",
+                root.name,
+                "--mode",
+                "proof",
+                "--json",
+            ]
+        )
+        == 0
+    )
+    report = json.loads((root / "work/turn001/final_report.json").read_text())
+    ws = RunWorkspace(root=root, problem_id=root.name)
+    refs = report["artifact_refs"]
+    alternate = Path(refs["kernel"]).with_name("other-kernel.json").as_posix()
+    ws.write_json(alternate, json.loads(ws.path(refs["kernel"]).read_text()))
+    swapped = {**report, "artifact_refs": {**refs, "kernel": alternate}}
+    assert publish_terminal_report(ws, swapped)["publication_status"] == "INCOMPLETE"
+    auditor = json.loads(ws.path(refs["auditor"]).read_text())
+    ws.write_json(
+        refs["auditor"], {**auditor, "observation": "A different audit version."}
+    )
+    assert publish_terminal_report(ws, report)["publication_status"] == "INCOMPLETE"

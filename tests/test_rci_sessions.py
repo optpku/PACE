@@ -457,6 +457,13 @@ def test_cli_continued_question_keeps_original_work_but_uses_new_round_sessions(
             if c["record"]["role"].startswith("rci_raw_seed_critic_")
         ]
         assert len(critics) == 2 and critics[0]["home"] != critics[1]["home"]
+        reviews = [str(Path(c["record"]["source_prompt_ref"]).with_name("review.md")) for c in critics]
+        assert all((root / ref).read_text() == REVIEW for ref in reviews)
+        for explorer in explorers:
+            selection = root / Path(explorer["record"]["source_prompt_ref"]).with_name("input_selection.json")
+            assert json.loads(selection.read_text())["selected"]["SEED_REVIEW"] == reviews
+        assert not any(ref in critic["record"]["input_refs"] for critic in critics for ref in reviews)
+
     assert all(c["record"]["resume_from_call_ref"] == "" for c in native.calls)
     second = explorers[1]["record"]
     assert second["round_index"] == 2

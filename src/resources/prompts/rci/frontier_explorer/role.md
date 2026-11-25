@@ -80,8 +80,7 @@ Return only the control fields this action needs, plus a short original brief:
 - `dependency_mechanism_ids`: for a mechanism proposal/repair. The Host records the fixed `mechanism_ref`.
 - For REQUEST_REFUTATION_PROBE, the Host records `probe_task_ref` from `probe_task.md`.
 - `child_candidate_refs`: for SPLIT.
-- `handoff_disposition`, `handoff_reason`, and any resolution argument remain
-  your original search-context advice in this receipt.
+- `handoff_disposition` and `handoff_reason`: short routing advice.
 
 All file references are relative to the persistent problem directory. Write the
 files in this invocation before returning their references. Return JSON only.
@@ -103,8 +102,10 @@ new derivation or repeat an unchanged toy search. A HANDOFF preserves the
 question and earlier valid results; it makes no mathematical rejection.
 Use REJECT only for a concrete false, incoherent or out-of-scope candidate
 that cannot be repaired within this assignment. Lack of a proof or a new
-mechanism is not such a defect. Put long resolution arguments in a Markdown
-file and return its `resolution_ref`.
+mechanism is not such a defect. For CLAIM_RESOLVED, write the complete independently reviewable argument once in
+`closure_brief.md`. The Host binds it as resolution_ref and Reporter can submit
+this original. Link it from change.md with its exact scope and remaining gap.
+Do not also write a findings draft for this action.
 
 ## Declared scope dependencies v1
 

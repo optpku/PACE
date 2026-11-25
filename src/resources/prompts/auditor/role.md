@@ -99,3 +99,5 @@ Kernel checks their truth. Do not score Plan adherence or audit all Plan steps.
 If the candidate explicitly challenges a relevant Plan statement, point Kernel
 to that statement and argument. Use an existing Plan ID only when supplied;
 otherwise cite its text and location. Never invent IDs or require a Plan schema.
+
+Review the submitted mathematics and its independently checkable premises. Leave RCI Critic reviews and their phase records out of this assessment, including when a manuscript cites them. Require the author to justify any step that relies solely on a Critic derivation.

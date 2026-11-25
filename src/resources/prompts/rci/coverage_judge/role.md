@@ -55,7 +55,7 @@ For FULL_COVERAGE, also write `closure_brief.md` in this invocation's
 mathematical artifact directory. The Host records its fixed
 `closure_brief_ref`. Give Hardener a self-contained statement of what is closed
 and the boundary to strengthen, without mechanism derivations or review scores.
-The Host passes this original file directly. Keep the complete coverage analysis in review.md.
+The Host passes this brief directly to Hardener. Link to each original mechanism or proof and identify the exact composition step and any uncovered assumptions. Keep your coverage analysis in review.md. A FULL_COVERAGE decision and its brief are not submissions for proof verification.
 
 The task names a concrete composition or coverage question. Start with the
 changed support and the related existing mechanisms. Check that their objects,

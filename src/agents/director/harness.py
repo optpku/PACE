@@ -236,7 +236,8 @@ class DirectorHarness:
         )
         reason = "resource_setup_failed"
         try:
-            if state["phase"] == "RESOURCES":
+            initializing_resources = state["phase"] == "RESOURCES"
+            if initializing_resources:
                 self._commit_execution_policies(ws, state["policy"])
                 state["phase"] = (
                     "HANDOFF" if state.get("source_turn_id") else "ORIENTATION"
@@ -246,6 +247,8 @@ class DirectorHarness:
                 ws.path(ws.work_ref("resources")),
                 resource_variant=state["policy"]["resource_variant"],
             )
+            if not initializing_resources:
+                prepare_agent_environments(ws.root, mode=state["policy"]["mode"])
             if state["phase"] == "HANDOFF":
                 self._prepare_turn_handoff(ws, state["source_turn_id"])
                 state["phase"] = "ORIENTATION"
@@ -443,6 +446,11 @@ class DirectorHarness:
             except (OSError, ValueError, TypeError) as exc:
                 raise RecoveryError("invalid_proof_checkpoint", str(exc)) from exc
 
+            validate_resource_snapshot(
+                workspace.path(workspace.work_ref("resources")),
+                resource_variant=policy["resource_variant"],
+            )
+            prepare_agent_environments(workspace.root, mode="proof")
             return run_proof(
                 self,
                 workspace,
@@ -504,6 +512,9 @@ class DirectorHarness:
                 "invalid_resource_snapshot",
                 "run resource selection is missing or invalid",
             ) from exc
+        # Role homes are derived files outside the run. Rebuild them from this
+        # turn's frozen prompts before either transport opens the next role.
+        prepare_agent_environments(workspace.root, mode=policy["mode"])
         return self._resume_director_led(
             workspace,
             checkpoint,

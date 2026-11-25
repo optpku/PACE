@@ -56,8 +56,10 @@ def test_orientation_resume_keeps_snapshot_and_continue_selects_new_resources(
     assert cli.main(arguments) == 130
     checkpoint = root / work_ref(root, "state/orientation_state.json")
     assert json.loads(checkpoint.read_text())["phase"] == "TARGET"
+    (role_home(root, "PROBLEM_ORIENTATION_EXTRACTOR") / "AGENTS.md").unlink()
     role.write_text(role.read_text().replace("FIRST_SNAPSHOT_RULE", "NEXT_TURN_RULE"))
     assert cli.main(["resume", "--run-dir", str(root), "--json"]) == 0
+    assert (role_home(root, "PROBLEM_ORIENTATION_EXTRACTOR") / "AGENTS.md").is_file()
     assert transport.calls.count("problem_orientation_extract") == 1
     home = role_home(root, "GLOBAL_RESEARCH_DIRECTOR")
     assert "FIRST_SNAPSHOT_RULE" in (home / "AGENTS.md").read_text()

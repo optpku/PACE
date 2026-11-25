@@ -79,6 +79,7 @@ INPUT_CLASSES = {
         "TARGET_ANCHOR",
         "WORK_ITEM",
         "REVIEWED_SEED",
+        "SEED_REVIEW",
         "CANDIDATE",
         "SOURCE",
         "MECHANISM",

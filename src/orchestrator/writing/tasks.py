@@ -3,15 +3,56 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from pace.artifacts.workspace import _write_json_atomic, work_ref
+from pace.artifacts.results import relocate_links
+from pace.artifacts.workspace import _write_json_atomic, _write_text_atomic, work_ref
 
 
 def read_state(root: Path, ref: str) -> dict[str, Any]:
     path = Path(root) / ref
     return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+
+
+def checkpoint_writing_source(root, state_ref, state, source_ref, handle):
+    state["accepted_source_ref"] = source_ref
+    state["accepted_call"] = {**asdict(handle), "response_text": ""}
+    _write_json_atomic(root / state_ref, state)
+
+
+def settle_writing_call(root, state):
+    from pace.runtime.semantic import ArtifactCallHandle, commit_artifact_call_success
+
+    if saved := state.get("accepted_call"):
+        commit_artifact_call_success(
+            ArtifactCallHandle(**saved),
+            workdir=root,
+            artifact_ref=state["accepted_source_ref"],
+        )
+        del state["accepted_call"]
+
+
+def project_accepted_text(
+    root: Path, state_ref: str, source_key: str, destination_ref: str
+) -> bool:
+    state = read_state(root, state_ref)
+    source_ref = state.get("accepted_source_ref") or state.get(source_key)
+    if not source_ref:
+        return False
+    destination = root / destination_ref
+    if state.get("accepted_source_ref") or not destination.is_file():
+        settle_writing_call(root, state)
+        source = root / source_ref
+        _write_text_atomic(
+            destination,
+            relocate_links(source.read_text(encoding="utf-8"), source, destination),
+        )
+        state[source_key] = source_ref
+        state.pop("accepted_source_ref", None)
+        _write_json_atomic(root / state_ref, state)
+    return True
 
 
 def writing_task_ref(root: Path) -> str:
@@ -53,8 +94,10 @@ def pending_writing_request(root: Path) -> dict[str, Any]:
         "paper": "paper_source",
     }[task["action"]]
     artifacts = writing_artifacts(root)
-    if key not in artifacts or (
-        task["action"] == "paper" and "paper_pdf" not in artifacts
+    if (
+        task["request"].get("accepted_source_ref")
+        or key not in artifacts
+        or (task["action"] == "paper" and "paper_pdf" not in artifacts)
     ):
         return task
     return {}

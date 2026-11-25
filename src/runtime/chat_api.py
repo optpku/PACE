@@ -21,9 +21,11 @@ from pace.artifacts.events import (
     record_transport_attempt_started,
 )
 from pace.artifacts.workspace import (
+    INDEPENDENT_REVIEW_ROLES,
     _write_json_atomic,
     _write_text_atomic,
     is_call_path,
+    is_rci_critic_material,
     path_has_symlink_component,
     work_ref,
 )
@@ -512,6 +514,10 @@ class WorkspaceTools:
         return path
 
     def readable(self, ref):
+        if (
+            self.role in INDEPENDENT_REVIEW_ROLES or self.role == "RESEARCH_REPORTER"
+        ) and is_rci_critic_material(ref):
+            return False
         if ref in self.inputs or ref in self.outputs:
             return True
         if self.blind:

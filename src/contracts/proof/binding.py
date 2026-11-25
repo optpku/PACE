@@ -463,6 +463,12 @@ def _validate_verifier_bindings(
     proof_ref: str,
     target_contract_id: str,
 ) -> None:
+    from pace.contracts.research.memory import digest
+
+    if "auditor_digest" in kernel and kernel["auditor_digest"] != digest(auditor):
+        raise ProofBindingError(
+            "Kernel used a different Auditor report", code=IDENTITY_MISMATCH
+        )
     target_identity = auditor.get("target_identity")
     artifact_identity = auditor.get("artifact_identity")
     if not isinstance(target_identity, dict) or not isinstance(artifact_identity, dict):

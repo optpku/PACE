@@ -18,7 +18,7 @@ from pace.artifacts.results import (
     finding_entries,
 )
 from pace.artifacts.results import publish_finding as persist_finding
-from pace.artifacts.workspace import RunWorkspace, _write_text_atomic
+from pace.artifacts.workspace import RunWorkspace, _write_text_atomic, work_ref
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +96,7 @@ def publish_stage_findings(
     *, workdir: Path, completed_result_refs, accepted_candidate_ref: str = ""
 ) -> None:
     """Publish only the receipts already delivered by independent turn-level checks."""
-    from pace.contracts.research.memory import check_binding, check_joint_finding_record
+    from pace.contracts.research.memory import check_finding_record
     from pace.orchestrator.memory import (
         refresh_application_memory,
         refresh_memory_index,
@@ -120,11 +120,10 @@ def publish_stage_findings(
             if not receipt.is_file():
                 continue
             record = json.loads(receipt.read_text())
-            check_joint_finding_record(root, ref, record)
-            if record.get("source_binding"):
-                check_binding(root, record["source_binding"])
-                for binding in record.get("dependency_bindings", []):
-                    check_binding(root, binding)
+            target = json.loads(
+                (root / work_ref(root, "input/target_contract.json")).read_text()
+            )
+            check_finding_record(root, ref, target["contract_id"], record)
             if record["verdict"].get("stage_status") == "PASS":
                 assignment = json.loads((folder / "assignment/task.json").read_text())
                 publish_finding(
@@ -156,7 +155,52 @@ def publish_terminal_report(ws: RunWorkspace, report: dict[str, Any]) -> dict[st
     )
     if report["result"] == "PASS":
         try:
-            kernel = json.loads(ws.path(refs["kernel"]).read_text(encoding="utf-8"))
+            from pace.contracts.proof.binding import (
+                load_active_target,
+                resolve_verification_binding,
+            )
+
+            binding_ref = refs.get("verification_binding") or report.get(
+                "proof_binding", {}
+            ).get("verification_binding_ref")
+            if not binding_ref:
+                sibling = Path(refs["verification"]).with_name(
+                    "verification_binding.json"
+                )
+                if ws.path(sibling.as_posix()).is_file():
+                    binding_ref = sibling.as_posix()
+            if binding_ref:
+                resolved = resolve_verification_binding(
+                    ws.root,
+                    verification_binding_ref=binding_ref,
+                    proof_ref=refs["proof"],
+                    verification_ref=refs["verification"],
+                    target_contract_id=load_active_target(ws.root)["contract_id"],
+                )
+                if (
+                    resolved["status"] != "PASS"
+                    or resolved["artifact_refs"]["kernel"] != refs["kernel"]
+                ):
+                    raise ValueError(
+                        "terminal publication differs from the verified proof"
+                    )
+                kernel = resolved["kernel"]
+            else:
+                # Older terminal records identify the exact proof and Kernel in the verifier report.
+                verifier = json.loads(ws.path(refs["verification"]).read_text())
+                if (
+                    verifier["proof_ref"] != refs["proof"]
+                    or verifier["kernel_ref"] != refs["kernel"]
+                ):
+                    raise ValueError(
+                        "terminal publication references another proof or Kernel"
+                    )
+                kernel = json.loads(ws.path(refs["kernel"]).read_text())
+            if (
+                kernel.get("stage_status") != "PASS"
+                or kernel.get("publication_eligible") is not True
+            ):
+                raise ValueError("Kernel did not authorize terminal publication")
             published_ref = publish_finding(
                 ws.root,
                 source_ref=refs["proof"],

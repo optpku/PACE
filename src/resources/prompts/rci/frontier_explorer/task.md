@@ -16,3 +16,5 @@ to these originals; it cannot replace them or establish their correctness.
 {{continued_question}}
 
 Promoted mechanism identities: {{mechanism_identities}}
+
+Read the supplied SEED_REVIEW originals for this reviewed Seed. Use relevant calculations, counterexamples and identified gaps to choose the next mathematical step. In change.md cite the file and section actually used, explain which assumptions carry over and where your argument advances or corrects the derivation. A scope acceptance confers no proof authority. Keep these references and derivations out of candidate and probe statements.

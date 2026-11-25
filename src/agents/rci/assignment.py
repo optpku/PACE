@@ -8,7 +8,7 @@ from pace.agents.director.dispatch import SpecialistAdapterResult
 from pace.agents.rci.phase_runner import RciPhaseRunner
 from pace.agents.rci.pipeline import RciPipeline
 from pace.artifacts.results import relocate_links
-from pace.artifacts.workspace import stage_ref, work_ref
+from pace.artifacts.workspace import is_rci_critic_material, stage_ref, work_ref
 
 
 def build_rci_handler(*, llm, workdir, phase_runner=None):
@@ -177,7 +177,13 @@ def build_rci_handler(*, llm, workdir, phase_runner=None):
         outcome = json.loads((root / outcome_ref).read_text())
         recoverable = _context_gap(root, outcome)
         handed_back = "explorer_handoff" in outcome["reasons"]
-        phase_outputs = sorted(complete.rglob("output.json"))
+        phase_outputs = sorted(
+            path
+            for path in complete.rglob("output.json")
+            if "source_snapshot" not in path.relative_to(complete).parts
+            and "calls" not in path.relative_to(complete).parts
+            and path.with_name("completed_phase.json").is_file()
+        )
         refs = [
             outcome_ref,
             *(p.relative_to(root).as_posix() for p in phase_outputs),
@@ -189,6 +195,9 @@ def build_rci_handler(*, llm, workdir, phase_runner=None):
             ),
         ]
         changes = {}
+        manuscripts = []
+        manuscript_dependencies = {}
+        derivations = {}
         for path in phase_outputs:
             receipt = json.loads(path.read_text(encoding="utf-8"))
             refs.extend(
@@ -199,12 +208,52 @@ def build_rci_handler(*, llm, workdir, phase_runner=None):
                 and value
                 and (root / value).is_file()
             )
+            phase_manuscripts = receipt.get("manuscript_refs")
+            if phase_manuscripts is None:
+                # Older phases did not name their manuscripts separately. Use
+                # only this phase's checkpoint, never every draft in the round.
+                if is_rci_critic_material(path.relative_to(root)):
+                    phase_manuscripts = []
+                elif receipt.get("action") == "CLAIM_RESOLVED" and receipt.get(
+                    "resolution_ref"
+                ):
+                    phase_manuscripts = [receipt["resolution_ref"]]
+                else:
+                    saved = json.loads(
+                        path.with_name("completed_phase.json").read_text()
+                    )
+                    phase_manuscripts = [
+                        ref
+                        for ref in saved["outputs"]
+                        if (root / ref).parent == output.parent / "findings"
+                        and Path(ref).suffix == ".md"
+                        and ref not in receipt.get("dependency_refs", ())
+                    ]
+            for manuscript in phase_manuscripts:
+                manuscripts.append(manuscript)
+                manuscript_dependencies[manuscript] = [
+                    ref
+                    for ref in receipt.get("dependency_refs", ())
+                    if not is_rci_critic_material(ref)
+                ]
             if path.parent.name.startswith("frontier_explorer"):
+                selection = path.with_name("input_selection.json")
+                if selection.is_file():
+                    selected = json.loads(selection.read_text())["selected"]
+                    reviews = selected.get("SEED_REVIEW", [])
+                    for ref in (
+                        receipt["change_ref"],
+                        receipt.get("resolution_ref"),
+                        receipt.get("mechanism_ref"),
+                        *phase_manuscripts,
+                    ):
+                        if ref and reviews:
+                            derivations[ref] = reviews
                 changes[path.parent.parent] = receipt["change_ref"]
-        refs.extend(
-            path.relative_to(root).as_posix()
-            for path in sorted((output.parent / "findings").glob("*.md"))
-        )
+        manuscripts = list(dict.fromkeys(manuscripts))
+        refs.extend(manuscripts)
+        for reviews in derivations.values():
+            refs.extend(reviews)
         if outcome["task_batch_ref"]:
             refs.append(outcome["task_batch_ref"])
             batch = json.loads(
@@ -242,9 +291,18 @@ def build_rci_handler(*, llm, workdir, phase_runner=None):
         elif handed_back:
             text += "Work item status: READY. The question is preserved; this bounded attempt returned its unresolved work to the Director. Use the original gap and needed input below to choose the next assignment; do not repeat an unchanged attempt. This is not a mathematical rejection.\n\n"
         text += "All proposed tasks and probe resolutions require downstream proof and independent verification.\n\n"
+        if manuscripts:
+            text += "## Manuscripts for independent verification\n\n"
+            for ref in manuscripts:
+                text += f"- [{Path(ref).name}]({Path(os.path.relpath(root / ref, output.parent)).as_posix()})\n"
         for ref in changes.values():
             text += f"## Original exploration handoff\n\nSource: `{ref}`\n\n"
             text += f"Read the complete mathematical handoff at [{Path(ref).name}]({Path(os.path.relpath(root / ref, output.parent)).as_posix()}).\n\n"
+            for review in derivations.get(ref, ()):
+                relative = Path(
+                    os.path.relpath(root / review, output.parent)
+                ).as_posix()
+                text += f"- Seed Critic derivation (search context): [{Path(review).parent.name}]({relative})\n"
         text += "## Original task and review files\n"
         text += (
             "\n".join(
@@ -307,6 +365,9 @@ def build_rci_handler(*, llm, workdir, phase_runner=None):
                 diagnostics_ref=outcome_ref if recoverable or handed_back else "",
             ).to_json(),
             "published_refs": refs,
+            "manuscript_refs": manuscripts,
+            "critic_derivations": derivations,
+            "manuscript_dependencies": manuscript_dependencies,
         }
         if kwargs.get("on_accept"):
             kwargs["on_accept"](result)

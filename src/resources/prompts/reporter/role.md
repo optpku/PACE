@@ -68,3 +68,5 @@ reopen_condition_ref cite existing original files, or are empty when the
 manuscripts do not state them. A method obstruction is scoped to the tested
 method and assumptions; it does not refute the whole question. Do not infer
 mathematical progress from files, call counts, or the amount of text produced.
+
+For RCI, manuscript_refs in the saved request lists the originals eligible for finding nomination and application arguments. Use the same original for both when appropriate. A Critic derivation, coverage note or change log can explain progress or a gap; its presence alone establishes no finding.

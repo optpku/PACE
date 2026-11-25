@@ -17,14 +17,18 @@ from pace.artifacts.workspace import (
     stage_ref,
     work_ref,
 )
-from pace.orchestrator.writing.tasks import read_state
+from pace.orchestrator.writing.tasks import (
+    checkpoint_writing_source,
+    project_accepted_text,
+    read_state,
+    settle_writing_call,
+)
 from pace.runtime.agent_environment import prepare_role_environment
 from pace.runtime.math_format import require_math_format
 from pace.runtime.paper import build_paper
 from pace.runtime.prompts import materialize_run_resources
 from pace.runtime.semantic import (
     commit_artifact_call_failure,
-    commit_artifact_call_success,
 )
 
 logger = logging.getLogger(__name__)
@@ -180,16 +184,25 @@ class TheoryPaperWriter:
         return self._update(outline=False)
 
     def _update(self, *, outline: bool) -> bool:
-        delivered = (
-            paper_outline_artifacts(self.workdir)
+        state_ref = (
+            paper_outline_state_ref(self.workdir)
             if outline
-            else paper_artifacts(self.workdir)
+            else paper_state_ref(self.workdir)
         )
-        if delivered:
-            if not outline and "paper_pdf" not in delivered:
-                state_ref = paper_state_ref(self.workdir)
-                state = read_state(self.workdir, state_ref)
-                self._build_delivery(state["paper_ref"], state)
+        state = read_state(self.workdir, state_ref)
+        if outline and project_accepted_text(
+            self.workdir, state_ref, "outline_ref", PAPER_OUTLINE_REF
+        ):
+            return True
+        if not outline and (
+            source_ref := state.get("accepted_source_ref") or state.get("paper_ref")
+        ):
+            if state.get("accepted_source_ref") or "paper_pdf" not in paper_artifacts(
+                self.workdir
+            ):
+                settle_writing_call(self.workdir, state)
+                self._build_delivery(source_ref, state)
+                state.pop("accepted_source_ref", None)
                 _write_json_atomic(self.workdir / state_ref, state)
                 publish_progress(
                     self.workdir,
@@ -200,12 +213,6 @@ class TheoryPaperWriter:
                     publication_refs=paper_artifacts(self.workdir, snapshots=True),
                 )
             return True
-        state_ref = (
-            paper_outline_state_ref(self.workdir)
-            if outline
-            else paper_state_ref(self.workdir)
-        )
-        state = read_state(self.workdir, state_ref)
         attempt = self._attempt("outline" if outline else "paper")
         name = "theory_paper_outline" if outline else "theory_paper_writer"
         output_ref = (
@@ -308,18 +315,19 @@ class TheoryPaperWriter:
             require_math_format(body, markdown=outline)
             if not body.strip():
                 raise ValueError("Paper output file is empty")
-            if outline:
-                destination = self.workdir / PAPER_OUTLINE_REF
-                _write_text_atomic(
-                    destination, relocate_links(body, source, destination)
-                )
-                state["outline_ref"] = output_ref
-            else:
-                self._build_delivery(output_ref, state)
-            _write_json_atomic(self.workdir / state_ref, state)
-            commit_artifact_call_success(
-                handle, workdir=self.workdir, artifact_ref=output_ref
+            checkpoint_writing_source(
+                self.workdir, state_ref, state, output_ref, handle
             )
+            handle = None
+            if outline:
+                project_accepted_text(
+                    self.workdir, state_ref, "outline_ref", PAPER_OUTLINE_REF
+                )
+            else:
+                settle_writing_call(self.workdir, state)
+                self._build_delivery(output_ref, state)
+                state.pop("accepted_source_ref")
+                _write_json_atomic(self.workdir / state_ref, state)
             publications = (
                 {"paper_outline": output_ref}
                 if outline

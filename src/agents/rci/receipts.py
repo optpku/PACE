@@ -37,6 +37,8 @@ def host_receipt_fields(root, directory, phase, action, *, routing_context):
         files["change_ref"] = "change.md"
         if action in {"PROPOSE_MECHANISM", "ADD_MECHANISM"}:
             files["mechanism_ref"] = "mechanism.md"
+        elif action == "CLAIM_RESOLVED":
+            files["resolution_ref"] = "closure_brief.md"
         elif action == "REQUEST_REFUTATION_PROBE":
             files["probe_task_ref"] = "probe_task.md"
     elif phase == "COVERAGE_JUDGE" and action == "FULL_COVERAGE":
@@ -222,6 +224,8 @@ def validate_receipt(
             required.append("candidate_ref")
         if action in {"PROPOSE_MECHANISM", "ADD_MECHANISM"}:
             required.append("mechanism_ref")
+        if action == "CLAIM_RESOLVED":
+            required.append("resolution_ref")
         if action == "REQUEST_REFUTATION_PROBE":
             required.append("probe_task_ref")
     elif phase == "COVERAGE_JUDGE" and action == "FULL_COVERAGE":

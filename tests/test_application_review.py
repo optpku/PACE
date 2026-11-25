@@ -764,3 +764,75 @@ def test_unfinished_manuscript_retries_without_reviewing_established_scope(
         ]["stage_status"]
         == "PASS"
     )
+
+
+def test_changed_group_replays_accepted_receipt_before_scheduling_new_scope(
+    ws, monkeypatch
+):
+    manuscript, completed = manuscript_handoff(ws, count=2)
+    batches = []
+
+    def verify(**kw):
+        req = kw["application_request"]
+        batches.append({item["application_key"] for item in req["applications"]})
+        ws.write_text(req["review_ref"], "Each use checked under its own premises.")
+        payload = review_payload(req)
+        kw["on_accept"](payload)
+        if len(batches) == 1:
+            raise KeyboardInterrupt()
+        return StructuredSemanticResult(payload, {})
+
+    monkeypatch.setattr("pace.agents.director.findings.verify_finding", verify)
+    with pytest.raises(KeyboardInterrupt):
+        check_stage_findings(
+            llm=object(), workdir=ws.root, completed_result_refs=completed
+        )
+    extra = deliver(ws, 2, application=True)
+    delta_ref = str(Path(extra).with_name("research_delta.json"))
+    delta = json.loads(ws.path(delta_ref).read_text())
+    premise = ws.work_ref("input/additional.md")
+    ws.write_text(premise, "An additional premise.")
+    delta["applications"][0].update(argument_ref=manuscript, premise_refs=[premise])
+    ws.write_json(delta_ref, delta)
+    commit_research_memory(ws.root, [*completed, extra])
+    for _ in range(2):
+        assert check_stage_findings(
+            llm=object(), workdir=ws.root, completed_result_refs=[*completed, extra]
+        )
+    assert list(map(len, batches)) == [2, 1]
+    assert batches[0].isdisjoint(batches[1])
+    assert all(
+        app["status"] == "APPLICABLE"
+        for app in rebuild_research_index(ws.root)["applications"].values()
+    )
+
+
+def test_joint_review_excludes_critic_sources_from_dispatch_and_handoff(ws, monkeypatch):
+    manuscript, completed = manuscript_handoff(ws, count=2)
+    result_path = ws.path(completed[-1])
+    folder = Path(completed[-1]).parent
+    assignment = result_path.parent / "assignment/task.json"
+    note = str(folder / "rci/attempt_001/candidate_01/raw_seed_critic_math/review.md")
+    dependency = str(folder / "lemma.md")
+    ws.write_text(note, "Private exploratory derivation.")
+    ws.write_text(dependency, "An independently checkable premise.")
+    result = json.loads(result_path.read_text())
+    result.update(agent_id="rci", manuscript_refs=[manuscript], published_refs=[note, manuscript],
+                  manuscript_dependencies={manuscript: [dependency]}, critic_derivations={manuscript: [note]})
+    ws.write_json(completed[-1], result)
+    ticket = json.loads(assignment.read_text())
+    assignment.write_text(json.dumps({**ticket, "input_refs": [note]}))
+    calls = []
+
+    def verify(**kwargs):
+        request = kwargs["application_request"]
+        assert note not in json.dumps(request) and note not in kwargs["input_refs"]
+        assert dependency in kwargs["input_refs"] and manuscript in kwargs["input_refs"]
+        calls.append(request)
+        ws.write_text(request["review_ref"], "Second scope needs a separate implication.")
+        return StructuredSemanticResult(review_payload(request, rejected={"lemma-1"}), {})
+
+    monkeypatch.setattr("pace.agents.director.findings.verify_finding", verify)
+    for _ in range(2):
+        assert check_stage_findings(llm=object(), workdir=ws.root, completed_result_refs=completed)
+    assert len(calls) == 1
