@@ -18,7 +18,7 @@ from pace.artifacts.workspace import _write_text_atomic, stage_ref
 from pace.contracts.research.memory import digest
 from pace.runtime.agent_environment import prepare_role_environment
 from pace.runtime.prompts import render_prompt_template
-from pace.runtime.schema import STRING, closed_object
+from pace.runtime.schema import STRING, STRING_LIST, closed_object
 from pace.runtime.semantic import (
     SemanticInterfaceFailure,
     SemanticRepresentationFailure,
@@ -30,6 +30,8 @@ from pace.runtime.semantic import (
 from .prompt_composer import build_instructions, build_prompt, skill_refs
 from .receipts import host_receipt_fields, output_names, validate_receipt
 from .roles import (
+    AUTHORS,
+    CRITICS,
     PHASE_ACTIONS,
     RciRoleBinding,
     role_binding,
@@ -193,6 +195,8 @@ class RciPhaseRunner:
                 }.get(phase, ())
             }
         )
+        if phase in AUTHORS:
+            fields["dependency_refs"] = STRING_LIST
         receipt_schema = closed_object(fields, required=("action",) if actions else ())
         normalized = {
             kind: tuple(
@@ -242,7 +246,9 @@ class RciPhaseRunner:
             ),
             input_refs=normalized,
             output_directory=_relative_ref(target_dir, root),
-            findings_directory=_relative_ref(finding_dir, root),
+            findings_directory=_relative_ref(finding_dir, root)
+            if phase not in CRITICS
+            else "",
         )
         inputs_snapshot = {
             "phase": phase,
@@ -326,12 +332,18 @@ class RciPhaseRunner:
                 return accepted_result
             host_fields = host_receipt_fields(root, target_dir, phase, payload, routing)
             committed = {**payload, **host_fields}
+            drafts = []
+            if payload.get("action") == "CLAIM_RESOLVED":
+                committed["manuscript_refs"] = [host_fields["resolution_ref"]]
+            elif phase not in CRITICS:
+                drafts = sorted(
+                    _relative_ref(path, root)
+                    for path in finding_dir.glob("*.md")
+                    if _relative_ref(path, root) not in previous
+                )
+                if drafts:
+                    committed["manuscript_refs"] = drafts
             _write_json(output_path, committed)
-            drafts = sorted(
-                _relative_ref(path, root)
-                for path in finding_dir.glob("*.md")
-                if _relative_ref(path, root) not in previous
-            )
             refs = tuple(
                 dict.fromkeys(
                     (
@@ -389,7 +401,9 @@ class RciPhaseRunner:
                         ),
                         "output_refs": list(allowed_outputs),
                         "phase": binding.phase,
-                        "output_dirs": [_relative_ref(finding_dir, root)],
+                        "output_dirs": []
+                        if phase in CRITICS
+                        else [_relative_ref(finding_dir, root)],
                         "receipt_correction_owner": "RCI_PHASE",
                         "allowed_actions": list(actions),
                         "prompt_assembly_ref": _relative_ref(assembly_path, root),

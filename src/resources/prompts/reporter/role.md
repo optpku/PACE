@@ -33,9 +33,8 @@ current Research manuscript.
 The delta has exactly schema_version (`research_delta/v1`), obligation_ids,
 branch_id, change_ref, applications, and attempt. Cite the original handoff in
 change_ref. Applications have id, obligation_id, argument_ref, premise_refs.
-For the same obligation and argument manuscript, use one application and list
-the exact premises for its relevant derivations together. Keep their scopes
-separate in the manuscript; do not create one application per section.
+Combine derivations only when their obligation, manuscript and exact premises
+coincide. Distinct premise sets require distinct applications.
 For a Prover handoff, argument_ref must be the original complete candidate,
 not a copy in findings/. Keep that single manuscript as change_ref as well.
 Its whole-target acceptance is checked by the existing Auditor and Kernel;
@@ -69,3 +68,5 @@ reopen_condition_ref cite existing original files, or are empty when the
 manuscripts do not state them. A method obstruction is scoped to the tested
 method and assumptions; it does not refute the whole question. Do not infer
 mathematical progress from files, call counts, or the amount of text produced.
+
+For RCI, manuscript_refs in the saved request lists the originals eligible for finding nomination and application arguments. Use the same original for both when appropriate. A Critic derivation, coverage note or change log can explain progress or a gap; its presence alone establishes no finding.

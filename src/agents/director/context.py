@@ -254,15 +254,47 @@ def freeze_context(root: Path, assignment_ref: str, decision, input_refs) -> dic
                 root,
                 {"ref": route["relations_ref"], "sha256": route["relations_sha256"]},
             )
-        selected += [route["ref"]]
+        route_inputs = selected if decision.agent_id == "planner" else archives
+        route_inputs.append(route["ref"])
         if route.get("relations_ref"):
-            selected.append(route["relations_ref"])
+            route_inputs.append(route["relations_ref"])
+    # Follow only the selected RCI artifact's own Critic sources. These notes
+    # remain optional and carry no independent mathematical verdict.
+    critic_notes = {}
+    owner_bindings = {}
+    if decision.agent_id in {"rci", "research", "prover"}:
+        owners = {}
+        for ref in dict.fromkeys(selected):
+            if decision.agent_id == "rci" and ref != decision.research_problem_ref:
+                continue
+            row = binding(root, ref)
+            owner_bindings[ref] = row
+            owner = row.get("source_result_ref", "")
+            if not owner or not (root / owner).is_file():
+                continue
+            if owner not in owners:
+                check_source_ownership(root, row)
+                owners[owner] = read_json(root, owner)
+            result = owners[owner]
+            if result.get("agent_id") != "rci" or result.get("status") != "SUCCEEDED":
+                continue
+            sources = result.get("critic_derivations", {})
+            notes = sources.get(ref, ())
+            if ref in {owner, result["deliverable_ref"]}:
+                notes = list(
+                    dict.fromkeys(note for group in sources.values() for note in group)
+                )
+            if notes:
+                critic_notes[ref] = list(notes)
+                destination = selected if decision.agent_id == "rci" else archives
+                destination.extend(notes)
     # Navigation is a frozen entry, not a reason to expand the complete archive.
     archives = list(dict.fromkeys(archives))
     required, bindings, aliases = [], [], {}
     for original in dict.fromkeys((*selected, *archives)):
         source = public_file(root, original)
-        check_source_ownership(root, binding(root, original))
+        original_binding = owner_bindings.get(original) or binding(root, original)
+        check_source_ownership(root, original_binding)
         mutable = original.startswith(("memory/", "results/")) or "/state/" in original
         ref = original
         if mutable:
@@ -275,17 +307,21 @@ def freeze_context(root: Path, assignment_ref: str, decision, input_refs) -> dic
             else:
                 destination.write_bytes(source.read_bytes())
             ref = destination.relative_to(root).as_posix()
-        row = binding(root, ref)
-        row.update(source_ref=original, source_sha256=digest(source.read_bytes()))
+        row = binding(root, ref) if mutable else original_binding.copy()
+        row.update(source_ref=original, source_sha256=original_binding["sha256"])
         bindings.append(row)
         aliases[original] = ref
         if original in selected:
             required.append(ref)
     route_ref = str(folder / "route_context.json")
     frozen_route = {**route, "ref": aliases.get(route.get("ref"), route.get("ref", ""))}
+    if route.get("relations_ref"):
+        frozen_route["relations_ref"] = aliases[route["relations_ref"]]
     route_context = {
         "schema_version": "route_context/v1",
         "route": frozen_route,
+        "work_order": decision.prompt_brief,
+        "critic_derivations": critic_notes,
         "target": binding(root, work_ref(root, "input/target_contract.json")),
         "branch_id": decision.branch_id or "b-target",
         "obligations": [index["obligations"][i] for i in ids],

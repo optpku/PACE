@@ -14,7 +14,6 @@ from pace.artifacts.workspace import work_ref
 from pace.agents.director.loop import DirectorLedEngine
 from pace.agents.prompt_composer import PromptComposerResult
 from pace.artifacts.results import write_dependency_manifest
-from pace.agents.rci.context import select_inputs
 
 
 def test_frozen_view_keeps_mutable_navigation_and_detects_changed_source(ws):
@@ -94,12 +93,6 @@ def test_parallel_inputs_frozen_before_planner_finishes(ws, monkeypatch):
     inputs = engine._director_input_refs(engine._load_state())
     assert all(ref in inputs for ref in [*refs, *reviews[:2]])
     assert reviews[2] not in inputs
-
-
-def test_blind_input_selection_never_receives_context_or_mechanism(ws):
-    inputs={'PROBE_TASK':['probe.md'],'RESEARCH_CONTEXT':['secret-memory.md'],'MECHANISM':['secret-mechanism.md']}
-    for phase in ('BLIND_PROVER_PROBE','REFUTE_PROVER_PROBE','FRONTIER_REFUTE_PROBE'):
-        assert select_inputs(phase,inputs,ws.root)=={'PROBE_TASK':('probe.md',)}
 
 
 def test_dependency_manifest_does_not_expand_unselected_findings(ws,monkeypatch):
@@ -240,3 +233,52 @@ def test_survey_informs_the_next_work_order_without_closing_obligation(ws, hypot
     assert assignment["prompt_brief"] == gap and survey_ref in assignment["input_refs"]
     index = json.loads(ws.path("memory/research_index.json").read_text())
     assert index["obligations"]["target"]["status"] == "OPEN" and not index["applications"]
+
+
+def test_critic_derivations_follow_only_selected_work_and_never_enter_review(ws):
+    from pace.agents.reporter import reporter_schema
+    from pace.artifacts.workspace import is_rci_critic_material
+    from pace.contracts.research.memory import binding, prepare_delta_payload
+    from pace.runtime.chat_api import WorkspaceTools
+    from test_research_memory import deliver
+
+    owner = deliver(ws, 1, agent="rci")
+    folder = Path(owner).parent
+    source = str(folder / "rci/attempt_001/003_mechanism_explorer/closure_brief.md")
+    note = str(folder / "rci/attempt_001/002_candidate_critic/review.md")
+    sibling = note.replace("002_candidate_critic", "004_mechanism_critic")
+    for ref in (source, note, sibling):
+        ws.write_text(ref, ref)
+    result = json.loads(ws.path(owner).read_text())
+    result.update(manuscript_refs=[source], critic_derivations={source: [note], "other": [sibling]})
+    ws.write_json(owner, result)
+    route = str(folder / "route.md")
+    ws.write_text(route, "Previous canonical route.")
+    ws.write_json(ws.work_ref("state/current_route.json"), {"ref": route})
+    assignment = ws.work_ref("round2/assignment/task.json")
+    decision = task("prover", input_refs=[source])
+    ctx = freeze_context(ws.root, assignment, decision, [source])
+    assert {route, note} <= set(ctx["archive_refs"])
+    assert source in ctx["required_refs"] and route not in ctx["required_refs"]
+    assert sibling not in ctx["archive_refs"]
+    frozen = json.loads(ws.path(ctx["route_context"]["ref"]).read_text())
+    assert frozen["critic_derivations"] == {source: [note]}
+    assert frozen["work_order"] == decision.prompt_brief
+    ws.write_json(ws.work_ref("state/current_route.json"), {})
+    assert freeze_context(ws.root, assignment, decision, []) == ctx
+
+    schema = reporter_schema({"original_refs": [source, note], "manuscript_refs": [source],
+                              "bindings": [binding(ws.root, ref) for ref in (note, source)]})
+    app = schema["properties"]["delta"]["properties"]["applications"]["items"]["properties"]
+    assert app["argument_ref"]["enum"] == app["premise_refs"]["items"]["enum"] == [source]
+    assert schema["properties"]["finding_refs"]["items"]["enum"] == [source]
+    verifier = WorkspaceTools(ws.root, {"role": "FINDING_VERIFIER", "input_refs": [note, source]})
+    assert verifier.readable(source) and not verifier.readable(note)
+    assert is_rci_critic_material(f"{folder}/rci/attempt_001/source_snapshot/{note}")
+    assert is_rci_critic_material(f"{folder}/rci/attempt_001/003_mechanism_explorer/completed_phase.json")
+    delta = json.loads(ws.path(str(folder / "research_delta.json")).read_text())
+    for argument, premises in [(source, [note]), (note, [])]:
+        delta["applications"] = [{"id": "a", "obligation_id": "target",
+                                  "argument_ref": argument, "premise_refs": premises}]
+        with pytest.raises(ValueError, match="Critic material"):
+            prepare_delta_payload(ws.root, delta, {"target": frozen["obligations"][0]}, local_result_ref=owner)

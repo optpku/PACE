@@ -46,3 +46,5 @@ obligations and consumers. Keep detailed proofs in their original manuscripts;
 the route states the dependencies, unresolved implications, and next bounded
 work item. A route rewrite requires a concrete reason that local revision is
 insufficient. Never rename an unchanged gap as a newly solved route node.
+
+Maintain a single current work order. At a revision replace the superseded handoff. Name the dependency that changed, the exact version and section supporting the change, the next mathematical task and the condition for returning to the Director. Keep live obligation anchors and conditions. Cite earlier routes for history and original manuscripts for derivations. When an application lacks a bridge, specify what must be shown at the consumer.

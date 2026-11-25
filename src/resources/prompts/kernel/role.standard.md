@@ -212,3 +212,5 @@ NONE does not prevent a valid application from being recorded.
 Preserve a valid theorem when rejecting an invalid use of it. State the missing
 condition or implication. A memory summary, route label, or author reflection
 is search context and cannot replace the original argument or its bound review.
+
+Review the submitted mathematics and its independently checkable premises. Leave RCI Critic reviews and their phase records out of this assessment, including when a manuscript cites them. Require the author to justify any step that relies solely on a Critic derivation.

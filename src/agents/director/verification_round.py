@@ -24,6 +24,7 @@ from pace.artifacts.workspace import (
     work_ref,
 )
 from pace.contracts.problem.target import target_contract_text
+from pace.contracts.research.memory import digest
 from pace.contracts.verification import decision as verification_decision
 from pace.runtime.json_values import (
     as_dict as _as_dict,
@@ -39,7 +40,7 @@ VERIFICATION_AUTHORITY_SCHEMA_VERSION = "verification_authority/v1"
 class VerificationContext:
     proof_md: str
     workdir: Path
-    contract_audit_runner: Callable[[], dict[str, Any]]
+    contract_audit_runner: Callable[[Callable[[dict], None]], dict[str, Any]]
     math_kernel_llm: Any
     canonical_target: dict[str, Any]
     proof_id: str = ""
@@ -127,22 +128,34 @@ def run_verification_round(ctx: VerificationContext) -> dict[str, Any]:
         stage="auditor",
         status="started",
     )
-    auditor = attach_proof_contract_audit_metadata(
-        saved_report(ctx.auditor_artifact_ref, "contract_status", {"PASS", "FAIL"})
-        or ctx.contract_audit_runner(),
-        proof_id=proof_id,
-        proof_ref=proof_ref,
-        literal_target=target_contract_text(canonical_target),
-        target_contract_id=target_contract_id,
+
+    auditor = None
+
+    def accept_audit(payload):
+        nonlocal auditor
+        report = attach_proof_contract_audit_metadata(
+            payload,
+            proof_id=proof_id,
+            proof_ref=proof_ref,
+            literal_target=target_contract_text(canonical_target),
+            target_contract_id=target_contract_id,
+        )
+        if ctx.auditor_artifact_ref:
+            _write_workspace_json(
+                ctx.workdir, ctx.auditor_artifact_ref, report, "auditor_artifact_ref"
+            )
+        auditor = report
+
+    cached_audit = saved_report(
+        ctx.auditor_artifact_ref, "contract_status", {"PASS", "FAIL"}
     )
+    auditor = cached_audit
+    if auditor is None:
+        response = ctx.contract_audit_runner(accept_audit)
+        if auditor is None:
+            accept_audit(response)
     audit_status = str(auditor.get("contract_status") or "VERIFIER_ERROR").upper()
     if ctx.auditor_artifact_ref:
-        _write_workspace_json(
-            Path(ctx.workdir),
-            ctx.auditor_artifact_ref,
-            auditor,
-            "auditor_artifact_ref",
-        )
         _update_agent_call_output(
             ctx,
             role_key="auditor",
@@ -162,17 +175,47 @@ def run_verification_round(ctx: VerificationContext) -> dict[str, Any]:
         stage="kernel",
         status="started",
     )
-    kernel = attach_math_verifier_metadata(
-        saved_report(ctx.kernel_artifact_ref, "stage_status", {"PASS", "MATH_FAIL"})
-        or _run_kernel(ctx, target_contract_id=target_contract_id),
-        proof_id=proof_id,
-        proof_ref=proof_ref,
-        target_contract_id=target_contract_id,
-    )
-    if ctx.kernel_artifact_ref:
-        _write_workspace_json(
-            Path(ctx.workdir), ctx.kernel_artifact_ref, kernel, "kernel_artifact_ref"
+    audit_digest = digest(auditor)
+
+    kernel = None
+
+    def accept_kernel(payload):
+        nonlocal kernel
+        report = attach_math_verifier_metadata(
+            payload,
+            proof_id=proof_id,
+            proof_ref=proof_ref,
+            target_contract_id=target_contract_id,
         )
+        report["auditor_digest"] = audit_digest
+        if ctx.kernel_artifact_ref:
+            _write_workspace_json(
+                ctx.workdir, ctx.kernel_artifact_ref, report, "kernel_artifact_ref"
+            )
+        kernel = report
+
+    kernel = saved_report(
+        ctx.kernel_artifact_ref, "stage_status", {"PASS", "MATH_FAIL"}
+    )
+    if audit_status not in {"PASS", "FAIL"}:
+        accept_kernel(
+            {
+                "stage_status": "VERIFIER_ERROR",
+                "reason": "awaiting a completed structural audit",
+            }
+        )
+    elif (
+        kernel is None
+        or kernel.get("auditor_digest", audit_digest if cached_audit else None)
+        != audit_digest
+    ):
+        kernel = None
+        response = _run_kernel(
+            ctx, target_contract_id=target_contract_id, on_accept=accept_kernel
+        )
+        if kernel is None:
+            accept_kernel(response)
+    if ctx.kernel_artifact_ref:
         _update_agent_call_output(
             ctx,
             role_key="kernel",
@@ -246,6 +289,7 @@ def _run_kernel(
     ctx: VerificationContext,
     *,
     target_contract_id: str,
+    on_accept,
 ) -> dict[str, Any]:
     brief_ref = work_ref(ctx.workdir, "input/problem_brief.md")
     return run_math_verifier_kernel(
@@ -269,6 +313,7 @@ def _run_kernel(
         },
         output_ref=ctx.kernel_artifact_ref,
         call_metadata=ctx.agent_call_ids,
+        on_accept=on_accept,
     )
 
 

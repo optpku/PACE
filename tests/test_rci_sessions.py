@@ -461,6 +461,11 @@ def test_cli_continued_question_keeps_original_work_but_uses_new_round_sessions(
         assert native.calls[0]["record"]["role"] == "rci_conjecture_explorer"
         assert native.calls[1]["record"]["role"] == "rci_candidate_critic"
         assert native.calls[0]["home"] != native.calls[1]["home"]
+        critic = native.calls[1]["record"]
+        review_ref = Path(critic["source_prompt_ref"]).with_name("review.md").as_posix()
+        assert (root / review_ref).read_text() == REVIEW
+        assert review_ref not in critic["input_refs"]
+        assert all(review_ref in call["record"]["input_refs"] for call in explorers)
     assert all(c["record"]["resume_from_call_ref"] == "" for c in native.calls)
     second = explorers[1]["record"]
     assert second["round_index"] == 2

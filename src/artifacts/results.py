@@ -18,6 +18,7 @@ from .workspace import (
     _write_json_atomic,
     _write_text_atomic,
     current_turn,
+    is_rci_critic_material,
 )
 
 FINDINGS_STATE_REF = "work/state/findings.json"
@@ -60,7 +61,16 @@ def committed_finding_refs(root: Path, result_ref: str) -> tuple[str, ...]:
     reporter = folder / "reporter_result.json"
     if reporter.is_file():
         return tuple(
-            json.loads(reporter.read_text())["payload"].get("finding_refs", ())
+            ref
+            for ref in json.loads(reporter.read_text())["payload"].get(
+                "finding_refs", ()
+            )
+            if not is_rci_critic_material(ref)
+        )
+    result = json.loads((root / result_ref).read_text())
+    if "manuscript_refs" in result:
+        return tuple(
+            ref for ref in result["manuscript_refs"] if not is_rci_critic_material(ref)
         )
     return tuple(
         path.relative_to(root).as_posix()

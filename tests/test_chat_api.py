@@ -73,9 +73,12 @@ def test_actual_blind_phase_has_no_memory_and_resumes_without_model(ws,monkeypat
     monkeypatch.setattr(llm,'_request',respond)
     runner=RciPhaseRunner(llm=llm)
     kwargs=dict(phase=phase,workdir=ws.root,call_dir=directory,target_contract_id='TARGET',
-        input_refs={'PROBE_TASK':['probe.md'],'MECHANISM':['memory/secret.md']},prompt_seed='Check the fixed problem.',round_index=1)
+        input_refs={'PROBE_TASK':['probe.md'],'MECHANISM':['memory/secret.md'],
+                    'EVIDENCE':['memory/secret.md']},prompt_seed='Check the fixed problem.',round_index=1)
     result=runner.run(**kwargs)
     assert result.payload == {'review_ref': review} and len(requests)==2
+    inputs = json.loads((directory / "prompt_assembly.json").read_text())["phase_inputs"]["input_refs"]
+    assert inputs == {"PROBE_TASK": ["probe.md"]}
     assert runner.run(**kwargs)==result and len(requests)==2
 
 

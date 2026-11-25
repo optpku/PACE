@@ -112,6 +112,11 @@ def review_payload(request, rejected=()):
                 if item["obligation_id"] in rejected
                 else "APPLICABLE",
                 "review_ref": request["review_ref"],
+                **(
+                    {"reuse_authorized": item["obligation_id"] not in rejected}
+                    if request.get("separate_scope_decisions")
+                    else {}
+                ),
             }
             for item in request["applications"]
         ],
@@ -150,9 +155,13 @@ def test_six_scopes_and_publication_share_one_review_with_independent_decisions(
         for app in index["applications"].values()
     )
     assert len({app["review_ref"] for app in index["applications"].values()}) == 1
-    assert next(iter(index["applications"].values()))[
-        "review_ref"
-    ] == manuscript.replace(".md", ".verification.json")
+    publication = json.loads(
+        ws.path(manuscript).with_suffix(".verification.json").read_text()
+    )
+    assert (
+        next(iter(index["applications"].values()))["review_ref"]
+        == publication["joint_receipt_ref"]
+    )
     assert (
         len(json.loads(ws.path("work/state/findings.json").read_text())["publications"])
         == 1
@@ -535,3 +544,295 @@ def test_cross_task_source_requires_committed_owner_in_either_mode(ws):
         check_source_ownership(ws.root, row)
     ws.write_json(ws.work_ref("state/proof_state.json"), {"completed_refs": [original]})
     check_source_ownership(ws.root, row)
+
+
+def test_other_handoff_nominates_same_manuscript_for_joint_review(ws, monkeypatch):
+    manuscript, completed = manuscript_handoff(ws, count=1, finding=False)
+    later = deliver(ws, 2)
+    owner = Path(later).parent
+    ws.write_json(
+        str(owner / "reporter_result.json"), {"payload": {"finding_refs": [manuscript]}}
+    )
+    evidence = str(owner / "proof-details.md")
+    ws.write_text(
+        evidence, "Additional evidence required to review the complete manuscript."
+    )
+    ws.write_json(
+        str(owner / "assignment/task.json"),
+        {"round_index": 2, "input_refs": [evidence]},
+    )
+    calls = []
+
+    def verify(**kwargs):
+        calls.append(kwargs)
+        request = kwargs["application_request"]
+        assert request["publication_requested"] and evidence in kwargs["input_refs"]
+        ws.write_text(
+            request["review_ref"], "Independent manuscript and scope decisions."
+        )
+        return StructuredSemanticResult(review_payload(request), {})
+
+    monkeypatch.setattr("pace.agents.director.findings.verify_finding", verify)
+    for _ in range(2):
+        assert check_stage_findings(
+            llm=object(), workdir=ws.root, completed_result_refs=[*completed, later]
+        )
+    assert len(calls) == 1
+
+
+def test_partial_review_repairs_only_unfinished_scope_after_interruption(
+    ws, monkeypatch
+):
+    from pace.agents import finding_verifier
+    from pace.agents.director import findings
+
+    manuscript, completed = manuscript_handoff(ws, count=3)
+    calls = []
+
+    def verify(**kw):
+        request = kw["application_request"]
+        calls.append(request)
+        ws.write_text(
+            request["review_ref"],
+            "Reviewed the assigned statements under their own premises.",
+        )
+        payload = review_payload(request)
+        if len(calls) == 1:
+            for check in payload["application_checks"]:
+                if check["obligation_id"] == "lemma-2":
+                    check.update(status="VERIFIER_ERROR", reuse_authorized=False)
+        else:
+            assert not request["publication_requested"]
+            assert [a["obligation_id"] for a in request["applications"]] == ["lemma-2"]
+            assert manuscript.replace(".md", ".verification.json") in kw["input_refs"]
+        assert not finding_verifier.validate_finding_application(
+            payload, request, ws.root
+        )
+        kw["on_accept"](payload)
+        return StructuredSemanticResult(payload, {})
+
+    monkeypatch.setattr(findings, "verify_finding", verify)
+
+    def run(retry=False):
+        return check_stage_findings(
+            llm=object(),
+            workdir=ws.root,
+            completed_result_refs=completed,
+            retry_errors=retry,
+        )
+
+    assert not run()
+    receipt = ws.path(manuscript).with_suffix(".verification.json")
+    original = receipt.read_bytes()
+    index = rebuild_research_index(ws.root)
+    assert index["obligations"]["lemma-2"]["status"] == "OPEN"
+    assert index["obligations"]["target"]["status"] == "CLOSED"
+    assert not run() and len(calls) == 1
+    commit = findings._commit_application_reviews
+    with monkeypatch.context() as scoped:
+
+        def interrupt(root, request, ref):
+            if request.get("retry_of"):
+                raise KeyboardInterrupt()
+            return commit(root, request, ref)
+
+        scoped.setattr(findings, "_commit_application_reviews", interrupt)
+        with pytest.raises(KeyboardInterrupt):
+            run(True)
+    assert run(True) and run()
+    assert len(calls) == 2 and receipt.read_bytes() == original
+    assert (
+        rebuild_research_index(ws.root)["obligations"]["lemma-2"]["status"] == "CLOSED"
+    )
+
+
+def test_same_obligation_with_different_premises_keeps_two_decisions(ws, monkeypatch):
+    from pace.contracts.research.memory import prepare_delta_payload
+    from pace.agents.finding_verifier import validate_finding_application
+
+    manuscript, completed = manuscript_handoff(ws, count=1)
+    later = deliver(ws, 2)
+    premise = ws.work_ref("input/stronger.md")
+    ws.write_text(premise, "The additional regularity assumption.")
+    delta_ref = str(Path(later).with_name("research_delta.json"))
+    delta = json.loads(ws.path(delta_ref).read_text())
+    delta["applications"] = [
+        {
+            "id": name,
+            "obligation_id": "target",
+            "argument_ref": manuscript,
+            "premise_refs": refs,
+        }
+        for name, refs in (
+            ("weak", []),
+            ("strong", [premise]),
+            ("strong-again", [premise]),
+        )
+    ]
+    ws.write_json(delta_ref, delta)
+    prepared = prepare_delta_payload(
+        ws.root, delta, load_index(ws.root)["obligations"], local_result_ref=later
+    )
+    assert len(prepared["applications"]) == 2
+    commit_research_memory(ws.root, [*completed, later])
+
+    def verify(**kw):
+        request = kw["application_request"]
+        ws.write_text(
+            request["review_ref"],
+            "Only the strengthened premises justify this application.",
+        )
+        payload = review_payload(request)
+        payload.update(
+            stage_status="MATH_FAIL",
+            reuse_authorized=False,
+            publication={"action": "NONE"},
+        )
+        for row, item in zip(
+            payload["application_checks"], request["applications"], strict=True
+        ):
+            if not item["premise_refs"]:
+                row.update(status="NOT_ESTABLISHED", reuse_authorized=False)
+        assert not validate_finding_application(payload, request, ws.root)
+        return StructuredSemanticResult(payload, {})
+
+    monkeypatch.setattr("pace.agents.director.findings.verify_finding", verify)
+    assert check_stage_findings(
+        llm=object(), workdir=ws.root, completed_result_refs=[*completed, later]
+    )
+    apps = rebuild_research_index(ws.root)["applications"].values()
+    assert sorted((app["premise_refs"], app["status"]) for app in apps) == [
+        ([], "NOT_ESTABLISHED"),
+        ([premise], "APPLICABLE"),
+    ]
+    publish_stage_findings(workdir=ws.root, completed_result_refs=completed)
+    assert not ws.path("results/findings/R0001.md").exists()
+
+
+def test_unfinished_manuscript_retries_without_reviewing_established_scope(
+    ws, monkeypatch
+):
+    from pace.agents.finding_verifier import validate_finding_application
+
+    manuscript, completed = manuscript_handoff(ws, count=1)
+    jobs = []
+
+    def verify(**kw):
+        request = kw.get("application_request")
+        jobs.append(request is not None)
+        if request:
+            ws.write_text(
+                request["review_ref"],
+                "The local implication holds; the whole proof needs review.",
+            )
+            payload = review_payload(request)
+            payload.update(
+                stage_status="VERIFIER_ERROR",
+                reuse_authorized=False,
+                publication={"action": "NONE"},
+            )
+            assert not validate_finding_application(payload, request, ws.root)
+        else:
+            payload = {
+                "stage_status": "PASS",
+                "reuse_authorized": True,
+                "publication": {"action": "CREATE"},
+            }
+        return StructuredSemanticResult(payload, {})
+
+    monkeypatch.setattr("pace.agents.director.findings.verify_finding", verify)
+
+    def run(retry=False):
+        return check_stage_findings(
+            llm=object(),
+            workdir=ws.root,
+            completed_result_refs=completed,
+            retry_errors=retry,
+        )
+
+    assert not run()
+    index = rebuild_research_index(ws.root)
+    app = next(iter(index["applications"].values()))
+    assert app["status"] == "APPLICABLE"
+    scoped_receipt = ws.path(app["review_ref"]).read_bytes()
+    assert run(True) and run()
+    assert jobs == [True, False]
+    assert ws.path(app["review_ref"]).read_bytes() == scoped_receipt
+    assert (
+        json.loads(ws.path(manuscript).with_suffix(".verification.json").read_text())[
+            "verdict"
+        ]["stage_status"]
+        == "PASS"
+    )
+
+
+def test_changed_group_replays_accepted_receipt_before_scheduling_new_scope(
+    ws, monkeypatch
+):
+    manuscript, completed = manuscript_handoff(ws, count=2)
+    batches = []
+
+    def verify(**kw):
+        req = kw["application_request"]
+        batches.append({item["application_key"] for item in req["applications"]})
+        ws.write_text(req["review_ref"], "Each use checked under its own premises.")
+        payload = review_payload(req)
+        kw["on_accept"](payload)
+        if len(batches) == 1:
+            raise KeyboardInterrupt()
+        return StructuredSemanticResult(payload, {})
+
+    monkeypatch.setattr("pace.agents.director.findings.verify_finding", verify)
+    with pytest.raises(KeyboardInterrupt):
+        check_stage_findings(
+            llm=object(), workdir=ws.root, completed_result_refs=completed
+        )
+    extra = deliver(ws, 2, application=True)
+    delta_ref = str(Path(extra).with_name("research_delta.json"))
+    delta = json.loads(ws.path(delta_ref).read_text())
+    premise = ws.work_ref("input/additional.md")
+    ws.write_text(premise, "An additional premise.")
+    delta["applications"][0].update(argument_ref=manuscript, premise_refs=[premise])
+    ws.write_json(delta_ref, delta)
+    commit_research_memory(ws.root, [*completed, extra])
+    for _ in range(2):
+        assert check_stage_findings(
+            llm=object(), workdir=ws.root, completed_result_refs=[*completed, extra]
+        )
+    assert list(map(len, batches)) == [2, 1]
+    assert batches[0].isdisjoint(batches[1])
+    assert all(
+        app["status"] == "APPLICABLE"
+        for app in rebuild_research_index(ws.root)["applications"].values()
+    )
+
+
+def test_joint_review_excludes_critic_sources_from_dispatch_and_handoff(ws, monkeypatch):
+    manuscript, completed = manuscript_handoff(ws, count=2)
+    result_path = ws.path(completed[-1])
+    folder = Path(completed[-1]).parent
+    assignment = result_path.parent / "assignment/task.json"
+    note = str(folder / "rci/attempt_001/002_candidate_critic/review.md")
+    dependency = str(folder / "lemma.md")
+    ws.write_text(note, "Private exploratory derivation.")
+    ws.write_text(dependency, "An independently checkable premise.")
+    result = json.loads(result_path.read_text())
+    result.update(agent_id="rci", manuscript_refs=[manuscript], published_refs=[note, manuscript],
+                  manuscript_dependencies={manuscript: [dependency]}, critic_derivations={manuscript: [note]})
+    ws.write_json(completed[-1], result)
+    ticket = json.loads(assignment.read_text())
+    assignment.write_text(json.dumps({**ticket, "input_refs": [note]}))
+    calls = []
+
+    def verify(**kwargs):
+        request = kwargs["application_request"]
+        assert note not in json.dumps(request) and note not in kwargs["input_refs"]
+        assert dependency in kwargs["input_refs"] and manuscript in kwargs["input_refs"]
+        calls.append(request)
+        ws.write_text(request["review_ref"], "Second scope needs a separate implication.")
+        return StructuredSemanticResult(review_payload(request, rejected={"lemma-1"}), {})
+
+    monkeypatch.setattr("pace.agents.director.findings.verify_finding", verify)
+    for _ in range(2):
+        assert check_stage_findings(llm=object(), workdir=ws.root, completed_result_refs=completed)
+    assert len(calls) == 1

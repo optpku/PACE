@@ -30,6 +30,7 @@ from pace.artifacts.events import (
     write_call_summary,
 )
 from pace.artifacts.workspace import (
+    INDEPENDENT_REVIEW_ROLES,
     _write_json_atomic,
     _write_text_atomic,
     work_ref,
@@ -1836,6 +1837,13 @@ def _build_file_driven_cli_instruction(
             "Do not browse the workspace, memory, source archives or prior task prompts, "
             "or use links to read unlisted files. Keep input manuscripts read-only. "
             "Write the artifacts assigned by the task in its writable locations.\n\n"
+        )
+    elif role.upper() in INDEPENDENT_REVIEW_ROLES:
+        base += (
+            f"Read `{prompt_file}` for the independent review. Check the submitted manuscript, "
+            "its stated premises, and the original sources and verification records needed "
+            "for this judgment. Do not consult RCI Critic manuscripts, their receipts or "
+            "phase archives, even if linked by an author. Identify unsupported inferences.\n\n"
         )
     else:
         base += (

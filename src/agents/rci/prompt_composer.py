@@ -60,5 +60,9 @@ def build_prompt(
             f"- {kind}: `{ref}`" for kind, refs in input_refs.items() for ref in refs
         ),
         output_directory=output_directory,
-        findings_directory=findings_directory,
+        finding_instruction=(
+            f"For a distinct result with a complete proof or counterexample, write the original finding in `{findings_directory}`."
+            if findings_directory
+            else "Write your mathematical derivations and objections in review.md."
+        ),
     )

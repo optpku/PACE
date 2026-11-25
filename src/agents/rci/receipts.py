@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+from pace.artifacts.workspace import is_rci_critic_material
+
 from .roles import AUTHORS
 
 
@@ -9,7 +11,7 @@ def output_names(phase):
     if phase == "CONJECTURE_EXPLORER":
         return ("change.md", "candidate.md", "probe_task.md")
     if phase == "MECHANISM_EXPLORER":
-        return ("change.md", "mechanism.md")
+        return ("change.md", "mechanism.md", "closure_brief.md")
     return ("review.md",)
 
 
@@ -28,6 +30,10 @@ def host_receipt_fields(root, directory, phase, payload, routing):
         own("review.md")
     if action == "PROPOSE_CONJECTURE":
         own("candidate.md")
+    elif action == "CLAIM_RESOLVED":
+        references["resolution_ref"] = (
+            (directory / "closure_brief.md").relative_to(root).as_posix()
+        )
     elif action in {"PROBE_PROOF", "PROBE_REFUTATION"}:
         own("probe_task.md")
     elif action == "PROPOSE_MECHANISM":
@@ -94,4 +100,12 @@ def validate_receipt(root, directory, phase, payload, *, inputs, routing):
                 "existing_candidate_ref",
                 "Select an exact RELATED_CANDIDATE input file.",
             )
+    supplied = {ref for refs in inputs.values() for ref in refs}
+    if any(
+        ref not in supplied or is_rci_critic_material(ref)
+        for ref in payload.get("dependency_refs", ())
+    ):
+        error(
+            "dependency_refs", "Name only supplied, independently checkable premises."
+        )
     return issues

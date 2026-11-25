@@ -167,3 +167,66 @@ def test_completed_outline_yields_to_interrupted_math(tmp_path, monkeypatch, mod
     assert json.loads((turn / "final_report.json").read_text())["result"] == "PASS"
     assert set(before).isdisjoint(transport.calls[len(before):])
     assert (root / "results/outline.md").read_bytes() == outline
+
+
+@pytest.mark.parametrize("action", ["outline", "report", "paper-outline", "paper"])
+def test_accepted_writer_resumes_pending_local_delivery(tmp_path, monkeypatch, action):
+    from pace.orchestrator.writing import tasks
+    from pace.orchestrator.writing.paper import TheoryPaperWriter
+
+    transport = WritingTransport()
+    monkeypatch.setattr("pace.agents.director.harness.build_llm", lambda **_: transport)
+    monkeypatch.setattr("pace.pipeline.build_llm", lambda **_: transport)
+    problem = tmp_path / "problem.md"
+    problem.write_text("Classify the admissible structures.")
+    root = tmp_path / "topic"
+    assert (
+        cli.main(
+            [
+                "run",
+                "--problem",
+                str(problem),
+                "--problem-id",
+                "topic",
+                "--output",
+                str(tmp_path),
+                "--json",
+            ]
+        )
+        == 0
+    )
+    if action in ("report", "paper"):
+        pre = "outline" if action == "report" else "paper-outline"
+        assert (
+            cli.main([pre, "--run-dir", str(root), "--message", str(problem), "--json"])
+            == 0
+        )
+
+    def build(directory):
+        (directory / "build.json").write_text('{"status":"COMPLETE"}')
+        (directory / "main.pdf").write_bytes(b"%PDF-test")
+
+    monkeypatch.setattr("pace.orchestrator.writing.paper.build_paper", build)
+
+    def interrupt(*args, **kwargs):
+        raise KeyboardInterrupt()
+
+    args = [action, "--run-dir", str(root), "--json"]
+    if action.endswith("outline"):
+        args.extend(["--message", str(problem)])
+    with monkeypatch.context() as scoped:
+        if action == "paper":
+            scoped.setattr(TheoryPaperWriter, "_build_delivery", interrupt)
+        else:
+            scoped.setattr(tasks, "_write_text_atomic", interrupt)
+        assert cli.main(args) == 130
+    before = list(transport.calls)
+    assert cli.main(["resume", "--run-dir", str(root), "--json"]) == 0
+    assert transport.calls == before
+    dest = {
+        "paper": "paper/main.pdf",
+        "paper-outline": "paper_outline.md",
+        "outline": "outline.md",
+        "report": "research_report.md",
+    }[action]
+    assert (root / "results" / dest).is_file()

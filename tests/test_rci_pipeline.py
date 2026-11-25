@@ -14,13 +14,20 @@ DIAGNOSIS = "M proves convergence under H. The original premises do not yet give
 
 class RciTransport(RoundLimitTransport):
     def __init__(
-        self, decisions, *, mechanism_count, probe=None, interrupt_review=False
+        self,
+        decisions,
+        *,
+        mechanism_count,
+        probe=None,
+        interrupt_review=False,
+        resolve=False,
     ):
         super().__init__("rci")
         self.decisions = iter(decisions)
         self.mechanism_count = mechanism_count
         self.probe = probe
         self.interrupt_review = interrupt_review
+        self.resolve = resolve
         self.records = []
         self.mechanisms = []
 
@@ -57,7 +64,15 @@ class RciTransport(RoundLimitTransport):
                 (directory / "change.md").write_text(
                     "One precise boundedness gap remains."
                 )
-                if len(self.mechanisms) == self.mechanism_count:
+                if self.resolve:
+                    (directory / "closure_brief.md").write_text(
+                        "A complete argument for the exact scoped question."
+                    )
+                    payload = {
+                        "action": "CLAIM_RESOLVED",
+                        "dependency_refs": inputs["CANDIDATE"],
+                    }
+                elif len(self.mechanisms) == self.mechanism_count:
                     payload = {"action": "HANDOFF"}
                 else:
                     mechanism = directory / "mechanism.md"
@@ -275,3 +290,19 @@ def test_call_budget_preserves_original_mechanism_and_review(tmp_path, monkeypat
     assert outcome["reason"] == "TOTAL_CALL_BUDGET_EXHAUSTED"
     assert transport.mechanisms[0] in outcome["published_refs"]
     assert (root / outcome["evidence_refs"][-1]).read_text() == DIAGNOSIS
+
+
+def test_resolved_question_has_one_original_for_independent_review(
+    tmp_path, monkeypatch
+):
+    transport = RciTransport([], mechanism_count=0, resolve=True)
+    root, outcome = run_rci(tmp_path, monkeypatch, transport)
+    assert outcome["reason"] == "candidate_resolution"
+    (ref,) = outcome["manuscript_refs"]
+    assert ref.endswith("/closure_brief.md")
+    assert outcome["manuscript_dependencies"] == {ref: [outcome["candidate_ref"]]}
+    round_dir = root / work_ref(root, "round1")
+    request = json.loads((round_dir / "reporter_request.json").read_text())
+    assert request["manuscript_refs"] == [ref]
+    assert ref in request["required_refs"]
+    assert [role for role, _, _ in transport.records] == ["rci_mechanism_explorer"]

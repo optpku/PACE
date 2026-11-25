@@ -15,5 +15,5 @@ remain plausible, state the mathematical evidence for each and a way to
 distinguish them. An argument failing does not refute the conjecture.
 
 The next research move belongs to Conjecture Explorer. Submit an empty JSON
-receipt after writing the review. If this review establishes a useful distinct
-result, submit its complete draft in the assigned finding directory.
+receipt after writing the review. Keep useful derivations in named sections so
+an author can reproduce the mathematics in an independent original.

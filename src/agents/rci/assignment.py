@@ -103,6 +103,11 @@ def build_rci_handler(*, llm, workdir):
         if saved["evidence_refs"]:
             latest = saved["evidence_refs"][-1]
             sections.append("## Latest original research note\n" + link(latest))
+        if saved["manuscript_refs"]:
+            sections.append(
+                "## Manuscripts for independent verification\n"
+                + "\n".join(map(link, saved["manuscript_refs"]))
+            )
         if saved["failure"]:
             sections.append("## Missing input\n" + saved["failure"]["message"])
         sections.append("## Original phase files\n" + "\n".join(map(link, refs)))
@@ -116,6 +121,9 @@ def build_rci_handler(*, llm, workdir):
                 reason_code=saved["reason"],
             ).to_json(),
             "published_refs": refs,
+            "manuscript_refs": saved["manuscript_refs"],
+            "manuscript_dependencies": saved["manuscript_dependencies"],
+            "critic_derivations": saved["critic_derivations"],
         }
         if kwargs.get("on_accept"):
             kwargs["on_accept"](result)

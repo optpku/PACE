@@ -16,13 +16,16 @@ from pace.artifacts.workspace import (
     stage_ref,
     work_ref,
 )
-from pace.orchestrator.writing.tasks import read_state
+from pace.orchestrator.writing.tasks import (
+    checkpoint_writing_source,
+    project_accepted_text,
+    read_state,
+)
 from pace.runtime.agent_environment import prepare_role_environment
 from pace.runtime.math_format import require_math_format
 from pace.runtime.prompts import materialize_run_resources
 from pace.runtime.semantic import (
     commit_artifact_call_failure,
-    commit_artifact_call_success,
 )
 
 logger = logging.getLogger(__name__)
@@ -105,7 +108,12 @@ class ResearchReportOutliner:
     def update(
         self, *, round_index: int = 0, completed_result_refs: tuple[str, ...] = ()
     ) -> bool:
-        if outline_artifacts(self.workdir):
+        if project_accepted_text(
+            self.workdir,
+            outline_state_ref(self.workdir),
+            "outline_ref",
+            RESEARCH_OUTLINE_REF,
+        ):
             return True
         if not read_state(self.workdir, outline_state_ref(self.workdir)):
             self.request(
@@ -206,12 +214,13 @@ class ResearchReportOutliner:
             require_math_format(body)
             if not body.strip():
                 raise ValueError("Outline file is empty")
-            destination = self.workdir / RESEARCH_OUTLINE_REF
-            _write_text_atomic(destination, relocate_links(body, source, destination))
-            state["outline_ref"] = output_ref
-            _write_json_atomic(self.workdir / outline_state_ref(self.workdir), state)
-            commit_artifact_call_success(
-                handle, workdir=self.workdir, artifact_ref=output_ref
+            state_ref = outline_state_ref(self.workdir)
+            checkpoint_writing_source(
+                self.workdir, state_ref, state, output_ref, handle
+            )
+            handle = None
+            project_accepted_text(
+                self.workdir, state_ref, "outline_ref", RESEARCH_OUTLINE_REF
             )
         except Exception as exc:
             logger.warning("Research outline generation failed", exc_info=True)
@@ -327,7 +336,12 @@ class ResearchReportWriter:
         )
 
     def update(self, *, round_index: int = 0) -> bool:
-        if report_artifacts(self.workdir):
+        if project_accepted_text(
+            self.workdir,
+            report_state_ref(self.workdir),
+            "report_ref",
+            RESEARCH_REPORT_REF,
+        ):
             return True
         state = report_request(self.workdir)
         attempt = self._attempt()
@@ -423,12 +437,13 @@ class ResearchReportWriter:
             require_math_format(body)
             if not body.strip():
                 raise ValueError("Research report file is empty")
-            destination = self.workdir / RESEARCH_REPORT_REF
-            _write_text_atomic(destination, relocate_links(body, source, destination))
-            state["report_ref"] = output_ref
-            _write_json_atomic(self.workdir / report_state_ref(self.workdir), state)
-            commit_artifact_call_success(
-                handle, workdir=self.workdir, artifact_ref=output_ref
+            state_ref = report_state_ref(self.workdir)
+            checkpoint_writing_source(
+                self.workdir, state_ref, state, output_ref, handle
+            )
+            handle = None
+            project_accepted_text(
+                self.workdir, state_ref, "report_ref", RESEARCH_REPORT_REF
             )
         except Exception as exc:
             logger.warning("Research report generation failed", exc_info=True)

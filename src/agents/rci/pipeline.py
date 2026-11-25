@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from pace.artifacts.workspace import _write_json_atomic
+from pace.artifacts.workspace import _write_json_atomic, is_rci_critic_material
 from pace.runtime.prompts import render_prompt_template
 
 from .phase_runner import BudgetedPhaseRunner, RciBudgetExhausted, RciPhaseError
@@ -36,6 +36,8 @@ class RciPipeline:
         ordinal = 0
         published = []
         evidence = []
+        manuscripts = {}
+        critic_derivations = {}
         alternatives = list(related_candidate_refs)
         mechanisms = dict(mechanisms)
         candidate = research_problem_ref
@@ -67,7 +69,28 @@ class RciPipeline:
                 routing_context=routing,
             )
             published.extend(result.artifact_refs)
-            return result.payload
+            payload = result.payload
+            originals = payload.get("manuscript_refs", ())
+            for ref in originals:
+                manuscripts[ref] = payload.get("dependency_refs", [])
+            if phase in AUTHORS:
+                reviews = list(
+                    dict.fromkeys(
+                        ref
+                        for ref in (*source_refs, *evidence)
+                        if is_rci_critic_material(ref)
+                    )
+                )
+                if reviews:
+                    mechanism = (
+                        payload.get("mechanism_ref")
+                        if phase == "MECHANISM_EXPLORER"
+                        else None
+                    )
+                    for ref in (payload["change_ref"], mechanism, *originals):
+                        if ref:
+                            critic_derivations[ref] = reviews
+            return payload
 
         anchor = {"TARGET_ANCHOR": target_anchor_ref, "WORK_ITEM": work_item_ref}
 
@@ -112,7 +135,9 @@ class RciPipeline:
                         },
                     )
                     evidence.append(proposal["change_ref"])
-                    if proposal["action"] == "HANDOFF":
+                    if proposal["action"] in {"HANDOFF", "CLAIM_RESOLVED"}:
+                        if proposal["action"] == "CLAIM_RESOLVED":
+                            reason = "candidate_resolution"
                         break
                     if proposal["action"] == "PROPOSE_MECHANISM":
                         ref = proposal["mechanism_ref"]
@@ -167,6 +192,8 @@ class RciPipeline:
                         routing={"candidate_ref": draft},
                     )
                     evidence.append(review["review_ref"])
+                    if review["action"] == "ACCEPT":
+                        critic_derivations[draft] = [review["review_ref"]]
                     if review["action"] in {"ACCEPT", "REUSE"}:
                         selected = (
                             review["existing_candidate_ref"]
@@ -212,6 +239,9 @@ class RciPipeline:
                 "candidate_ref": candidate,
                 "evidence_refs": evidence,
                 "published_refs": list(dict.fromkeys(published)),
+                "manuscript_refs": list(manuscripts),
+                "manuscript_dependencies": manuscripts,
+                "critic_derivations": critic_derivations,
                 "failure": failure,
             },
         )

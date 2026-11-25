@@ -29,3 +29,7 @@ Use one of the offered actions:
 - `HANDOFF`: record the useful original work, its exact scope and the remaining
   gap or next work outside this assignment. For routine continuation, identify
   what new evidence or mathematical move would make another attempt useful.
+
+When submitting a standalone manuscript, use `dependency_refs` to name the
+supplied original premises it uses. Reproduce any necessary derivation from
+a Critic in the manuscript so it can be checked independently.

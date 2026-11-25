@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +46,7 @@ def run_math_verifier_kernel(
     artifact_refs: dict[str, str] | None = None,
     output_ref: str = "",
     call_metadata: dict[str, str] | None = None,
+    on_accept: Callable[[dict], None] | None = None,
 ) -> dict[str, Any]:
     binding = _kernel_binding(
         proof_id=proof_id,
@@ -93,7 +96,7 @@ def run_math_verifier_kernel(
         call_name=call_name,
         input_refs=input_refs,
         semantic_call_fn=semantic_call,
-        role=_MATH_VERIFIER_KERNEL_ROLE,
+        role=replace(_MATH_VERIFIER_KERNEL_ROLE, on_accept=on_accept),
         host_metadata=metadata,
     )
     from pace.runtime.sessions import budget_exhausted
@@ -120,7 +123,7 @@ def run_math_verifier_kernel(
             call_name=call_name + "_delivery_correction",
             input_refs=(*input_refs, response_ref),
             semantic_call_fn=semantic_call,
-            role=_MATH_VERIFIER_KERNEL_ROLE,
+            role=replace(_MATH_VERIFIER_KERNEL_ROLE, on_accept=on_accept),
             host_metadata={
                 **metadata,
                 "parent_call_id": result.host["call_id"],

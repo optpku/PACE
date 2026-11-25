@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from pace.artifacts.workspace import INDEPENDENT_REVIEW_ROLES, is_rci_critic_material
 from pace.runtime.semantic import SemanticCallResult, SemanticCallSpec
 
 SemanticSchemaFactory = Callable[[], dict[str, Any]]
@@ -63,6 +64,11 @@ def run_semantic_role(
 ) -> SemanticCallResult:
     """Run one role through the calling agent's patchable transport seam."""
 
+    input_refs = tuple(input_refs)
+    if role.role.upper() in INDEPENDENT_REVIEW_ROLES and any(
+        is_rci_critic_material(ref) for ref in input_refs
+    ):
+        raise ValueError("independent review cannot use RCI Critic material")
     return semantic_call_fn(
         llm,
         prompt,

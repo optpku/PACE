@@ -374,6 +374,7 @@ def test_failed_binding_after_kernel_pass_preserves_only_local_diagnostics(tmp_p
 
 
 
+@pytest.mark.parametrize("relabel", [False, True])
 def test_false_budget_stop_is_reconsidered_before_host_commits(tmp_path, monkeypatch, relabel):
     class FalseBudgetTransport(RoundLimitTransport):
         def complete_structured_result(self, prompt, *, workdir, call_name, ledger_context, **kwargs):
