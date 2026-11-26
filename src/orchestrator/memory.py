@@ -287,8 +287,10 @@ def _load_memory_commit(root, ref, target, expected_id=None):
         )
     delta_ref = record["payload"].get("delta_ref")
     reporter_ref = record["payload"].get("reporter_ref")
+    if delta_ref and not reporter_ref:
+        raise ValueError("research delta requires its committed Reporter receipt")
     for row in record["bindings"]:
-        if not reporter_ref or row["ref"] != delta_ref:
+        if row["ref"] != delta_ref:
             check_binding(root, row)
     if reporter_ref:
         if reporter_ref != str(folder / "reporter_result.json") or delta_ref != str(
@@ -408,6 +410,20 @@ def _apply_research_commit(index, record, commit_ref):
     if "route" in payload:
         for row in payload["route"]["obligations"]:
             old = index["obligations"].get(row["id"])
+            if old and payload.get("route_change_refs"):
+                # Premise groups are alternatives of conjunctions. Reordering or
+                # rewriting an unchanged plan is not a change to a dependency.
+                previous = {frozenset(group) for group in old["premise_groups"]}
+                revised = {frozenset(group) for group in row["premise_groups"]}
+                if previous != revised and row["disposition"] == "OPEN":
+                    affected = {row["id"]}
+                    if row["kind"] == "TARGET_REQUIRED":
+                        affected.update(set(row["parent_ids"]) & set(old["parent_ids"]))
+                    for ident in affected:
+                        index.setdefault("dependency_changes", {})[ident] = {
+                            "after_attempts": len(index["attempts"]),
+                            "ref": payload["route_change_refs"][0],
+                        }
             if old and old["version"] != row["version"]:
                 index["obligation_history"][old["id"] + ":" + old["version"]] = old
                 for app in index["applications"].values():
@@ -445,7 +461,12 @@ def _apply_research_commit(index, record, commit_ref):
             }
         )
         applications = index["applications"]
+        eligible = payload.get("review_obligation_ids")
         for app in delta["applications"]:
+            if eligible is not None and app["obligation_id"] not in eligible:
+                # Keep the original proposal in the attempt. Only requested
+                # scopes enter the independent review queue and can close a node.
+                continue
             entry = {
                 **app,
                 "result_ref": record["result_ref"],
@@ -555,9 +576,7 @@ def whole_proof_application_routes(
         target_contract_id=state["target_contract_id"],
         candidate_ref=candidate,
     )
-    if resolved["status"] != "PASS" or not resolved["binding"].get(
-        "verification_inputs_ref"
-    ):
+    if resolved["status"] != "PASS":
         return {}
     if resolved["binding"]["target_contract_ref"] != index["target"]["ref"]:
         return {}
@@ -614,8 +633,7 @@ def refresh_application_memory(root: Path) -> None:
             app.pop("review_ref", None)
             app.pop("review_text_ref", None)
             continue
-        if "application_key" not in record:
-            ref = str(read_json(root, ref)["verification_binding"]["ref"])
+        ref = read_json(root, ref)["verification_binding"]["ref"]
         if application_review_incomplete(app, record):
             app.update(status="PROPOSED", review_ref=ref)
             app.pop("review_text_ref", None)
@@ -648,41 +666,107 @@ def refresh_application_memory(root: Path) -> None:
     _write_json_atomic(root / RESEARCH_INDEX_REF, index)
 
 
-def research_brief(root: Path) -> str:
+def research_progress(index: dict) -> tuple[dict, dict]:
+    """Count mathematical attempts since progress at each scope, from committed data."""
+    obligations = index["obligations"]
+    changes = index.get("dependency_changes", {})
+    counts = {}
+    target_ref = changes.get("target", {}).get("ref", "")
+    approved = {}
+    for app in index["applications"].values():
+        ident = app["obligation_id"]
+        if (
+            app["status"] in {"APPLICABLE", "REVIEWED_AS_WHOLE"}
+            and app["obligation_version"] == obligations[ident]["version"]
+            and obligations[ident].get("disposition", "OPEN") == "OPEN"
+        ):
+            approved.setdefault(app["result_ref"], []).append(app)
+
+    credited = set()
+    for number, attempt in enumerate(index["attempts"], 1):
+        versions = attempt.get("related_versions", attempt["obligation_versions"])
+        direct = {
+            ident
+            for ident in attempt["obligation_ids"]
+            if obligations.get(ident, {}).get("version") == versions.get(ident)
+        }
+        ancestors = set()
+        pending = list(direct)
+        while pending:
+            for parent in obligations[pending.pop()]["parent_ids"]:
+                if (
+                    parent not in ancestors
+                    and versions.get(parent) == obligations[parent]["version"]
+                ):
+                    ancestors.add(parent)
+                    pending.append(parent)
+        current = direct | ancestors
+        # Detached exploration still spends effort on the literal target.
+        target_version = obligations["target"]["version"]
+        if versions.get("target", target_version) == target_version:
+            current.add("target")
+        local = direct - ancestors - {"target"}
+        gains = {}
+        for app in approved.get(attempt["result_ref"], ()):
+            ident = app["obligation_id"]
+            if ident not in direct or ident in credited:
+                continue
+            credited.add(ident)
+            gains[ident] = app["argument_ref"]
+            for parent in current:
+                used = any(
+                    ident in group for group in obligations[parent]["premise_groups"]
+                )
+                required = (
+                    obligations[ident]["kind"] == "TARGET_REQUIRED"
+                    and parent in obligations[ident]["parent_ids"]
+                )
+                if used or required:
+                    gains[parent] = app["argument_ref"]
+
+        outcome = attempt["attempt"]["outcome"]
+        for ident in current:
+            if number <= changes.get(ident, {}).get("after_attempts", 0):
+                continue
+            if ident in gains or (ident in local and outcome == "LOCAL_RESULT"):
+                counts[ident] = 0
+                if ident == "target":
+                    target_ref = gains[ident]
+            elif outcome != "CONTEXT_GAP":
+                counts[ident] = counts.get(ident, 0) + 1
+
+    return counts, {
+        "status": obligations["target"]["status"],
+        "attempts_without_target_progress": counts.get("target", 0),
+        "last_change_ref": target_ref,
+    }
+
+
+def research_brief(root: Path, *, focused=False, expand=False, recent_refs=()) -> str:
     """Compact selection prompt; detailed manuscripts remain referenced on demand."""
     from pace.contracts.research.memory import enabled, read_json
 
     if not enabled(root):
         return ""
     index = read_json(root, RESEARCH_INDEX_REF)
-    counts = {}
-    for attempt in index["attempts"]:
-        versions = attempt.get(
-            "related_versions", attempt.get("obligation_versions", {})
-        )
-        current = {
-            ident
-            for ident, version in versions.items()
-            if index["obligations"].get(ident, {}).get("version") == version
-        }
-        related = current.intersection(attempt["obligation_ids"])
-        pending = list(related)
-        while pending:
-            for parent in (
-                index["obligations"].get(pending.pop(), {}).get("parent_ids", [])
-            ):
-                if parent not in related and parent in current:
-                    related.add(parent)
-                    pending.append(parent)
-        for ident in related:
-            counts[ident] = counts.get(ident, 0) + 1
-            if any(
-                app["status"] == "APPLICABLE"
-                and app["obligation_id"] == ident
-                and app["result_ref"] == attempt["result_ref"]
-                for app in index["applications"].values()
-            ):
-                counts[ident] = 0
+    counts, target_progress = research_progress(index)
+    obligations = index["obligations"]
+    attempts = index["attempts"][-6:]
+    if (
+        focused
+        and not expand
+        and target_progress["attempts_without_target_progress"] < 3
+    ):
+        recent = set(recent_refs)
+        attempts = [
+            a for a in index["attempts"] if a["result_ref"] in recent
+        ] or attempts[-1:]
+        active = {"target", *(i for a in attempts for i in a["obligation_ids"])}
+        for ident in tuple(active):
+            row = obligations.get(ident, {})
+            active.update(row.get("parent_ids", ()))
+            active.update(i for group in row.get("premise_groups", ()) for i in group)
+        obligations = {i: row for i, row in obligations.items() if i in active}
     return (
         "\nResearch memory (SEARCH_CONTEXT_ONLY; read bound evidence before reuse):\n"
         + json.dumps(
@@ -702,7 +786,7 @@ def research_brief(root: Path) -> str:
                         )
                         if k in o
                     }
-                    for o in index["obligations"].values()
+                    for o in obligations.values()
                 ],
                 "applicable_evidence": [
                     {
@@ -718,6 +802,7 @@ def research_brief(root: Path) -> str:
                     }
                     for app in index["applications"].values()
                     if app["status"] == "APPLICABLE"
+                    and app["obligation_id"] in obligations
                     and app["obligation_version"]
                     == index["obligations"][app["obligation_id"]]["version"]
                 ],
@@ -738,14 +823,20 @@ def research_brief(root: Path) -> str:
                             "result_ref",
                         )
                     }
-                    for a in index["attempts"][-6:]
+                    for a in attempts
                 ],
+                **(
+                    {"current_route_ref": index.get("current_route", {}).get("ref", "")}
+                    if focused
+                    else {}
+                ),
+                "target_progress": target_progress,
                 "reassessment_due": [
                     k
                     for k, v in counts.items()
                     if v >= 3 and index["obligations"][k]["status"] == "OPEN"
                 ],
-                "note": "Reassessment is advisory, not a stop. Normal node completion does not require replanning. Cite a concrete change for repeated attempts.",
+                "note": "Reassessment is advisory. Inspect the original progress before changing course. Continue directly when there is a concrete next task.",
                 "archive_ref": RESEARCH_INDEX_REF,
                 "branch_costs": index.get("costs", {}).get("branches", {}),
             },
@@ -853,7 +944,6 @@ def commit_verified_progress(
     if current_local is not None:
         for key in (
             "current_blockers",
-            "current_blocker",
             "last_verification_ref",
             "last_proof_id",
             "last_proof_ref",

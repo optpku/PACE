@@ -18,12 +18,7 @@ from pace.contracts.proof.binding import (
     load_active_target,
     resolve_verification_binding,
 )
-from pace.orchestrator.writing.paper import paper_outline_state_ref, paper_state_ref
-from pace.orchestrator.writing.report import (
-    outline_state_ref,
-    report_state_ref,
-)
-from pace.orchestrator.writing.tasks import writing_task_ref
+from pace.orchestrator.writing.tasks import writing_artifacts
 from pace.pipeline_types import PipelineResult
 from pace.reporting.terminal_report import (
     FinalReportEnvelope,
@@ -187,17 +182,9 @@ def _restore_operational_checkpoint(
         (attempt / "failed_state.json").relative_to(workspace.root).as_posix(),
         failed,
     )
-    for ref in (
-        work_ref(workspace.root, "final_report.json"),
-        outline_state_ref(workspace.root),
-        report_state_ref(workspace.root),
-        paper_outline_state_ref(workspace.root),
-        paper_state_ref(workspace.root),
-        writing_task_ref(workspace.root),
-    ):
-        path = workspace.path(ref)
-        if path.is_file():
-            path.replace(attempt / path.name)
+    terminal = workspace.path(work_ref(workspace.root, "final_report.json"))
+    if terminal.is_file():
+        terminal.replace(attempt / terminal.name)
     # Restore last: an interrupted archive still leaves the failed checkpoint
     # and diagnostic available to the next explicit resume invocation.
     workspace.write_json(
@@ -216,9 +203,10 @@ def _project_terminal_result(
         raise RecoveryError("invalid_final_report", str(exc)) from exc
     refs = envelope.artifact_refs
     _validate_terminal_report_binding(workspace, report, refs)
+    visible_refs = {**refs, **writing_artifacts(workspace.root)}
 
     def resolve_artifact(name: str) -> Path | None:
-        return _bound_artifact(workspace, refs, name)
+        return _bound_artifact(workspace, visible_refs, name)
 
     from pace.artifacts.events import read_events
 

@@ -51,9 +51,10 @@ class RoundLimitTransport(ProofPublicationTransport):
                            ledger_context=ledger_context, structured=True)
 
 
+@pytest.mark.parametrize("variant", ["standard", "weak"])
 @pytest.mark.parametrize("interrupted", [False, True])
 def test_cli_whole_acceptance_delivers_without_six_optional_application_reviews(
-    tmp_path, monkeypatch, interrupted
+    tmp_path, monkeypatch, interrupted, variant
 ):
     from pace.agents.director.findings import pending_finding_checks
 
@@ -94,7 +95,7 @@ def test_cli_whole_acceptance_delivers_without_six_optional_application_reviews(
             if call_name.startswith("research_reporter_"):
                 request_ref = next(
                     ref
-                    for ref in ledger_context["input_refs"]
+                    for ref in (*ledger_context["input_refs"], *ledger_context.get("archive_refs", ()))
                     if ref.endswith("/reporter_request.json")
                 )
                 request = json.loads((root / request_ref).read_text())
@@ -213,6 +214,7 @@ def test_cli_whole_acceptance_delivers_without_six_optional_application_reviews(
             root.name,
             "--output",
             str(tmp_path),
+            "--resource-variant", variant,
             "--max-rounds",
             "2",
             "--json",
@@ -223,7 +225,8 @@ def test_cli_whole_acceptance_delivers_without_six_optional_application_reviews(
     report = json.loads((root / work_ref(root, "final_report.json")).read_text())
     assert report["result"] == "PASS" and report["run_status"] == "completed"
     index = json.loads((root / "memory/research_index.json").read_text())
-    assert len(index["applications"]) == 6
+    assert len(index["applications"]) == (1 if variant == "standard" else 6)
+    assert len(index["attempts"][-1]["applications"]) == 6
     assert index["obligations"]["target"]["status"] == "CLOSED"
     assert all(index["obligations"][ident]["status"] == "OPEN" for ident in scopes[1:])
     assert (
@@ -458,7 +461,8 @@ def test_parallel_dispatch_reserves_only_remaining_rounds(research_workspace, li
     assert not ws.path(ws.work_ref(f"round{limit + 1}")).exists()
 
 
-def test_resume_finishes_the_reserved_last_round_without_redispatch(research_workspace):
+@pytest.mark.parametrize("composer_id", ["", "custom-call"])
+def test_resume_finishes_the_reserved_last_round_without_redispatch(research_workspace, composer_id):
     ws = research_workspace
     attempts = []
 
@@ -472,16 +476,27 @@ def test_resume_finishes_the_reserved_last_round_without_redispatch(research_wor
     engine = DirectorLedEngine(workdir=ws.root,
         director=lambda **_: {"action": "DISPATCH", "agent_id": "survey", "prompt_brief": "Inspect sources.",
                              "input_refs": [ws.work_ref("input/problem.md")]},
-        composer=lambda **_: PromptComposerResult(final_prompt="Inspect the fixed sources.", call_id="composer"),
+        composer=lambda **_: PromptComposerResult(final_prompt="Inspect the fixed sources.", call_id=composer_id),
         specialists={"survey": specialist}, target_contract_id="TARGET", max_rounds=1, commit_memory=commit_round_memory, commit_results=publish_stage_findings)
     with pytest.raises(KeyboardInterrupt):
         engine.run()
-    assert json.loads(engine.state_path.read_text())["round_index"] == 1
+    state = json.loads(engine.state_path.read_text())
+    assert state["round_index"] == 1
+    manifest = json.loads((ws.root / state["last_composer_manifest_ref"]).read_text())
+    if composer_id:
+        assert manifest["composer_call_id"] == composer_id
+    else:
+        assert "composer_call_id" not in manifest
+    prompt = ws.root / state["pending_prompt_ref"]
+    content = prompt.read_bytes()
+    assert content.count(b"## Available methods") == 1
+    engine.composer = lambda **_: pytest.fail("Resume must reuse the committed prompt.")
     engine.director = lambda **_: pytest.fail("The reserved last round must resume without a new decision.")
     result = engine.resume()
     assert result.phase == "FINALIZE"
     assert result.state.stop_reason == "RESEARCH_ROUND_LIMIT_REACHED"
     assert attempts == [1, 1]
+    assert prompt.read_bytes() == content
     assert not ws.path(ws.work_ref("round2")).exists()
 
 
@@ -597,7 +612,7 @@ class CreditTransport(RoundLimitTransport):
             self.agent = "research" if not self.round_prompts else "prover"
         if call_name.startswith("math_verifier_kernel_") and self.prover_calls == 1:
             return self._reply(json.dumps({"stage_status": "MATH_FAIL",
-                "canonical_blockers": [{"reason": "The first draft has no complete derivation."}]}),
+                "summary": "The first draft has no complete derivation.", "proof_location": "Concluding equality."}),
                 workdir=workdir, call_name=call_name, ledger_context=ledger_context, structured=True)
         return super().complete_structured_result(prompt, workdir=workdir, call_name=call_name,
                     ledger_context=ledger_context, **kwargs)

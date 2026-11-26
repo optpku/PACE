@@ -161,9 +161,18 @@ def is_rci_critic_material(ref: str | Path) -> bool:
         return False
     parts = path.parts[path.parts.index("rci") + 1 :]
     return any(
-        re.fullmatch(r"[0-9]+_(?:candidate_critic|mechanism_critic)", part)
+        re.fullmatch(
+            r"(?:[0-9]+_(?:candidate_critic|mechanism_critic)"
+            r"|(?:raw_seed_critic_(?:math|research)|mechanism_critic)(?:_[0-9]+)?)",
+            part,
+        )
         for part in parts
-    ) or path.name in {"completed_phase.json", "prompt_assembly.json"}
+    ) or path.name in {
+        "completed_phase.json",
+        "prompt_assembly.json",
+        "scope_reviews.json",
+        "research_task_batch.json",
+    }
 
 
 def is_call_path(path: Path) -> bool:
@@ -430,23 +439,7 @@ def reconcile_run_status(root: Path) -> dict:
 
 
 def _write_json_atomic(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    data = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
-    descriptor, temporary = tempfile.mkstemp(
-        dir=path.parent,
-        prefix=path.name + ".",
-        suffix=".tmp",
-    )
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            handle.write(data)
-        os.replace(temporary, path)
-    except BaseException:
-        try:
-            os.unlink(temporary)
-        except OSError:
-            pass
-        raise
+    _write_text_atomic(path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
 
 
 def _write_text_atomic(path: Path, content: str) -> None:

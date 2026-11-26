@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from pace.artifacts.results import relocate_links
+from pace.artifacts.results import FINDINGS_INDEX_REF, relocate_links
 from pace.artifacts.workspace import _write_json_atomic, work_ref
 from pace.contracts.research.memory import (
     application_is_approved,
@@ -18,6 +18,7 @@ from pace.contracts.research.memory import (
     public_file,
     read_json,
 )
+from pace.runtime.prompts import standard_workflow
 
 
 def load_index(root):
@@ -77,18 +78,44 @@ def director_archive_refs(root: Path) -> tuple[str, ...]:
     return refs
 
 
-def director_decision_inputs(root: Path, input_refs, completed_refs=()) -> dict:
+def director_decision_inputs(
+    root: Path, input_refs, completed_refs=(), *, assembling=False
+) -> dict:
     """Select the reading list and scheduling facts for one Director call."""
     from pace.contracts.research.memory import enabled
-    from pace.orchestrator.memory import research_brief
+    from pace.orchestrator.memory import RESEARCH_INDEX_REF, research_brief
 
     required = list(input_refs)
     archives = list(director_archive_refs(root))
+    focused = standard_workflow(root)
+    index = load_index(root)
+    expand = (
+        assembling
+        or focused
+        and any(
+            row.get("status") == "INVALIDATED"
+            and row.get("obligation_version")
+            == index["obligations"][row["obligation_id"]]["version"]
+            for row in index["applications"].values()
+        )
+    )
     survey_reports = []
+    current_surveys = []
     for ref in completed_refs:
         if Path(ref).name != "agent_result.json":
             continue
         result = read_json(root, ref)
+        if (
+            focused
+            and ref in required
+            and result.get("agent_id") == "planner"
+            and result.get("status") == "SUCCEEDED"
+        ):
+            expand = True
+            route_ref = index.get("current_route", {}).get("ref")
+            if route_ref:
+                public_file(root, route_ref)
+                required.append(route_ref)
         if result.get("agent_id") != "survey" or result.get("status") != "SUCCEEDED":
             continue
         report = result["deliverable_ref"]
@@ -96,6 +123,8 @@ def director_decision_inputs(root: Path, input_refs, completed_refs=()) -> dict:
             raise ValueError("Survey report is missing from the committed handoff")
         public_file(root, report)
         survey_reports.append(report)
+        if ref in input_refs:
+            current_surveys.append(report)
         folder = Path(ref).parent
         for source in result.get("published_refs", ()):
             if Path(source).is_relative_to(folder / "sources") or source in {
@@ -104,29 +133,43 @@ def director_decision_inputs(root: Path, input_refs, completed_refs=()) -> dict:
             }:
                 public_file(root, source)
                 archives.append(source)
-    if survey_reports:
-        required.append(survey_reports[-1])
-        archives.extend(survey_reports[:-1])
+    if focused:
+        if (root / RESEARCH_INDEX_REF).is_file():
+            public_file(root, RESEARCH_INDEX_REF)
+            archives.append(RESEARCH_INDEX_REF)
+        navigation = {
+            "memory/README.md",
+            "memory/active_problem_dossier.json",
+            work_ref(root, "state/director_state.json"),
+        }
+        if not expand and len(index["attempts"]) > 0:
+            navigation.add(FINDINGS_INDEX_REF)
+        archives.extend(ref for ref in required if ref in navigation)
+        required = [ref for ref in required if ref not in navigation]
+    latest = survey_reports[-1:] if not focused else current_surveys
+    required.extend(latest)
+    archives.extend(ref for ref in survey_reports if ref not in latest)
     # A completed or failed Survey costs one acquisition. Transport attempts
     # within the same round share the one host receipt.
     surveys = sum(
         json.loads(p.read_text()).get("agent_id") == "survey"
         for p in (root / work_ref(root)).glob("*/agent_result.json")
     )
-    index = load_index(root)
     return {
         "required_refs": list(dict.fromkeys(required)),
         "archive_refs": list(
             dict.fromkeys(ref for ref in archives if ref not in required)
         ),
         "memory_enabled": enabled(root),
-        "brief": research_brief(root),
+        "brief": research_brief(
+            root, focused=focused, expand=expand, recent_refs=input_refs
+        ),
         "obligation_versions": {
             key: row["version"] for key, row in index["obligations"].items()
         },
         "route": index.get("current_route", {}),
         "survey_remaining": max(0, 4 - surveys),
-        "latest_survey": survey_reports[-1] if survey_reports else "",
+        "latest_survey": latest[-1] if latest else "",
     }
 
 
@@ -288,6 +331,12 @@ def freeze_context(root: Path, assignment_ref: str, decision, input_refs) -> dic
                 critic_notes[ref] = list(notes)
                 destination = selected if decision.agent_id == "rci" else archives
                 destination.extend(notes)
+    if decision.agent_id == "planner":
+        from pace.orchestrator.memory import research_progress
+
+        _, target_progress = research_progress(index)
+        if target_progress["last_change_ref"]:
+            archives.append(target_progress["last_change_ref"])
     # Navigation is a frozen entry, not a reason to expand the complete archive.
     archives = list(dict.fromkeys(archives))
     required, bindings, aliases = [], [], {}
@@ -330,6 +379,22 @@ def freeze_context(root: Path, assignment_ref: str, decision, input_refs) -> dic
         },
         "related_attempt_refs": [a["change_ref"] for a in attempts],
     }
+    if (
+        decision.agent_id in {"research", "rci", "prover"}
+        and standard_workflow(root)
+    ):
+        route_context["review_obligation_ids"] = [
+            row["id"]
+            for row in route_context["obligations"]
+            if (row["kind"] == "TARGET_REQUIRED" and row["status"] == "OPEN")
+            or decision.next_step_kind == "REASSESS"
+        ]
+    if decision.agent_id == "planner":
+        route_context["target_progress"] = target_progress
+        if decision.next_step_kind == "REPLAN":
+            route_context["change_refs"] = [
+                aliases[ref] for ref in decision.change_refs
+            ]
     _write_json_atomic(root / route_ref, route_context)
     context = {
         "schema_version": "research_context/v1",
@@ -342,7 +407,6 @@ def freeze_context(root: Path, assignment_ref: str, decision, input_refs) -> dic
         "branch_id": route_context["branch_id"],
         "obligation_ids": ids,
         "selected_dependencies": list(dict.fromkeys(selected)),
-        "access_policy": "TASK_DEPENDENCIES_WITH_ON_DEMAND_ARCHIVE",
         "required_bytes": sum(
             (root / r).stat().st_size for r in dict.fromkeys(required)
         ),
@@ -360,18 +424,16 @@ def route_base(root: Path, output_ref: str) -> str:
     context = task_context(root, output_ref)
     if context:
         return read_json(root, context["route_context"]["ref"])["route"].get("ref", "")
-    path = root / work_ref(root, "state/current_route.json")
-    return json.loads(path.read_text())["ref"] if path.is_file() else ""
+    return ""
 
 
 def validate_research_delivery(
-    root: Path, result: dict, assignment_ref: str, *, author_only=False
+    root: Path, result: dict, assignment_ref: str
 ) -> dict:
     from pace.contracts.research.memory import (
         enabled,
         prepare_delta,
         prepare_route,
-        reporter_owned,
     )
 
     if not enabled(root):
@@ -393,28 +455,24 @@ def validate_research_delivery(
         ref = str(folder / "route_relations.json")
         payload["route"] = prepare_route(root, ref, obligations)
         payload["route_ref"] = ref
-    if reporter_owned(root):
-        if author_only or result["agent_id"] not in {"research", "prover", "rci"}:
-            return payload
-        from pace.agents.reporter import restore_reporter_delivery
+        if frozen.get("change_refs"):
+            payload["route_change_refs"] = frozen["change_refs"]
+    if result["agent_id"] not in {"research", "prover", "rci"}:
+        return payload
+    from pace.agents.reporter import restore_reporter_delivery
 
-        restore_reporter_delivery(root, str(folder / "agent_result.json"))
-        payload["reporter_ref"] = str(folder / "reporter_result.json")
+    restore_reporter_delivery(root, str(folder / "agent_result.json"))
+    payload["reporter_ref"] = str(folder / "reporter_result.json")
+    if "review_obligation_ids" in frozen:
+        payload["review_obligation_ids"] = frozen["review_obligation_ids"]
     delta_ref = str(folder / "research_delta.json")
-    if (root / delta_ref).is_file() or result["agent_id"] in {
-        "research",
-        "prover",
-        "rci",
-    }:
-        payload["delta"] = prepare_delta(root, delta_ref, obligations)
-        delta = payload["delta"]
-        if delta["branch_id"] != context["branch_id"] or not set(
-            delta["obligation_ids"]
-        ) <= set(context["obligation_ids"]):
-            raise ValueError(
-                "research delta must retain the assigned branch and obligation identities"
-            )
-        payload["delta_ref"] = delta_ref
-        if "related_versions" in frozen:
-            payload["related_versions"] = frozen["related_versions"]
+    delta = prepare_delta(root, delta_ref, obligations)
+    if (
+        delta["branch_id"] != context["branch_id"]
+        or delta["obligation_ids"] != context["obligation_ids"]
+    ):
+        raise ValueError("research delta must retain the assigned branch and obligation identities")
+    payload.update(delta=delta, delta_ref=delta_ref)
+    if "related_versions" in frozen:
+        payload["related_versions"] = frozen["related_versions"]
     return payload

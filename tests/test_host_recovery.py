@@ -268,3 +268,26 @@ def test_response_recovery_rejects_changed_or_incomplete_evidence(tmp_path, chan
         d["status"] = "REPRESENTATION_FAILED"
         (ws.root / ref).write_text(json.dumps(d))
     assert recover_pending_completion(ws.root, **args) is None
+
+
+def test_writing_does_not_charge_the_mathematical_budget(tmp_path, monkeypatch):
+    from pace.runtime import sessions
+    from pace.artifacts.events import append_event
+
+    ws = workspace(tmp_path)
+    policy = ws.work_ref("state/research_execution_policy.json")
+    ws.write_json(policy, {"max_calls": 2, "max_seconds": 10})
+    clock = [0.0]
+    monkeypatch.setattr(sessions.time, "monotonic", lambda: clock[0])
+    with sessions.run_session(ws.root):
+        append_event(ws.root, "SEMANTIC_CALL_STARTED", call_name="research_reporter_round1")
+        clock[0] = 3
+    with sessions.run_session(ws.root, writing_request_ref="request.md"):
+        append_event(ws.root, "SEMANTIC_CALL_STARTED", call_name="research_report_writer")
+        clock[0] = 103
+    with sessions.run_session(ws.root):
+        assert sessions.budget_exhausted(ws.root) == ""
+        clock[0] += 7
+        assert sessions.budget_exhausted(ws.root) == "ACTIVE_TIME_BUDGET_EXHAUSTED"
+        append_event(ws.root, "SEMANTIC_CALL_STARTED", call_name="proof_contract_auditor")
+        assert sessions.budget_exhausted(ws.root) == "TOTAL_CALL_BUDGET_EXHAUSTED"

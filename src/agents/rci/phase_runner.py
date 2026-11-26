@@ -195,6 +195,8 @@ class RciPhaseRunner:
                 }.get(phase, ())
             }
         )
+        if "LOCAL_REPAIR" in actions:
+            fields["gap_id"] = STRING
         if phase in AUTHORS:
             fields["dependency_refs"] = STRING_LIST
         receipt_schema = closed_object(fields, required=("action",) if actions else ())
@@ -239,11 +241,11 @@ class RciPhaseRunner:
             workdir=root,
             task=prompt_seed,
             actions=actions,
-            routing=(
-                {"base_mechanism_ref": routing["base_mechanism_ref"]}
-                if routing.get("base_mechanism_ref")
-                else {}
-            ),
+            routing={
+                key: routing[key]
+                for key in ("base_mechanism_ref", "previous_local_gaps")
+                if routing.get(key)
+            },
             input_refs=normalized,
             output_directory=_relative_ref(target_dir, root),
             findings_directory=_relative_ref(finding_dir, root)
@@ -277,12 +279,17 @@ class RciPhaseRunner:
 
         if checkpoint.is_file():
             cached = json.loads(checkpoint.read_text())
-            for ref, content in cached["outputs"].items():
-                if (
-                    not (root / ref).is_file()
-                    or digest((root / ref).read_bytes()) != content
-                ):
+            outputs = cached["outputs"]
+            receipt_ref = _relative_ref(output_path, root)
+            if receipt_ref not in outputs:
+                raise RciPhaseError("committed RCI receipt is missing", phase=phase)
+            for ref, expected in outputs.items():
+                path = root / ref
+                content = path.read_bytes() if path.is_file() else None
+                if content is None or digest(content) != expected:
                     raise RciPhaseError("committed RCI artifact changed", phase=phase)
+                if ref == receipt_ref:
+                    receipt = json.loads(content)
             from pace.artifacts.events import append_event
 
             append_event(
@@ -292,8 +299,7 @@ class RciPhaseRunner:
                 phase_ref=_relative_ref(target_dir, root),
                 reason="exact committed inputs and outputs unchanged",
             )
-            refs = tuple(cached["outputs"])
-            return RciPhaseResult(cached["payload"], refs)
+            return RciPhaseResult(receipt, tuple(outputs))
 
         previous = set(assembly["finding_refs_before"])
         calls = []
@@ -361,7 +367,6 @@ class RciPhaseRunner:
                 checkpoint,
                 {
                     "outputs": {ref: digest((root / ref).read_bytes()) for ref in refs},
-                    "payload": committed,
                 },
             )
             accepted_result = RciPhaseResult(committed, refs)
@@ -514,30 +519,31 @@ class RciPhaseRunner:
                 phase=binding.phase,
                 diagnostics=result.diagnostics,
             )
-        payload = result.payload
-        if not isinstance(payload, dict):
-            raise RciPhaseError(
-                f"{binding.phase} JSON artifact must be an object",
-                phase=binding.phase,
-                diagnostics=({"reason_code": "payload_not_object"},),
-            )
-        routing_errors = validate_semantic_payload(payload, receipt_schema) or (
-            correction_validator or receipt_errors
-        )(payload)
-        if routing_errors:
-            raise RciPhaseError(
-                f"{binding.phase} did not return a valid routing receipt",
-                phase=phase,
-                diagnostics=routing_errors,
-                reason_code="phase_receipt_invalid",
-            )
-        committed = accept_receipt(payload)
+        if accepted_result is None:
+            payload = result.payload
+            if not isinstance(payload, dict):
+                raise RciPhaseError(
+                    f"{binding.phase} JSON artifact must be an object",
+                    phase=binding.phase,
+                    diagnostics=({"reason_code": "payload_not_object"},),
+                )
+            routing_errors = validate_semantic_payload(payload, receipt_schema) or (
+                correction_validator or receipt_errors
+            )(payload)
+            if routing_errors:
+                raise RciPhaseError(
+                    f"{binding.phase} did not return a valid routing receipt",
+                    phase=phase,
+                    diagnostics=routing_errors,
+                    reason_code="phase_receipt_invalid",
+                )
+            accept_receipt(payload)
         update_agent_call_deliverable(
             root,
             call_id=str(result.host.get("call_id") or ""),
             deliverable_ref=_relative_ref(output_path, root),
         )
-        return committed
+        return accepted_result
 
 
 def _saved_author_result(root: Path, call_ref: str):
@@ -550,7 +556,12 @@ def _saved_author_result(root: Path, call_ref: str):
         return SemanticRepresentationFailure(
             payload=trace["payload"], host=host, diagnostics=tuple(trace["diagnostics"])
         )
-    if host["host_metadata"]["transport"]["status"] == "SUCCESS":
+    if host["semantic_status"] == "PASS":
+        raise RciPhaseError(
+            "successful RCI phase is missing its committed output checkpoint",
+            phase=host["host_metadata"]["phase"],
+        )
+    if host["retry_owner"] == "HOST":
         return StructuredSemanticResult(payload=trace["payload"], host=host)
     return None
 

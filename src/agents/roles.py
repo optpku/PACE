@@ -26,6 +26,7 @@ class SemanticRoleSpec:
     fatal_scope: str = "RUN"
     validator: SemanticValidator | None = None
     on_accept: Callable[[dict[str, Any]], object] | None = None
+    retain_schema_rejected_payload: bool = False
 
     def call_spec(
         self,
@@ -44,6 +45,7 @@ class SemanticRoleSpec:
             normalizer=normalizer,
             validator=self.validator if validator is None else validator,
             on_accept=self.on_accept,
+            retain_schema_rejected_payload=self.retain_schema_rejected_payload,
         )
 
 

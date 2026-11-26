@@ -40,7 +40,7 @@ from pace.runtime.codex_config import (
     isolated_codex_environment,
     retry_codex_args,
 )
-from pace.runtime.json_values import load_model_json
+from pace.runtime.json_values import load_model_json, unwrap_json_response
 from pace.runtime.processes import run_owned_process
 from pace.runtime.schema import validate_json_instance
 
@@ -410,6 +410,7 @@ class CodexLLM:
                 output_schema_file=schema_file,
                 role=role,
                 read_scope=str(ledger_context.get("read_scope") or ""),
+                archive_refs=ledger_context.get("archive_refs", ()),
                 output_refs=ledger_context.get("output_refs", ()),
                 output_dirs=ledger_context.get("output_dirs", ()),
             )
@@ -1266,11 +1267,7 @@ def decide_transport_outcome(
     if output_schema is not None:
         # A single fence and literal unsupported string escapes are encoding
         # boundaries. All structural/schema errors still fail validation.
-        fenced = re.fullmatch(
-            r"```(?:json)?\s*\n(.*)\n```", output, re.DOTALL | re.IGNORECASE
-        )
-        if fenced:
-            output = fenced.group(1).strip()
+        output = unwrap_json_response(output)
         try:
             parsed, escape_positions = load_model_json(output)
         except json.JSONDecodeError as exc:
@@ -1499,7 +1496,6 @@ def _transport_payload(result: TransportResult) -> dict[str, Any]:
         "attempt_count": int(result.attempt_count),
         "exit_code": result.exit_code,
         "terminal_event_type": result.terminal_event_type,
-        "fallback_used": False,
         "warnings": list(result.warnings),
         "warning_count": len(result.warnings),
         "authority_evidence": dict(result.authority_evidence),
@@ -1803,6 +1799,7 @@ def _build_file_driven_cli_instruction(
     output_schema_file: Path | None = None,
     role: str = "",
     read_scope: str = "",
+    archive_refs: Iterable[str] = (),
     output_refs: Iterable[str] = (),
     output_dirs: Iterable[str] = (),
 ) -> str:
@@ -1838,6 +1835,8 @@ def _build_file_driven_cli_instruction(
             "or use links to read unlisted files. Keep input manuscripts read-only. "
             "Write the artifacts assigned by the task in its writable locations.\n\n"
         )
+        if archive_refs:
+            base += "Optional authorized files listed in the task may be read on demand.\n\n"
     elif role.upper() in INDEPENDENT_REVIEW_ROLES:
         base += (
             f"Read `{prompt_file}` for the independent review. Check the submitted manuscript, "

@@ -200,17 +200,25 @@ records before choosing the next task. Distinguish a new checked local result
 from a checked implication that advances an obligation of the original target.
 Keep the remaining connection to the original target explicit.
 
-Continue an existing route when its dependencies remain valid. Completion of a
-planned node does not by itself require a Planner call. Request replanning only
-when committed evidence changes the route's assumptions, dependencies, or
-feasibility, or when no usable route exists. Cite the specific change.
+Dispatch the next bounded mathematical task directly when it is clear. Use the
+closest existing obligation, or target with b-target, and describe a temporary
+subproblem in prompt_brief. The absence of a route or a local obligation ID does
+not require Planner. Call Planner when several dependent decisions need to be
+organized or when committed evidence makes a consequential route choice unclear.
+For REPLAN cite the changed evidence and state the affected dependency and the
+decision Planner must make. If you can name a concrete next test, dispatch it.
+When the available arguments identify what a complete proof must assemble, send
+that work directly to Prover. Keep provisional results and their assumptions
+available for exploration and assembly. Closing a formal obligation still
+requires independently accepted evidence.
 
 Before requesting a new mechanism, check whether an existing result can be
 applied to the current obligation. An application proposed in a research review
 still requires the designated independent mathematical check; do not treat that
 review as proof authority or send another author merely to repeat the review.
 
-When reassessment is due, identify a concrete change, a discriminating test, or
+When reassessment is due, first check the recent original work for concrete progress.
+If the gap is unchanged, identify a concrete change, a discriminating test, or
 an alternative route. A new task name or another local lemma is not evidence
 that the bottleneck has moved. Do not stop the whole study merely because this
 route needs reassessment, and do not discard checked results.

@@ -17,16 +17,13 @@ from pace.artifacts.workspace import (
     work_ref,
 )
 from pace.orchestrator.writing.tasks import (
-    checkpoint_writing_source,
+    run_writing_author,
     project_accepted_text,
     read_state,
+    read_selected_outline,
 )
 from pace.runtime.agent_environment import prepare_role_environment
-from pace.runtime.math_format import require_math_format
 from pace.runtime.prompts import materialize_run_resources
-from pace.runtime.semantic import (
-    commit_artifact_call_failure,
-)
 
 logger = logging.getLogger(__name__)
 RESEARCH_OUTLINE_REF = "results/outline.md"
@@ -103,7 +100,6 @@ class ResearchReportOutliner:
             self.workdir / outline_state_ref(self.workdir),
             {"request_ref": request_ref, "resources_ref": resources, "outline_ref": ""},
         )
-        (self.workdir / report_state_ref(self.workdir)).unlink(missing_ok=True)
 
     def update(
         self, *, round_index: int = 0, completed_result_refs: tuple[str, ...] = ()
@@ -161,7 +157,6 @@ class ResearchReportOutliner:
             output_ref=output_ref,
             outline=True,
         )
-        handle = None
         publish_progress(
             self.workdir,
             task_id=task_id,
@@ -189,11 +184,17 @@ class ResearchReportOutliner:
             _write_text_atomic(
                 self.workdir / attempt / "final_prompt.md", composed.final_prompt
             )
-            handle = report_writer.run(
+            state_ref = outline_state_ref(self.workdir)
+            run_writing_author(
+                report_writer.run,
                 self.llm,
                 composed.final_prompt,
                 workdir=self.workdir,
                 input_refs=refs,
+                state=state,
+                state_ref=state_ref,
+                output_ref=output_ref,
+                diagnostic_ref=f"{attempt}/failure.json",
                 metadata={
                     "agent_id": "research_report_outline",
                     "output_refs": [output_ref],
@@ -203,22 +204,9 @@ class ResearchReportOutliner:
                     "round_index": round_index,
                     "stage_ref": stage_ref(workdir=self.workdir, final=True),
                     "request_ref": state["request_ref"],
-                    "composer_call_id": composed.call_id,
                 },
                 outline=True,
             )
-            if handle.transport_status != "SUCCESS":
-                raise ValueError(f"Outline transport failed: {handle.error_code}")
-            source = self.workdir / output_ref
-            body = source.read_text(encoding="utf-8")
-            require_math_format(body)
-            if not body.strip():
-                raise ValueError("Outline file is empty")
-            state_ref = outline_state_ref(self.workdir)
-            checkpoint_writing_source(
-                self.workdir, state_ref, state, output_ref, handle
-            )
-            handle = None
             project_accepted_text(
                 self.workdir, state_ref, "outline_ref", RESEARCH_OUTLINE_REF
             )
@@ -229,18 +217,6 @@ class ResearchReportOutliner:
                 self.workdir / diagnostic,
                 {"reason": str(exc), "request_ref": state["request_ref"]},
             )
-            if handle is not None:
-                commit_artifact_call_failure(
-                    handle,
-                    workdir=self.workdir,
-                    failure_class="INTERFACE"
-                    if handle.transport_status != "SUCCESS"
-                    else "REPRESENTATION",
-                    retry_class=handle.retry_class
-                    if handle.transport_status != "SUCCESS"
-                    else "MODEL_REPRESENTATION",
-                    diagnostics_ref=diagnostic,
-                )
             publish_progress(
                 self.workdir,
                 task_id=task_id,
@@ -284,22 +260,13 @@ class ResearchReportWriter:
         requirements: str = "",
         resource_variant: str,
     ) -> None:
-        parent = read_state(self.workdir, outline_state_ref(self.workdir))
-        if outline == RESEARCH_OUTLINE_REF and parent and (not parent["outline_ref"]):
-            raise ValueError("The current outline request has not delivered an outline")
-        source = (self.workdir / outline).resolve()
-        body = source.read_text(encoding="utf-8")
-        if not body.strip():
-            raise ValueError("Selected outline is empty")
-        original = (
-            (self.workdir / parent["request_ref"]).read_text(encoding="utf-8")
-            if parent
-            else ""
+        source, body, original = read_selected_outline(
+            self.workdir,
+            outline,
+            RESEARCH_OUTLINE_REF,
+            outline_state_ref(self.workdir),
+            message,
         )
-        if not original and (not message.strip()):
-            raise ValueError(
-                "Report writing needs a user request; supply --message for a standalone outline"
-            )
         attempt = self._attempt()
         frozen_ref = f"{attempt}/outline.md"
         _write_text_atomic(
@@ -327,9 +294,6 @@ class ResearchReportWriter:
             {
                 "request_ref": request_ref,
                 "outline_ref": frozen_ref,
-                "outline_source": source.relative_to(self.workdir.resolve()).as_posix()
-                if source.is_relative_to(self.workdir.resolve())
-                else str(source),
                 "resources_ref": resources,
                 "report_ref": "",
             },
@@ -391,7 +355,6 @@ class ResearchReportWriter:
             final=True,
             round_index=round_index,
         )
-        handle = None
         try:
             composed = compose_prompt(
                 resource_root=self.workdir / resources / "prompts",
@@ -411,11 +374,17 @@ class ResearchReportWriter:
             _write_text_atomic(
                 self.workdir / attempt / "final_prompt.md", composed.final_prompt
             )
-            handle = report_writer.run(
+            state_ref = report_state_ref(self.workdir)
+            run_writing_author(
+                report_writer.run,
                 self.llm,
                 composed.final_prompt,
                 workdir=self.workdir,
                 input_refs=refs,
+                state=state,
+                state_ref=state_ref,
+                output_ref=output_ref,
+                diagnostic_ref=f"{attempt}/failure.json",
                 metadata={
                     "agent_id": "research_report_writer",
                     "output_refs": [output_ref],
@@ -426,22 +395,9 @@ class ResearchReportWriter:
                     "stage_ref": stage_ref(workdir=self.workdir, final=True),
                     "request_ref": state["request_ref"],
                     "outline_ref": state["outline_ref"],
-                    "composer_call_id": composed.call_id,
                 },
                 outline=False,
             )
-            if handle.transport_status != "SUCCESS":
-                raise ValueError(f"Report transport failed: {handle.error_code}")
-            source = self.workdir / output_ref
-            body = source.read_text(encoding="utf-8")
-            require_math_format(body)
-            if not body.strip():
-                raise ValueError("Research report file is empty")
-            state_ref = report_state_ref(self.workdir)
-            checkpoint_writing_source(
-                self.workdir, state_ref, state, output_ref, handle
-            )
-            handle = None
             project_accepted_text(
                 self.workdir, state_ref, "report_ref", RESEARCH_REPORT_REF
             )
@@ -456,18 +412,6 @@ class ResearchReportWriter:
                     "outline_ref": state["outline_ref"],
                 },
             )
-            if handle is not None:
-                commit_artifact_call_failure(
-                    handle,
-                    workdir=self.workdir,
-                    failure_class="INTERFACE"
-                    if handle.transport_status != "SUCCESS"
-                    else "REPRESENTATION",
-                    retry_class=handle.retry_class
-                    if handle.transport_status != "SUCCESS"
-                    else "MODEL_REPRESENTATION",
-                    diagnostics_ref=diagnostic,
-                )
             publish_progress(
                 self.workdir,
                 task_id=task_id,

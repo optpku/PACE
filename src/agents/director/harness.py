@@ -158,16 +158,8 @@ class DirectorHarness:
             ws.work_ref("state/research_execution_policy.json"),
             {
                 "schema_version": "research_execution_policy/v1",
-                **(
-                    {"research_memory_version": 1, "reassessment_after_attempts": 3}
-                    if policy.get("research_memory_version") == 1
-                    else {}
-                ),
-                **(
-                    {"research_delta_owner": "reporter"}
-                    if policy.get("research_delta_owner") == "reporter"
-                    else {}
-                ),
+                "research_memory_version": policy["research_memory_version"],
+                "research_delta_owner": policy["research_delta_owner"],
                 "resource_variant": policy["resource_variant"],
                 "mode": policy["mode"],
                 "requested_mode": policy["requested_mode"],
@@ -698,7 +690,6 @@ class DirectorHarness:
                 "diagnostic_ref": ref,
             },
             "mathematical_status": "NOT_STARTED",
-            "outline_delivery": "NOT_REQUESTED",
             "terminal_kind": "SETUP_FAILURE",
             "target_contract_id": "",
             "target_contract_unavailable": True,

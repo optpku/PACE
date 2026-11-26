@@ -473,13 +473,6 @@ def _strict_int(value: Any, field: str) -> int:
     return value
 
 
-def _safe_relative_ref(value: str | None, *, default: str) -> str:
-    raw = str(value or default).replace("\\", "/").strip()
-    if _unsafe_ref_syntax(raw):
-        raise ValueError("artifact references must be relative to the engine workdir")
-    return "/".join(part for part in raw.split("/") if part) or default
-
-
 def _unsafe_ref_syntax(value: str) -> bool:
     """Return whether a reference is non-canonical or not relative."""
 

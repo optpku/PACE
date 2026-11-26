@@ -93,6 +93,8 @@ pace resume --run-dir outputs/even-square \
 
 `resume` continues the selected saved task. It preserves the target, mode, resource snapshot, proof-loop limit and committed outputs. `--resource-variant`, `--max-proof-states` and `--mode` are not resume options. Completed mathematical work is reused without another model call. An unfinished writing request takes priority, including a paper awaiting its PDF. After delivery, resume returns to the saved mathematical checkpoint.
 
+Resume requires a resource snapshot with the current workflow and verification protocol. To resume an experiment with an older snapshot, use the version of PACE that created it.
+
 A service failure retains its concrete diagnostic and stops subsequent model dispatches in that Host session. Correct the service or environment before resuming. A new literal question uses `continue` or a new problem ID, preserving the committed original.
 
 At a saved research Director boundary, `pace resume --run-dir PATH --finalize` explicitly closes research with the current findings. It does not grant whole-target mathematical acceptance. Pending mathematical work or verification must first reach a resumable boundary.
@@ -111,13 +113,13 @@ pace paper-outline --run-dir outputs/even-square --message writing-request.md
 pace paper --run-dir outputs/even-square --outline results/paper_outline.md
 ```
 
-Each command accepts execution settings such as `--model`, `--reasoning-effort` and `--web-search-mode`. Add `--requirements FILE` for additional requirements. Report and paper writing save the selected outline as a read-only snapshot together with the original request. The paper path can use the existing research directly.
+Each command accepts execution settings such as `--model`, `--reasoning-effort` and `--web-search-mode`. Add `--requirements FILE` for additional requirements. Report and paper writing freeze the selected outline. The current PACE outline carries its original instructions. For a standalone outline, supply its instructions with `--message`. Requesting a new outline keeps the last delivered report or paper available. The paper path can use the existing research directly.
 
 Each step uses one author task with its Composer provenance, saved output and delivery/format checks. Writing preserves mathematical targets, evidence and verifier decisions. It cannot fill a missing mathematical proof or turn an unfinished target into PASS. A new request starts a new writing attempt; `pace resume --run-dir PATH` continues the selected unfinished attempt.
 
 Reports are written to `results/research_report.md`. Paper sources and their local dependencies are written under `results/paper/`, with a successful build at `results/paper/main.pdf`. Paper prose defaults to English unless the user explicitly requests another language. The saved NeurIPS preprint template is used without a checklist or submission questionnaire.
 
-PDF compilation uses `latexmk -xelatex` to manage compilation and bibliography passes, then checks fonts with `pdffonts`. PACE records source delivery and PDF build status separately. Build failures keep the source and diagnostic, and recovery can retry compilation without calling the author again. The committed mathematical verdict comes from independent verification. The external Web application organizes reader copies and download archives.
+PDF compilation uses `latexmk -xelatex` to manage compilation and bibliography passes, then checks fonts with `pdffonts`. PACE records source delivery and PDF build status separately. When a replacement fails to compile, the last successful PDF stays in `results/paper/`. The command returns the new attempt’s source path and build status. Resume can retry compilation from that source without calling the author again. The committed mathematical verdict comes from independent verification. The external Web application organizes reader copies and download archives.
 
 ## Run a batch
 
@@ -161,8 +163,10 @@ An RCI assignment states the fixed question, the one gap to address and its retu
 New turns record `research_memory_version=1` and `research_delta_owner=reporter`. Each task freezes required inputs,
 on-demand archives and its route version under `roundN/assignment/`. Resume checks
 those versions before continuing; later route edits do not change saved inputs.
-Planner delivers a compact route and relations, and only the parent commits its
-shared pointer. Ordinary node completion can continue without another Planner.
+Director can dispatch a clear next task under the root target or a registered
+obligation. Planner is called for shared dependencies or consequential route
+choices. It delivers a compact route and relations, and the parent commits its
+shared pointer.
 
 Required reading and on-demand archives have separate lists, but both grant
 read-only access through the compatible API's file tools. The Director can follow
@@ -175,15 +179,57 @@ retain only their supplied statement and permitted assumptions.
 applications and independent reviews. It is a rebuildable search index, never a
 substitute for the source proof. A checked local theorem and its applicability
 to the current obligation are separate. Application reviews may accept a use
-without creating another result number. Three consecutive attempts without a
-checked application prompt reassessment; this is advice, not an automatic stop.
+without creating another result number. After three mathematical attempts without progress on the literal target, the
+Director considers the missing bridge. Local results reset the counter for the
+specific subproblem. A checked use for the target or one of its declared
+requirements, or an evidence-backed revision of a required dependency, resets
+the target counter. Missing-input attempts do not count. Planner receives the
+same assessment frozen at dispatch and identifies the next inference needed
+for the original question. A standard Planner work order identifies that gap,
+its direct premises and the next task. Stopping criteria are optional.
+
+For `standard`, an auxiliary lemma can be used provisionally in the next
+proof. The Host queues applications for open target requirements,
+or for assigned obligations in a specific `REASSESS` dispatch. Other proposed
+uses remain in the original handoff. An independently useful standalone paper
+result or an explicit request for a manuscript check can still be nominated.
+The Auditor focuses on coverage and can return a documented structural failure
+to the author. The Kernel then checks the revised candidate before acceptance.
+On new standard turns its mathematical receipt contains the verdict, a short
+reason (`summary`) and the relevant passage (`proof_location`). A PASS also
+requires explicit publication eligibility and a findings action. The Host uses
+a failed judgment directly for repair. Method cards and historical sources
+are available on demand. A separate reusable lemma requires its own scoped
+authorization. If publication fields are missing or an UPDATE references an
+unknown finding, a correction uses the saved mathematical judgment and repairs
+only the affected controls. The Host drops malformed optional lemma exports
+while retaining the valid verdict and any independently authorized exports.
+
+For `weak`, complete auxiliary results and proposed uses keep their detailed
+independent checks. The verifier reads the original and supporting evidence and
+judges each use under its own premises. Auditor and Kernel both review the
+whole candidate after a completed audit, including an audit that finds a gap.
+Both variants reuse the decisions already completed for the same bound scope.
 
 After each successful outer Research, Prover or RCI task, Reporter reads the
 saved handoff and direct dependencies once. It returns a short summary and a
 structured delta; the Host writes `roundN/progress.md` and
 `roundN/research_delta.json`. Reporter does not write proofs, retrieve sources,
-or authorize acceptance. RCI subphases do not each call Reporter. Planner still
-writes `route_relations.json`; Survey does not trigger this progress call.
+or authorize acceptance. Intermediate derivations can inform the next task as
+provisional evidence. Reporter nominates independently useful complete results
+and applications ready to close a registered obligation. The finding verifier
+reads the original and its direct evidence, gives a separate verdict for each
+proposed use, and returns concise reasons. The Host records exact versions and
+projects the readable review for a compact receipt. A cited current finding is resolved to its original
+and review. A task that received an earlier snapshot keeps that version. For
+a standard-mode check with an authorized, version-bound verdict with a checked statement, the verifier
+receives the statement and conditions directly and can open the evidence on demand. If a joint review finishes
+the applications but the manuscript check is interrupted, a manuscript-only
+retry uses its saved evidence and preserves the application decisions. RCI
+subphases do not each call Reporter. Planner writes `route_relations.json`
+for dependency changes. In a local revision it can declare
+`relations_unchanged` in the patch so the Host records an empty change.
+Survey does not trigger this progress call.
 Proof mode also reports after each Prover handoff, before independent verification.
 Its progress receipt leaves applications empty: the existing whole-proof verifier
 checks the candidate, so no unused application-review queue is created.
@@ -197,7 +243,6 @@ including completed turns, without a model call. Changed original evidence, the 
 as a version conflict. Navigation snapshots cannot serve as mathematical premises. Parallel tasks have separate receipts; only their parent
 updates shared memory. `memory/README.md` links the latest task progress.
 
-Old runs without the saved version retain their protocol. Runs with the memory version but without the Reporter owner also retain their
-original author-delta contract. Keep their original runtime for recovery. Explicit writing and the single-turn boundary are unchanged.
+Resume older runs that assigned deltas to mathematical authors with their original PACE runtime.
 
 Planner can mark an unused route obligation `DEFERRED` or `SUPERSEDED`, with its reason in the route manuscript. This does not retract historical evidence. Splitting a task retains its ancestor obligations for obstacle lookup and reassessment; local progress alone does not close the parent target.

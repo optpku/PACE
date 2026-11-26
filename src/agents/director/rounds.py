@@ -398,17 +398,15 @@ def _validate_composer_manifest(
         "schema_version",
         "round_index",
         "agent_id",
-        "composer_call_id",
         "final_prompt_ref",
         "director_decision_ref",
         "output_artifact_ref",
     }
     actual_fields = set(value)
-    if not fields.issubset(actual_fields) or actual_fields - fields - {
-        "assembly_source"
-    }:
+    optional = {"assembly_source", "composer_call_id"}
+    if not fields.issubset(actual_fields) or actual_fields - fields - optional:
         missing = sorted(fields.difference(actual_fields))
-        extra = sorted(actual_fields.difference(fields))
+        extra = sorted(actual_fields - fields - optional)
         details: list[str] = []
         if missing:
             details.append(f"missing fields: {missing}")

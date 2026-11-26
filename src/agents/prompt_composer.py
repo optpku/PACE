@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-from pace.artifacts.workspace import work_ref
+from pace.artifacts.workspace import _write_json_atomic, work_ref
 from pace.runtime.prompts import prompt_root, render_prompt_template
 
 PROMPT_ASSEMBLY_SCHEMA_VERSION = "prompt_assembly/v3"
@@ -22,15 +21,8 @@ class PromptAssembly:
     target_contract_id: str
     candidate_refs: tuple[str, ...] = ()
     required_refs: tuple[str, ...] = ()
-    contract_guide_refs: tuple[str, ...] = ()
-    artifact_guide_refs: tuple[str, ...] = ()
     prompt_seed: str = ""
     output_artifact_ref: str = ""
-    # Opaque per-call context budget. The Composer may use it to trim prompt
-    # context, but it cannot reinterpret loop limits or mathematical state.
-    budget: Any = None
-    # Transport provenance only; this is the manifest written for this call.
-    manifest_ref: str = ""
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -41,12 +33,8 @@ class PromptAssembly:
             "target_contract_id": self.target_contract_id,
             "candidate_refs": list(self.candidate_refs),
             "required_refs": list(self.required_refs),
-            "contract_guide_refs": list(self.contract_guide_refs),
-            "artifact_guide_refs": list(self.artifact_guide_refs),
             "prompt_seed": self.prompt_seed,
             "output_artifact_ref": self.output_artifact_ref,
-            "budget": self.budget,
-            "manifest_ref": self.manifest_ref,
         }
 
 
@@ -60,11 +48,8 @@ def build_prompt_assembly(
     manifest_path: Path | None = None,
     candidate_file_refs: Iterable[str] = (),
     required_file_refs: Iterable[str] = (),
-    contract_guide_refs: Iterable[str] = (),
-    artifact_guide_refs: Iterable[str] = (),
     prompt_seed: str = "",
     output_artifact_ref: str = "",
-    budget: Any = None,
 ) -> PromptAssembly:
     """Prepare Composer refs without inspecting mathematical files."""
 
@@ -72,44 +57,13 @@ def build_prompt_assembly(
     resource_root = prompt_root(root)
     # Caller-owned references are reading hints. Omit stale optional paths
     # without inspecting their mathematical contents or building a registry.
-    refs = _existing_refs(root, candidate_file_refs)
     required_refs = _existing_refs(root, required_file_refs)
-    contract_refs = _existing_refs(root, contract_guide_refs)
-    artifact_refs_value = _existing_refs(root, artifact_guide_refs)
-    transport_ref = str(resource_root / "shared" / "transport.md")
-    if not _is_file_ref(root, transport_ref):
-        raise FileNotFoundError(f"run prompt resource is missing: {transport_ref}")
-    refs = tuple(dict.fromkeys((*refs, transport_ref)))
-    required_refs = _existing_refs(
-        root,
-        tuple(
-            dict.fromkeys(
-                (
-                    *required_refs,
-                    *contract_refs,
-                    *artifact_refs_value,
-                )
-            )
-        ),
-    )
-    # Short guidance files are ordinary reading suggestions, with no registry
-    # or profile state to validate during execution or resume.
-    guidance_refs = tuple(
-        str(path) for path in sorted((resource_root / "shared/guides").glob("*.md"))
-    )
+    transport = resource_root / "shared/transport.md"
+    if not transport.is_file():
+        raise FileNotFoundError(f"run prompt resource is missing: {transport}")
+    guides = sorted((resource_root / "shared/guides").glob("*.md"))
     candidate_refs = _existing_refs(
-        root,
-        tuple(
-            dict.fromkeys(
-                (
-                    *refs,
-                    *required_refs,
-                    *contract_refs,
-                    *artifact_refs_value,
-                    *guidance_refs,
-                )
-            )
-        ),
+        root, (*candidate_file_refs, str(transport), *required_refs, *map(str, guides))
     )
     assembly = PromptAssembly(
         stage=str(stage or "").upper(),
@@ -118,17 +72,13 @@ def build_prompt_assembly(
         target_contract_id=str(target_contract_id or ""),
         candidate_refs=candidate_refs,
         required_refs=required_refs,
-        contract_guide_refs=contract_refs,
-        artifact_guide_refs=artifact_refs_value,
         prompt_seed=str(prompt_seed or ""),
         output_artifact_ref=str(output_artifact_ref or ""),
-        budget=budget,
-        manifest_ref=_manifest_ref(manifest_path, root),
     )
     if manifest_path is not None:
         path = Path(manifest_path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        _atomic_write_json(path, assembly.to_json())
+        _write_json_atomic(path, assembly.to_json())
     return assembly
 
 
@@ -143,12 +93,8 @@ def load_prompt_assembly(path: Path) -> PromptAssembly:
         target_contract_id=raw["target_contract_id"],
         candidate_refs=tuple(raw["candidate_refs"]),
         required_refs=tuple(raw["required_refs"]),
-        contract_guide_refs=tuple(raw["contract_guide_refs"]),
-        artifact_guide_refs=tuple(raw["artifact_guide_refs"]),
         prompt_seed=raw["prompt_seed"],
         output_artifact_ref=raw["output_artifact_ref"],
-        budget=raw["budget"],
-        manifest_ref=raw["manifest_ref"],
     )
 
 
@@ -173,24 +119,6 @@ def _existing_refs(root: Path, values: Iterable[str]) -> tuple[str, ...]:
         if str(value).strip()
     )
     return tuple(dict.fromkeys(ref for ref in refs if _is_file_ref(root, ref)))
-
-
-def _manifest_ref(path: Path | None, root: Path) -> str:
-    if path is None:
-        return ""
-    target = Path(path)
-    try:
-        return str(target.resolve().relative_to(root.resolve()))
-    except ValueError:
-        return str(target)
-
-
-def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
-    temporary = path.with_name(path.name + ".tmp")
-    temporary.write_text(
-        json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
-    os.replace(temporary, path)
 
 
 class PromptComposerError(ValueError):
@@ -242,18 +170,9 @@ def compose_prompt(
         task=assembly.prompt_seed,
         input_refs="\n".join(f"- `{ref}`" for ref in inputs),
         output_ref=assembly.output_artifact_ref,
-        budget=_format_budget(assembly.budget),
+        budget="One assigned task.",
     )
     return PromptComposerResult(final_prompt=prompt, call_id="")
-
-
-def _format_budget(value: Any) -> str:
-    if value is None:
-        return "(none)"
-    try:
-        return json.dumps(value, ensure_ascii=False, sort_keys=True)
-    except (TypeError, ValueError):
-        return str(value)
 
 
 __all__ = [
@@ -272,42 +191,16 @@ def render_role_task(name: str, *, workdir: Path, **values: object) -> str:
 
 
 def delivery_instruction(
-    root: Path, output_ref: str, *, with_delta: bool = False
+    root: Path, output_ref: str, *, with_reporter: bool = False
 ) -> str:
     from pace.agents.director.context import task_context
-    from pace.contracts.research.memory import reporter_owned
 
-    context = task_context(root, output_ref)
-    if not context:
+    if not task_context(root, output_ref):
         return ""
-    folder = Path(output_ref).parent
-    ids = context["obligation_ids"]
-    delta = {
-        "schema_version": "research_delta/v1",
-        "obligation_ids": ids,
-        "branch_id": context["branch_id"],
-        "change_ref": output_ref,
-        "applications": [],
-        "attempt": {
-            "outcome": "NOT_ESTABLISHED",
-            "obstacle_ref": "",
-            "reopen_condition_ref": output_ref,
-        },
-    }
     common = render_prompt_template("shared/delivery.md", workdir=root)
-    if not with_delta:
-        return common
-    if reporter_owned(root):
-        return render_prompt_template(
-            "shared/reporter_delivery.md", workdir=root, common=common
-        )
-    return render_prompt_template(
-        "shared/delta_delivery.md",
-        workdir=root,
-        common=common,
-        folder=folder,
-        envelope=json.dumps(delta),
-    )
+    if with_reporter:
+        return render_prompt_template("shared/reporter_delivery.md", workdir=root, common=common)
+    return common
 
 
 def compose_instructions(
@@ -407,7 +300,7 @@ def build_specialist_assembly(
     extra_task: str = "",
     extra_inputs: tuple[str, ...] = (),
     delivery_task: str = "",
-    separate_reporter: bool = False,
+    revision_ref: str = "",
 ) -> PromptAssembly:
     """Freeze common task structure using the policy supplied by its owning role."""
     from pace.agents.director.context import task_context
@@ -450,9 +343,9 @@ def build_specialist_assembly(
             "shared/specialist_task.md",
             workdir=workdir,
             objective=decision.prompt_brief,
-            output_ref=output_ref,
-            revision_task=extra_task,
-            dependency_task="",
+            output_ref=revision_ref or output_ref,
+            revision_task=extra_task if revision_ref else "",
+            dependency_task=extra_task if decision.agent_id == "prover" else "",
             delivery=delivery_task,
             archive=(
                 render_prompt_template(
@@ -466,7 +359,7 @@ def build_specialist_assembly(
             findings_directory=Path(output_ref).parent / "findings",
             memory_task=(
                 ""
-                if separate_reporter
+                if decision.agent_id in {"research", "prover"}
                 else render_prompt_template(
                     "shared/memory_task.md",
                     workdir=workdir,

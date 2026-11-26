@@ -8,7 +8,6 @@ from pathlib import Path
 import pytest
 
 from pace import cli
-from pace.contracts.research.memory import reporter_owned
 from pace.agents.prompt_composer import delivery_instruction
 from pace.agents.reporter import run_research_reporter, restore_reporter_delivery
 from pace.runtime.chat_api import ChatCompletionsLLM
@@ -18,15 +17,9 @@ from test_research_memory import ws, deliver, task
 from test_finding_publication import ProofPublicationTransport
 
 
-def use_reporter(ws):
-    ws.write_json(ws.work_ref('state/research_execution_policy.json'),
-                  {'research_memory_version': 1, 'research_delta_owner': 'reporter'})
-
-
 @pytest.mark.parametrize('agent', ['research', 'prover', 'rci'])
 def test_reporter_replay_never_calls_author_or_reporter_again(ws, agent, monkeypatch):
-    use_reporter(ws)
-    ref = deliver(ws, 1, agent=agent)
+    ref = deliver(ws, 1, agent=agent, reported=False)
     folder = Path(ref).parent
     ws.path(str(folder / 'research_delta.json')).unlink()
     llm = ProofPublicationTransport('NONE')
@@ -42,11 +35,11 @@ def test_reporter_replay_never_calls_author_or_reporter_again(ws, agent, monkeyp
     commit_research_memory(ws.root, [ref]); commit_research_memory(ws.root, [ref])
     assert len(load_index(ws.root)['attempts']) == 1
     assert load_index(ws.root)['obligations']['target']['status'] == 'OPEN'
-    assert 'Do not write a delta' in delivery_instruction(ws.root, str(folder / 'research.md'), with_delta=True)
+    assert 'Do not write a delta' in delivery_instruction(ws.root, str(folder / 'research.md'), with_reporter=True)
 
 
 def test_reporter_acceptance_survives_projection_failure(ws, monkeypatch):
-    use_reporter(ws); ref = deliver(ws, 1)
+    ref = deliver(ws, 1, reported=False)
     llm = ProofPublicationTransport('NONE')
     import pace.agents.reporter as module
     original = module._write_text_atomic
@@ -58,7 +51,7 @@ def test_reporter_acceptance_survives_projection_failure(ws, monkeypatch):
 
 
 def test_changed_source_pauses_reporter_replay(ws):
-    use_reporter(ws); ref = deliver(ws, 1)
+    ref = deliver(ws, 1, reported=False)
     llm = ProofPublicationTransport('NONE')
     run_research_reporter(llm=llm, workdir=ws.root, result_ref=ref)
     ws.path(str(Path(ref).parent / 'research.md')).write_text('Different mathematics')
@@ -95,6 +88,11 @@ class NativeFixture(ChatCompletionsLLM):
             assert all('error' not in json.loads(m['content']) for m in messages if m['role'] == 'tool')
         if name == 'problem_orientation_extract':
             payload = {'target_clauses':[{'start_line':1,'end_line':1}], 'recommended_mode':self.mode, 'mode_reason':'Fixture choice'}
+            schema = next(t['function']['parameters'] for t in tools if t['function']['name'] == 'submit_result')
+            if 'initial_context' in schema['properties']:
+                payload['initial_context'] = {'brief_markdown': '# Target\n\nProve 2+2=4.'}
+                if self.mode == 'research':
+                    payload['initial_context']['proof_assessment'] = {'difficulty':'standard','plan_node_level':1,'dependency_depth_level':1}
         elif name == 'problem_research_decision':
             brief = work_ref(root, 'input/problem_brief.md')
             assert ctx['output_refs'] == [brief]
@@ -113,7 +111,7 @@ class NativeFixture(ChatCompletionsLLM):
                 self.correct_director = True
         elif name.startswith('research_reporter_'):
             assert 'write_file' not in available
-            request_ref = next(r for r in ctx['input_refs'] if r.endswith('/reporter_request.json'))
+            request_ref = next(r for r in (*ctx['input_refs'], *ctx.get('archive_refs', ())) if r.endswith('/reporter_request.json'))
             request = json.loads((root/request_ref).read_text())
             payload = {'summary':'The handoff derives the fixed equality; independent verification is pending.',
                 'delta':{'schema_version':'research_delta/v1','obligation_ids':request['obligation_ids'],
@@ -123,9 +121,12 @@ class NativeFixture(ChatCompletionsLLM):
             payload = {'contract_status':'PASS','answer_mode':'POSITIVE_PROOF'}
         elif name.startswith('math_verifier_kernel_'):
             payload = {'stage_status':'PASS','publication_eligible':True,'publication':{'action':'NONE'},
-                'relation_checks':[{'status':'PASS','statement':'2+2=4','justification':'Addition.'}],
-                'target_clause_checks':[{'status':'PASS','evidence':'The equality is derived.'}],
-                'final_assembly':{'derivation':'Integer addition gives the target.'}}
+                'summary':'Integer addition gives the requested equality.', 'proof_location':'Final equation.'}
+            schema = next(t['function']['parameters'] for t in tools if t['function']['name'] == 'submit_result')
+            if 'proof_location' not in schema['properties']:
+                payload.update(relation_checks=[{'status':'PASS','statement':'2+2=4'}],
+                               target_clause_checks=[{'evidence':'The equality is derived.'}],
+                               final_assembly={'derivation':'Integer addition gives the target.'})
         elif name.startswith('director_led_'):
             forbidden = {'research_delta.json'} | ({'memory_note.md'} if role != 'SURVEY' else set())
             assert not any(Path(ref).name in forbidden for ref in ctx['output_refs'])
@@ -141,6 +142,27 @@ class NativeFixture(ChatCompletionsLLM):
     def tool(name, arguments, prefix=None):
         return {'choices':[{'message':{'role':'assistant','content':prefix,'tool_calls':[
             {'id':'tool','type':'function','function':{'name':name,'arguments':json.dumps(arguments)}}]},'finish_reason':'tool_calls'}]}
+
+
+def use_codex_receipt_validation(transport, monkeypatch):
+    from subprocess import CompletedProcess
+    from pace.runtime.llm import decide_transport_outcome, reduce_codex_event_timeline
+
+    complete = transport.complete_structured_result
+
+    def validate_before_handoff(prompt, **kwargs):
+        delivered = complete(prompt, **kwargs)
+        if kwargs["call_name"].endswith("_receipt_correction"):
+            return delivered
+        return decide_transport_outcome(
+            completed=CompletedProcess([], 0, stdout="", stderr=""),
+            timeline=reduce_codex_event_timeline('{"type":"turn.completed"}\n'),
+            current_output_text=delivered.text, current_output_source="response.txt",
+            output_schema=kwargs["output_schema"], invocation_id=delivered.invocation_id,
+            call_name=kwargs["call_name"], attempt_count=1, artifact_dir=delivered.artifact_dir,
+        )
+
+    monkeypatch.setattr(transport, "complete_structured_result", validate_before_handoff)
 
 
 @pytest.mark.parametrize('mode', ['proof','research'])
@@ -161,6 +183,8 @@ def test_native_cli_initialization_reporter_and_resume(tmp_path, monkeypatch, mo
     root = tmp_path/'native'; turn=root/'work/turn001'
     report = json.loads((turn/'final_report.json').read_text())
     assert report['result'] == 'PASS'
+    assert transport.calls.count('problem_orientation_extract') == 1
+    assert 'problem_research_decision' not in transport.calls
     assert not (root/'work/turn002').exists()
     assert len(list(turn.glob('round*/reporter_result.json'))) == (1 if mode=='proof' else 2)
     assert (turn/'input/problem_brief.md').read_text().strip()
@@ -169,6 +193,12 @@ def test_native_cli_initialization_reporter_and_resume(tmp_path, monkeypatch, mo
         assert transport.correct_director
         view = json.loads((turn / 'round3/director_context.json').read_text())['decision_inputs']
         assert work_ref(root, 'round2/progress.md') in view['required_refs']
+        latest = json.loads((turn / 'round1/agent_result.json').read_text())['deliverable_ref']
+        assert latest in view['archive_refs'] and latest not in view['required_refs']
+        assert view['latest_survey'] == ''
+        frozen = json.loads((turn / 'round2/reporter_request.json').read_text())
+        assert work_ref(root, 'round2/assignment/task.json') in frozen['required_refs']
+        assert work_ref(root, 'round2/assignment/route_context.json') in frozen['archive_refs']
     assert all(a['attempt']['outcome']=='LOCAL_RESULT' for a in load_index(root)['attempts'])
     completed_calls = list(transport.calls)
     # Completed runs also rebuild navigation/deltas without calling any model.
@@ -195,11 +225,10 @@ def test_native_cli_initialization_reporter_and_resume(tmp_path, monkeypatch, mo
 
 
 @pytest.mark.parametrize('parallel', [False, True])
-def test_rci_outer_handoff_and_parallel_reporter_recover_without_author(ws, parallel):
+def test_rci_outer_handoff_and_parallel_reporter_recover_without_author(ws, parallel, monkeypatch):
     from pace.agents.director.loop import DirectorLedEngine
     from pace.agents.prompt_composer import PromptComposerResult
     from pace.artifacts.delivery_pause import DeliveryPaused, delivery_pause
-    use_reporter(ws)
     author_calls = []; reporter_calls = []; interrupted = False
     llm = ProofPublicationTransport('NONE')
     first = task('rci').to_json()
@@ -231,7 +260,18 @@ def test_rci_outer_handoff_and_parallel_reporter_recover_without_author(ws, para
     assert result.phase == 'FAILED'
     assert len(author_calls) == (2 if parallel else 1)
     from pace.agents.director.recovery import _restore_operational_checkpoint
+    from pace.orchestrator.writing.tasks import active_writing_request, writing_artifacts
+    from test_writing_stage import WritingTransport
+    writer = WritingTransport()
+    monkeypatch.setattr("pace.pipeline.build_llm", lambda **_: writer)
+    assert cli.main(["outline", "--run-dir", str(ws.root), "--message",
+                     str(ws.root / ws.work_ref("input/problem.md")), "--json"]) == 0
+    writing = active_writing_request(ws.root)
+    assert writing["action"] == "outline"
     assert _restore_operational_checkpoint(ws, result.state.to_json())
+    assert active_writing_request(ws.root) == writing
+    assert "research_outline" in writing_artifacts(ws.root)
+    assert writer.calls == ["research_report_outline"]
     engine.director = lambda **_: pytest.fail('Do not redispatch the reserved task')
     with pytest.raises(DeliveryPaused, match="Finding verification is incomplete"):
         engine.resume()
@@ -309,8 +349,116 @@ def test_native_director_parallel_purpose(ws, monkeypatch, agent, purpose, expec
         assert json.loads(ws.path(result.host["response_ref"]).read_text()) == primary
 
 
+@pytest.mark.parametrize("parallel", [False, True])
+def test_director_repairs_both_scope_fields_without_changing_the_task(ws, monkeypatch, parallel):
+    from pace.agents.director.agent import run_global_director
+    from pace.runtime.semantic import StructuredSemanticResult
+
+    accepted = task("research").to_json()
+    bad_scope = {**accepted, "obligation_ids": [], "branch_id": " "}
+    invalid = bad_scope
+    prefix = ""
+    if parallel:
+        accepted = {**task("planner").to_json(), "parallel_tasks": [
+            {key: value for key, value in accepted.items() if key != "parallel_tasks"},
+        ]}
+        invalid = {**accepted, "parallel_tasks": [
+            {key: value for key, value in bad_scope.items() if key != "parallel_tasks"},
+        ]}
+        prefix = "/parallel_tasks/0"
+
+    transport = NativeFixture("research")
+
+    def reply(messages, _tools):
+        if transport.calls[-1].endswith("_receipt_correction"):
+            prompt = messages[1]["content"]
+            assert f"{prefix}/branch_id" in prompt and f"{prefix}/obligation_ids" in prompt
+            return transport.tool("submit_result", accepted)
+        return transport.tool("submit_result", invalid)
+
+    monkeypatch.setattr(transport, "_request", reply)
+    result = run_global_director(llm=transport, workdir=ws.root)
+    assert isinstance(result, StructuredSemanticResult)
+    assert result.payload == accepted
+    assert len(transport.calls) == 2
+
+
+def test_director_can_repair_replan_purpose_and_evidence_together(ws, monkeypatch):
+    from pace.agents.director.agent import run_global_director
+    from pace.orchestrator.memory import commit_research_memory
+    from pace.runtime.semantic import StructuredSemanticResult
+
+    earlier = deliver(ws, 1, agent="planner")
+    commit_research_memory(ws.root, [earlier])
+    evidence = str(Path(earlier).with_name("research.md"))
+    initial = task("planner").to_json()
+    accepted = {**initial, "next_step_kind": "REPLAN", "change_refs": [evidence]}
+    transport = NativeFixture("research")
+
+    def reply(messages, _tools):
+        if not transport.calls[-1].endswith("_receipt_correction"):
+            return transport.tool("submit_result", initial)
+        prompt = messages[1]["content"]
+        assert "/next_step_kind" in prompt and "/change_refs" in prompt
+        return transport.tool("submit_result", accepted)
+
+    monkeypatch.setattr(transport, "_request", reply)
+    response = run_global_director(llm=transport, workdir=ws.root)
+    assert isinstance(response, StructuredSemanticResult) and response.payload == accepted
+    assert len(transport.calls) == 2
+
+
+@pytest.mark.parametrize("replace_valid_task", [False, True])
+def test_director_corrects_mixed_primary_companion_and_reference_errors(
+    ws, monkeypatch, replace_valid_task
+):
+    from pace.agents.director.agent import run_global_director
+    from pace.runtime.semantic import SemanticRepresentationFailure, StructuredSemanticResult
+
+    question = ws.work_ref("input/problem.md")
+    valid = task(
+        "rci", research_operation="CONTINUE_PROBLEM", research_problem_ref=question,
+        input_refs=[question],
+    ).to_json()
+    companion = task("planner").to_json()
+    companion.pop("parallel_tasks")
+    valid["parallel_tasks"] = [companion]
+    original = {
+        **valid, "research_problem_ref": "missing.md", "input_refs": [],
+        "archive_refs": ["missing-evidence.md"],
+        "parallel_tasks": [{
+            **companion, "next_step_kind": "WRONG", "obligation_ids": ["unknown"],
+            "branch_id": " ", "spurious_control_field": True,
+        }],
+    }
+    transport = NativeFixture("research")
+
+    def reply(messages, _tools):
+        if not transport.calls[-1].endswith("_receipt_correction"):
+            return transport.tool("submit_result", original)
+        for pointer in (
+            "/research_problem_ref", "/input_refs", "/archive_refs",
+            "/parallel_tasks/0/next_step_kind", "/parallel_tasks/0/obligation_ids",
+            "/parallel_tasks/0/branch_id", "/parallel_tasks/0/spurious_control_field",
+        ):
+            assert pointer in messages[1]["content"]
+        corrected = {**valid, "prompt_brief": "A different task."} if replace_valid_task else valid
+        return transport.tool("submit_result", corrected)
+
+    monkeypatch.setattr(transport, "_request", reply)
+    if replace_valid_task:
+        use_codex_receipt_validation(transport, monkeypatch)
+    result = run_global_director(llm=transport, workdir=ws.root)
+    assert len(transport.calls) == 2
+    if replace_valid_task:
+        assert isinstance(result, SemanticRepresentationFailure)
+        assert any(row["json_pointer"] == "/prompt_brief" for row in result.diagnostics)
+    else:
+        assert isinstance(result, StructuredSemanticResult) and result.payload == valid
+
+
 def test_reporter_receipt_repair_cannot_write_mathematical_files(ws):
-    use_reporter(ws); ref = deliver(ws, 1)
+    ref = deliver(ws, 1, reported=False)
     llm = NativeFixture('research')
     request = llm._request
     def wrong_branch(messages, tools):
@@ -334,7 +482,6 @@ def test_parallel_pass_does_not_drop_unfinished_reporter(ws, monkeypatch):
     from pace.agents.director.loop import DirectorLedEngine
     from pace.agents.director import parallel as module
     from pace.agents.prompt_composer import PromptComposerResult
-    use_reporter(ws)
     engine = DirectorLedEngine(workdir=ws.root, director=lambda **_: None,
         composer=lambda **_: PromptComposerResult(final_prompt='Task', call_id='fixture'),
         specialists={'prover':lambda **_:None,'research':lambda **_:None}, max_proof_states=2, commit_memory=commit_round_memory, commit_results=publish_stage_findings)
@@ -353,10 +500,9 @@ def test_parallel_pass_does_not_drop_unfinished_reporter(ws, monkeypatch):
 
 
 def test_proof_reporter_does_not_create_unconsumed_application_queue(ws):
-    use_reporter(ws)
     policy = json.loads(ws.path(ws.work_ref('state/research_execution_policy.json')).read_text())
     ws.write_json(ws.work_ref('state/research_execution_policy.json'), {**policy,'mode':'proof'})
-    ref = deliver(ws,1); llm = NativeFixture('proof'); original_request = llm._request
+    ref = deliver(ws,1, reported=False); llm = NativeFixture('proof'); original_request = llm._request
     def propose_application(messages, tools):
         reply = original_request(messages, tools)
         if not llm.calls[-1].endswith('_receipt_correction'):
@@ -373,8 +519,7 @@ def test_proof_reporter_does_not_create_unconsumed_application_queue(ws):
 
 
 def test_prover_reporter_repairs_a_duplicate_manuscript_reference(ws, monkeypatch):
-    use_reporter(ws)
-    ref = deliver(ws, 1, agent="prover")
+    ref = deliver(ws, 1, agent="prover", reported=False)
     candidate = str(Path(ref).with_name("research.md"))
     duplicate = str(Path(ref).parent / "findings/copy.md")
     ws.write_text(duplicate, ws.path(candidate).read_text())
@@ -415,7 +560,7 @@ def test_prover_reporter_repairs_a_duplicate_manuscript_reference(ws, monkeypatc
 
 
 def test_all_annotated_references_repaired_once_with_frozen_meaning(ws, monkeypatch):
-    use_reporter(ws); ref = deliver(ws, 1)
+    ref = deliver(ws, 1, reported=False)
     llm = NativeFixture('research'); original_request = llm._request
     draft = {}; calls = []
     def reply(messages, tools):
@@ -453,24 +598,93 @@ def test_all_annotated_references_repaired_once_with_frozen_meaning(ws, monkeypa
     assert len(calls)==2
 
 
-def test_resume_reporter_uses_saved_failed_receipt_instead_of_new_summary(ws, monkeypatch):
-    use_reporter(ws); ref=deliver(ws,1); llm=NativeFixture('research'); original=llm._request
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_reporter_corrects_mixed_scope_summary_and_application_shape(ws, monkeypatch, interrupted):
+    ref = deliver(ws, 1, reported=False)
+    manuscript = str(Path(ref).with_name("research.md"))
+    llm = NativeFixture("research")
+    original_request = llm._request
+    fixed_application = {
+        "id": "supported", "obligation_id": "target",
+        "argument_ref": manuscript, "premise_refs": [manuscript],
+    }
+
+    def reply(messages, tools):
+        response = original_request(messages, tools)
+        function = response["choices"][0]["message"]["tool_calls"][0]["function"]
+        payload = json.loads(function["arguments"])
+        if llm.calls[-1].endswith("_receipt_correction"):
+            for pointer in (
+                "/summary", "/delta/branch_id", "/delta/obligation_ids",
+                "/delta/applications/0", "/delta/applications/1/premise_refs",
+                "/delta/applications/1/argument_ref",
+            ):
+                assert pointer in messages[1]["content"]
+            assert manuscript in llm.context["input_refs"]
+            if interrupted and len(llm.calls) == 2:
+                raise KeyboardInterrupt()
+            payload["delta"]["applications"] = [fixed_application]
+        else:
+            payload["summary"] = " "
+            payload["delta"].update(
+                branch_id="wrong", obligation_ids=["unknown"],
+                applications=[
+                    {"id": "", "obligation_id": "unknown", "argument_ref": manuscript,
+                     "premise_refs": []},
+                    {**fixed_application, "argument_ref": manuscript + " §1",
+                     "premise_refs": [manuscript, manuscript]},
+                ],
+            )
+        function["arguments"] = json.dumps(payload)
+        return response
+
+    monkeypatch.setattr(llm, "_request", reply)
+    if interrupted:
+        use_codex_receipt_validation(llm, monkeypatch)
+        with pytest.raises(KeyboardInterrupt):
+            run_research_reporter(llm=llm, workdir=ws.root, result_ref=ref)
+    result = run_research_reporter(llm=llm, workdir=ws.root, result_ref=ref)
+    assert result["payload"]["delta"]["applications"] == [fixed_application]
+    assert llm.calls.count("research_reporter_round1") == 1
+    assert len(llm.calls) == (3 if interrupted else 2)
+    assert not load_index(ws.root)["applications"]
+
+
+@pytest.mark.parametrize("defect", ["reference", "missing_summary", "blank_summary"])
+def test_resume_reporter_uses_saved_failed_receipt_instead_of_new_summary(ws, monkeypatch, defect):
+    ref=deliver(ws,1, reported=False); llm=NativeFixture('research'); original=llm._request
     def wrong_path(messages, tools):
         if llm.calls[-1].endswith('_receipt_correction'): raise KeyboardInterrupt
         response=original(messages,tools)
         f=response['choices'][0]['message']['tool_calls'][0]['function']
-        p=json.loads(f['arguments']);p['delta']['change_ref']+=' §1';f['arguments']=json.dumps(p)
+        p = json.loads(f["arguments"])
+        if defect == "reference":
+            p["delta"]["change_ref"] += " §1"
+        elif defect == "missing_summary":
+            del p["summary"]
+        else:
+            p["summary"] = " "
+        f["arguments"] = json.dumps(p)
         return response
     monkeypatch.setattr(llm,'_request',wrong_path)
     with pytest.raises(KeyboardInterrupt): run_research_reporter(llm=llm,workdir=ws.root,result_ref=ref)
     monkeypatch.setattr(llm,'_request',original)
-    run_research_reporter(llm=llm,workdir=ws.root,result_ref=ref)
+    result = run_research_reporter(llm=llm,workdir=ws.root,result_ref=ref)
+    assert result["payload"]["summary"].startswith("The handoff derives")
+    bound = [row["ref"] for row in result["bindings"]]
+    assert len(bound) == len(set(bound))
+    request = json.loads(ws.path(ref).with_name("reporter_request.json").read_text())
+    from pace.agents.reporter import reporter_schema
+    applications = reporter_schema(request)["properties"]["delta"]["properties"]["applications"]
+    premises = applications["items"]["properties"]["premise_refs"]["items"]["enum"]
+    assert ws.path(ref).with_name("research.md").relative_to(ws.root).as_posix() in premises
+    assert not any("/assignment/" in premise or premise == ref for premise in premises)
     assert llm.calls.count('research_reporter_round1')==1
     assert llm.calls.count('research_reporter_round1_receipt_correction')==2
 
 
 def test_rejected_content_change_cannot_be_accepted_by_resume(ws, monkeypatch):
-    use_reporter(ws); ref=deliver(ws,1); llm=NativeFixture('research'); original=llm._request
+    ref=deliver(ws,1, reported=False); llm=NativeFixture('research'); original=llm._request
     def altered(messages, tools):
         response=original(messages,tools); f=response['choices'][0]['message']['tool_calls'][0]['function']
         p=json.loads(f['arguments'])
@@ -488,12 +702,76 @@ def test_rejected_content_change_cannot_be_accepted_by_resume(ws, monkeypatch):
     assert llm.calls==['research_reporter_round1','research_reporter_round1_receipt_correction','research_reporter_round1_receipt_correction']
 
 
+def test_resume_reporter_repairs_unparseable_response_without_repeating_summary(ws):
+    ref = deliver(ws, 1, reported=False)
+
+    class ReporterTransport(ProofPublicationTransport):
+        def complete_structured_result(self, prompt, *, workdir, call_name, ledger_context, **kwargs):
+            if call_name == "research_reporter_round1":
+                return self._reply(
+                    "Receipt did not serialize.", workdir=workdir, call_name=call_name,
+                    ledger_context=ledger_context, structured=True,
+                )
+            if len(self.calls) == 1:
+                self.calls.append(call_name)
+                raise KeyboardInterrupt()
+            return super().complete_structured_result(
+                prompt, workdir=workdir, call_name=call_name, ledger_context=ledger_context,
+                **kwargs,
+            )
+
+    llm = ReporterTransport("NONE")
+    with pytest.raises(KeyboardInterrupt):
+        run_research_reporter(llm=llm, workdir=ws.root, result_ref=ref)
+    receipt = run_research_reporter(llm=llm, workdir=ws.root, result_ref=ref)
+    assert receipt["payload"]["summary"].startswith("The original argument")
+    assert llm.calls.count("research_reporter_round1") == 1
+
+
 def test_json_only_rci_handoff_schema_is_valid_and_disallows_applications():
     from pace.agents.reporter import reporter_schema
     from pace.runtime.schema import preflight_output_schema,validate_json_instance
     schema=reporter_schema({'original_refs':['outcome.json'],'bindings':[{'ref':'outcome.json'}]})
     assert preflight_output_schema(schema).ok
     assert schema['properties']['delta']['properties']['applications']['maxItems']==0
+
+
+def test_rci_receipt_correction_removes_forbidden_proposal_and_preserves_summary(ws, monkeypatch):
+    ref = deliver(ws, 1, agent="rci", reported=False)
+    outcome = str(Path(ref).with_name("outcome.json"))
+    ws.write_json(outcome, {"status": "HANDOFF"})
+    ws.write_json(ref, {
+        "agent_id": "rci", "status": "SUCCEEDED", "deliverable_ref": outcome,
+        "manuscript_refs": [],
+    })
+    llm = NativeFixture("research")
+    original_request = llm._request
+    original_summary = []
+
+    def reply(messages, tools):
+        response = original_request(messages, tools)
+        name = llm.calls[-1]
+        function = response["choices"][0]["message"]["tool_calls"][0]["function"]
+        payload = json.loads(function["arguments"])
+        if name == "research_reporter_round1":
+            original_summary.append(payload["summary"])
+            payload["delta"]["applications"] = [{
+                "id": "inadmissible", "obligation_id": "target",
+                "argument_ref": outcome, "premise_refs": [],
+            }]
+            payload["delta"]["attempt"]["outcome"] = "APPLICATION_PROPOSED"
+            function["arguments"] = json.dumps(payload)
+        else:
+            assert "requires applications=[]" in messages[1]["content"]
+        return response
+
+    monkeypatch.setattr(llm, "_request", reply)
+    saved = run_research_reporter(llm=llm, workdir=ws.root, result_ref=ref)
+    assert llm.calls == ["research_reporter_round1", "research_reporter_round1_receipt_correction"]
+    assert saved["payload"]["delta"]["applications"] == []
+    assert saved["payload"]["delta"]["attempt"]["outcome"] == "LOCAL_RESULT"
+    assert saved["payload"]["summary"] == original_summary[0]
+
 
 @pytest.mark.parametrize("interrupt_round", [1, 2])
 def test_cli_resumes_a_director_receipt_accepted_before_dispatch(tmp_path, monkeypatch, interrupt_round):
@@ -524,3 +802,195 @@ def test_cli_resumes_a_director_receipt_accepted_before_dispatch(tmp_path, monke
     assert all(transport.calls.count(call) == old_calls.count(call) for call in set(old_calls))
     assert json.loads((turn / "final_report.json").read_text())["result"] == "PASS"
     assert not (root / "work/turn002").exists()
+
+
+@pytest.mark.parametrize("interrupt_stage", ["after_rejection", "during_correction", "after_acceptance"])
+def test_cli_resumes_director_multifield_correction_without_rescheduling(
+    tmp_path, monkeypatch, interrupt_stage
+):
+    from pace.agents.director import harness
+    from pace.runtime import semantic
+
+    transport = NativeFixture("research")
+    monkeypatch.setattr(harness, "build_llm", lambda **_: transport)
+    initial = "global_research_director_0001"
+    correction = initial + "_receipt_correction"
+    request = transport._request
+    finish = semantic.finish_call
+
+    def receive(messages, tools):
+        body = request(messages, tools)
+        if transport.calls[-1] == initial:
+            function = body["choices"][0]["message"]["tool_calls"][0]["function"]
+            payload = json.loads(function["arguments"])
+            payload.update(branch_id=" ", obligation_ids=["unknown"], archive_refs=["missing.md"])
+            function["arguments"] = json.dumps(payload)
+        if transport.calls[-1] == correction:
+            for pointer in ("/next_step_kind", "/branch_id", "/obligation_ids", "/archive_refs"):
+                assert pointer in messages[1]["content"]
+            if interrupt_stage == "during_correction" and transport.calls.count(correction) == 1:
+                raise KeyboardInterrupt()
+        return body
+
+    def interrupt_after_receipt(workdir, ref, **kwargs):
+        finish(workdir, ref, **kwargs)
+        stage = json.loads((Path(workdir) / ref).read_text())["stage"]
+        if interrupt_stage == "after_rejection" and stage == initial:
+            assert kwargs["status"] == "REPRESENTATION_FAILED"
+            raise KeyboardInterrupt()
+        if interrupt_stage == "after_acceptance" and stage == correction:
+            assert kwargs["status"] == "SUCCEEDED"
+            raise KeyboardInterrupt()
+
+    monkeypatch.setattr(transport, "_request", receive)
+    problem = tmp_path / "problem.md"
+    problem.write_text("Prove 2+2=4.\n")
+    root = tmp_path / "director-resume"
+    with monkeypatch.context() as scoped:
+        scoped.setattr(semantic, "finish_call", interrupt_after_receipt)
+        assert cli.main(["run", "--problem", str(problem), "--problem-id", root.name,
+                         "--output", str(tmp_path), "--json"]) == 130
+    assert cli.main(["resume", "--run-dir", str(root), "--json"]) == 0
+    assert transport.calls.count(initial) == 1
+    assert transport.calls.count(correction) == (2 if interrupt_stage == "during_correction" else 1)
+    assert transport.calls.count("director_led_survey_01") == 1
+    assert json.loads((root / "work/turn001/final_report.json").read_text())["result"] == "PASS"
+
+
+def test_director_rejected_receipt_is_bound_to_the_original_request(ws, monkeypatch):
+    from pace.agents.director.agent import run_global_director
+    from pace.runtime import semantic
+
+    transport = NativeFixture("research")
+    accepted = []
+    finish = semantic.finish_call
+    initial = "global_research_director_0001"
+
+    def interrupt_after_rejection(workdir, ref, **kwargs):
+        finish(workdir, ref, **kwargs)
+        assert kwargs["status"] == "REPRESENTATION_FAILED"
+        raise KeyboardInterrupt()
+
+    kwargs = {
+        "llm": transport, "workdir": ws.root, "call_name": initial,
+        "on_accept": accepted.append,
+        "host_metadata": {"round_index": 1, "task_id": "round-0001-director"},
+    }
+    with monkeypatch.context() as scoped:
+        scoped.setattr(semantic, "finish_call", interrupt_after_rejection)
+        with pytest.raises(KeyboardInterrupt):
+            run_global_director(**kwargs, control_context="First bounded scheduling request.")
+    result = run_global_director(**kwargs, control_context="Updated bounded scheduling request.")
+    assert result.payload == accepted[0]
+    assert transport.calls == [initial, initial, initial + "_receipt_correction"]
+
+
+@pytest.mark.parametrize(
+    ("ws", "purpose", "expected"),
+    [
+        ("standard", "CONTINUE", {"target"}),
+        ("standard", "REASSESS", {"target", "aux"}),
+        ("weak", "CONTINUE", {"target", "aux"}),
+    ],
+    indirect=["ws"],
+)
+def test_variant_controls_review_queue_and_rebuild(ws, purpose, expected):
+    from pace.agents.director.context import freeze_context
+    from pace.runtime.prompts import standard_workflow
+    from pace.orchestrator.memory import commit_research_memory, rebuild_research_index
+
+    planner = deliver(ws, 0, agent="planner")
+    route = str(Path(planner).with_name("research.md"))
+    ws.write_json(
+        str(Path(planner).with_name("route_relations.json")),
+        {
+            "schema_version": "route_relations/v1",
+            "change_ref": route,
+            "obligations": [
+                {
+                    "id": "aux",
+                    "kind": "ROUTE_SUFFICIENT",
+                    "parent_ids": ["target"],
+                    "scope_ref": route,
+                    "statement_ref": route,
+                    "branch_id": "b-target",
+                    "premise_groups": [],
+                }
+            ],
+        },
+    )
+    commit_research_memory(ws.root, [planner])
+    folder = ws.work_ref("round1")
+    assignment = f"{folder}/assignment/task.json"
+    manuscript = f"{folder}/research.md"
+    result = f"{folder}/agent_result.json"
+    ids = ["target", "aux"]
+    frozen = freeze_context(
+        ws.root, assignment, task(obligation_ids=ids, next_step_kind=purpose), []
+    )
+    variant = json.loads(ws.path(ws.work_ref("resources/manifest.json")).read_text())[
+        "resource_variant"
+    ]
+    assert standard_workflow(ws.root) == (variant == "standard")
+    ws.write_json(assignment, {"round_index": 1})
+    ws.write_text(
+        manuscript,
+        "One manuscript supplies an auxiliary lemma and its application to the target.",
+    )
+    ws.write_json(
+        result,
+        {"status": "SUCCEEDED", "agent_id": "research", "deliverable_ref": manuscript},
+    )
+    llm = NativeFixture("research")
+
+    def report(messages, tools):
+        return llm.tool(
+            "submit_result",
+            {
+                "summary": "Both uses were proposed.",
+                "delta": {
+                    "schema_version": "research_delta/v1",
+                    "obligation_ids": ids,
+                    "branch_id": "b-target",
+                    "change_ref": manuscript,
+                    "applications": [
+                        {
+                            "id": ident,
+                            "obligation_id": ident,
+                            "argument_ref": manuscript,
+                            "premise_refs": [],
+                        }
+                        for ident in ids
+                    ],
+                    "attempt": {
+                        "outcome": "APPLICATION_PROPOSED",
+                        "obstacle_ref": "",
+                        "reopen_condition_ref": "",
+                    },
+                },
+            },
+        )
+
+    llm._request = report
+    run_research_reporter(llm=llm, workdir=ws.root, result_ref=result)
+    ws.write_json(
+        ws.work_ref("state/director_state.json"),
+        {"completed_result_refs": [planner, result]},
+    )
+    commit_research_memory(ws.root, [planner, result])
+    for index in (load_index(ws.root), rebuild_research_index(ws.root)):
+        assert {a["obligation_id"] for a in index["applications"].values()} == expected
+        assert {
+            a["obligation_id"] for a in index["attempts"][-1]["applications"]
+        } == set(ids)
+        assert index["obligations"]["aux"]["status"] == "OPEN"
+    assert llm.calls == ["research_reporter_round1"]
+
+
+def test_focused_director_can_open_complete_memory_index(ws):
+    from pace.agents.director.context import director_decision_inputs
+    from pace.orchestrator.memory import RESEARCH_INDEX_REF
+
+    view = director_decision_inputs(ws.root, [])
+    assert RESEARCH_INDEX_REF in view["archive_refs"]
+    assert RESEARCH_INDEX_REF not in view["required_refs"]

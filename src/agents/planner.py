@@ -21,7 +21,6 @@ def build_instructions(
         role="PLANNER",
         resources=resources,
         role_ref="planner/role.md",
-        extra_refs=(),
     )
 
 
@@ -33,17 +32,18 @@ def build_prompt(
     output_ref: str,
     manifest_ref: str,
 ):
-    extra_inputs, extra_task = (), ""
+    extra_inputs, extra_task, revision_ref = (), "", ""
     from pace.agents.director.context import route_base
 
     base = route_base(workdir, output_ref)
     if decision.prompt_brief.startswith("REVISE_ROUTE") and base:
         extra_inputs = (base,)
+        revision_ref = str(Path(output_ref).parent / "revision.json")
         extra_task = render_prompt_template(
             "planner/revision.md",
             workdir=workdir,
             base_ref=base,
-            patch_ref=str(Path(output_ref).parent / "revision.json"),
+            patch_ref=revision_ref,
         )
     return build_specialist_assembly(
         workdir=workdir,
@@ -52,10 +52,12 @@ def build_prompt(
         output_ref=output_ref,
         manifest_ref=manifest_ref,
         role_ref="planner/role.md",
-        extra_refs=(),
         extra_inputs=extra_inputs,
         extra_task=extra_task,
-        delivery_task=build_delivery_instructions(workdir, output_ref),
+        delivery_task=build_delivery_instructions(
+            workdir, output_ref, revision=bool(revision_ref)
+        ),
+        revision_ref=revision_ref,
     )
 
 
@@ -65,14 +67,22 @@ def run(*, llm: Any, workdir: Path, **kwargs):
     return run_specialist(llm=llm, workdir=workdir, agent_id="planner", **kwargs)
 
 
-def build_delivery_instructions(workdir: Path, output_ref: str) -> str:
-    common = delivery_instruction(workdir, output_ref, with_delta=False)
+def build_delivery_instructions(
+    workdir: Path, output_ref: str, *, revision: bool = False
+) -> str:
+    common = delivery_instruction(workdir, output_ref, with_reporter=False)
     import json
 
     from pace.agents.director.context import task_context
 
     if not task_context(workdir, output_ref):
         return common
+    if revision:
+        common += (
+            "\nIf the dependencies and obligation scopes stay unchanged, set "
+            "relations_unchanged=true in revision.json. The Host then writes "
+            "the empty relation update, and you can skip the following file instruction.\n"
+        )
     route = {
         "schema_version": "route_relations/v1",
         "change_ref": output_ref,

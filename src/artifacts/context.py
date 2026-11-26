@@ -14,6 +14,10 @@ from pathlib import Path
 from typing import Any
 
 from pace.artifacts.workspace import RunWorkspace
+from pace.contracts.verification.decision import (
+    COMPACT_KERNEL_VERSION,
+    compact_relation_id,
+)
 from pace.runtime.json_values import one_or_many_dict_rows
 
 
@@ -49,7 +53,6 @@ def empty_search_progress(
         "target_contract_ref": target_contract_ref,
         "verified_relations": [],
         "rejected_relations": [],
-        "current_blocker": {},
         "current_blockers": [],
     }
 
@@ -92,6 +95,8 @@ def stage_verified_progress(
             verification_ref=binding["verification_ref"],
         )
         if str(row.get("status") or "").upper() == "PASS":
+            if kernel.get("schema_version") == COMPACT_KERNEL_VERSION:
+                row["relation_id"] = compact_relation_id(row)
             row["verified_dependency"] = {
                 "proof_id": binding["proof_id"],
                 "proof_ref": binding["proof_ref"],
@@ -111,7 +116,6 @@ def stage_verified_progress(
         "verified_relations": verified,
         "rejected_relations": rejected,
         "current_blockers": blockers,
-        "current_blocker": deepcopy(blockers[0]) if blockers else {},
         "last_verification_ref": binding["verification_ref"],
         "last_proof_id": binding["proof_id"],
         "last_proof_ref": binding["proof_ref"],

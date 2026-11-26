@@ -104,19 +104,17 @@ def check_source_ownership(root: Path, row: dict, *, local_result_ref="") -> Non
 
 def enabled(root: Path) -> bool:
     path = Path(root) / work_ref(root, "state/research_execution_policy.json")
-    return (
-        path.is_file()
-        and json.loads(path.read_text()).get("research_memory_version") == 1
-    )
-
-
-def reporter_owned(root: Path) -> bool:
-    """Saved policy keeps historical runs on their original handoff contract."""
-    path = Path(root) / work_ref(root, "state/research_execution_policy.json")
-    return (
-        path.is_file()
-        and json.loads(path.read_text()).get("research_delta_owner") == "reporter"
-    )
+    if not path.is_file():
+        return False
+    policy = json.loads(path.read_text())
+    if (
+        policy.get("research_memory_version") != 1
+        or policy.get("research_delta_owner") != "reporter"
+    ):
+        raise ValueError(
+            "unsupported research memory policy; resume with the run's original PACE version"
+        )
+    return True
 
 
 def identifiers(value, field) -> list[str]:
@@ -417,21 +415,19 @@ def check_finding_record(
     if record["draft_ref"] != draft_ref or record["target_contract_id"] != target_id:
         raise ValueError("finding verification belongs to another manuscript or target")
     source = record.get("source_binding")
-    if source:
-        if source["ref"] != draft_ref:
-            raise ValueError("finding verification binds a different manuscript")
-        check_binding(root, source)
-    for row in record.get("dependency_bindings", []):
+    if not source or source["ref"] != draft_ref:
+        raise ValueError("finding verification has a missing or different manuscript binding")
+    check_binding(root, source)
+    for row in record["dependency_bindings"]:
         check_binding(root, row)
-    check_joint_finding_record(root, draft_ref, record)
 
-
-def check_joint_finding_record(root: Path, draft_ref: str, record: dict) -> None:
     joint = record.get("joint_receipt_ref")
     if not joint:
         return
     receipt = read_json(root, joint)
     check_binding(root, receipt["request_binding"])
+    if receipt.get("review_binding"):
+        check_binding(root, receipt["review_binding"])
     request = read_json(root, receipt["request_ref"])
     if (
         record != {**receipt, "joint_receipt_ref": joint}
@@ -447,53 +443,6 @@ def check_joint_finding_record(root: Path, draft_ref: str, record: dict) -> None
         )
 
 
-def _load_single_application_review(root: Path, app: dict, ref: str, record: dict) -> dict:
-    """Read the original per-scope format without changing its on-disk evidence."""
-    key = app["application_key"]
-    base = Path(ref)
-    request_ref = str(base.with_suffix(".request.json"))
-    review_ref = str(base.with_suffix(".md"))
-    if record.get("request_binding", {}).get("ref") != request_ref:
-        raise ValueError("single application review has a different request")
-    check_binding(root, record["request_binding"])
-    request = read_json(root, request_ref)
-    expected = application_review_bindings(app)
-    if (
-        record.get("application_key") != key
-        or record.get("request_ref") != request_ref
-        or request.get("schema_version") != "application_request/v1"
-        or request.get("application_key") != key
-        or request.get("obligation_id") != app["obligation_id"]
-        or request.get("obligation_version") != app["obligation_version"]
-        or request.get("argument_ref") != app["argument_ref"]
-        or request.get("review_ref") != review_ref
-        or request.get("bindings") != record.get("bindings")
-        or list({digest(row): row for row in record["bindings"]}.values()) != expected
-    ):
-        raise ValueError("single application review has different dependencies")
-    if review := record.get("review_binding"):
-        if review["ref"] != review_ref:
-            raise ValueError("single application review belongs to another scope")
-        check_binding(root, review)
-    group = digest([digest(app["argument"]), digest(app["target"])])
-    journal_ref = work_ref(root, f"state/application_batches/{group}.json")
-    if record.get("batch_ref") and record["batch_ref"] != journal_ref:
-        raise ValueError("single application review belongs to another batch")
-    if (root / journal_ref).is_file() or record.get("batch_ref"):
-        journal = read_json(root, journal_ref)
-        if journal["digest"] != digest(journal["records"]):
-            raise ValueError("application batch receipt changed")
-        if (key in journal["records"] or record.get("batch_ref")) and journal["records"].get(key) != record:
-            raise ValueError("application review differs from its accepted batch")
-    verdict = record["verdict"]
-    checks = verdict.get("application_checks", [])
-    if len(checks) == 1 and checks[0].get("application_key", key) == key:
-        verdict = {**verdict, "application_checks": [{**checks[0], "application_key": key}]}
-    elif checks:
-        raise ValueError("single application receipt has unrelated scope decisions")
-    return {**record, "verdict": verdict}
-
-
 def load_application_review(root: Path, app: dict) -> dict | None:
     """Resolve a scope's reference to the single, immutable manuscript review."""
     ref = str(
@@ -507,10 +456,8 @@ def load_application_review(root: Path, app: dict) -> dict | None:
     if "pending_request_binding" in link and "verification_binding" not in link:
         return None
     if "verification_binding" not in link:
-        return _load_single_application_review(root, app, ref, link)
+        raise ValueError("application review has no bound manuscript verification")
     pointer = link["verification_binding"]
-    if not (root / pointer["ref"]).is_file():
-        return None
     check_binding(root, pointer)
     record = read_json(root, pointer["ref"])
     check_binding(root, record["request_binding"])
@@ -539,15 +486,21 @@ def load_application_review(root: Path, app: dict) -> dict | None:
         raise ValueError("application review has different dependencies")
     if record.get("review_binding"):
         check_binding(root, record["review_binding"])
+    for row in (*request["manuscript_bindings"], *item.get("premise_evidence", ())):
+        check_binding(root, row)
+    if prior := request.get("prior_review"):
+        check_binding(root, prior)
+        check_finding_record(
+            root, app["argument_ref"], record["target_contract_id"], read_json(root, prior["ref"])
+        )
     return record
 
 
 def application_review_incomplete(app: dict, record: dict) -> bool:
     verdict = record["verdict"]
-    if record.get("separate_scope_decisions"):
-        for row in verdict.get("application_checks", []):
-            if row.get("application_key") == app["application_key"]:
-                return row.get("status") == "VERIFIER_ERROR"
+    for row in verdict.get("application_checks", []):
+        if row.get("application_key") == app["application_key"]:
+            return row.get("status") == "VERIFIER_ERROR"
     return verdict["stage_status"] == "VERIFIER_ERROR"
 
 
@@ -560,15 +513,7 @@ def application_is_approved(app: dict, record: dict) -> bool:
     ]
     return (
         len(matching) == 1
-        and (
-            record.get("separate_scope_decisions")
-            and matching[0].get("reuse_authorized") is True
-            or (
-                verdict.get("stage_status") == "PASS"
-                and verdict.get("reuse_authorized") is True
-                and not record.get("separate_scope_decisions")
-            )
-        )
+        and matching[0].get("reuse_authorized") is True
         and matching[0].get("obligation_id") == app["obligation_id"]
         and matching[0].get("obligation_version") == app["obligation_version"]
         and matching[0].get("status") == "APPLICABLE"
@@ -592,8 +537,26 @@ def application_review_identity(app: dict) -> str:
     )
 
 
+def application_source_error(ref: str) -> str:
+    if is_rci_critic_material(ref):
+        return "RCI Critic material cannot be an application argument or premise"
+    path = Path(ref)
+    if (
+        ref.startswith(("memory/", "results/"))
+        or {"state", "assignment"}.intersection(path.parts)
+        or path.name in {"progress.md", "agent_result.json"}
+    ):
+        return "applications must cite immutable manuscripts, not control files or mutable views"
+    return ""
+
+
 def prepare_delta_payload(
-    root: Path, data: dict, obligations: dict, *, local_result_ref: str
+    root: Path,
+    data: dict,
+    obligations: dict,
+    *,
+    local_result_ref: str,
+    checked_bindings: dict[str, dict] | None = None,
 ) -> dict:
     if set(data) != {
         "schema_version",
@@ -609,12 +572,19 @@ def prepare_delta_payload(
     if data["schema_version"] != "research_delta/v1":
         raise ValueError("unsupported research delta")
     check_reference_fields(root, data)
+    bindings = dict(checked_bindings or {})
+
+    def bind(ref):
+        if ref not in bindings:
+            bindings[ref] = binding(root, ref)
+        return bindings[ref]
+
     ids = identifiers(data["obligation_ids"], "obligation_ids")
     if any(x not in obligations for x in ids):
         raise ValueError("delta references an unknown obligation")
     if not isinstance(data["branch_id"], str) or not data["branch_id"].strip():
         raise ValueError("branch_id required")
-    change = binding(root, data["change_ref"])
+    change = bind(data["change_ref"])
     check_source_ownership(root, change, local_result_ref=local_result_ref)
     attempt = data["attempt"]
     if (
@@ -626,7 +596,7 @@ def prepare_delta_payload(
     for k in ("obstacle_ref", "reopen_condition_ref"):
         if attempt[k]:
             check_source_ownership(
-                root, binding(root, attempt[k]), local_result_ref=local_result_ref
+                root, bind(attempt[k]), local_result_ref=local_result_ref
             )
     if not isinstance(data["applications"], list):
         raise ValueError("applications must be an array")
@@ -647,22 +617,11 @@ def prepare_delta_payload(
         app_ids.add(app["id"])
         if app["obligation_id"] not in ids:
             raise ValueError("application is outside the assigned obligations")
-        argument = binding(root, app["argument_ref"])
-        premises = [
-            binding(root, p) for p in identifiers(app["premise_refs"], "premise_refs")
-        ]
+        argument = bind(app["argument_ref"])
+        premises = [bind(p) for p in identifiers(app["premise_refs"], "premise_refs")]
         for row in [argument, *premises]:
-            if is_rci_critic_material(row["ref"]):
-                raise ValueError("RCI Critic material cannot be an application argument or premise")
-            if (
-                row["ref"].startswith(("memory/", "results/"))
-                or "/state/" in row["ref"]
-                or "/assignment/" in row["ref"]
-                or Path(row["ref"]).name == "progress.md"
-            ):
-                raise ValueError(
-                    "applications must cite immutable manuscripts, not mutable memory or result views"
-                )
+            if error := application_source_error(row["ref"]):
+                raise ValueError(error)
             check_source_ownership(root, row, local_result_ref=local_result_ref)
         obligation = obligations[app["obligation_id"]]
         key = (

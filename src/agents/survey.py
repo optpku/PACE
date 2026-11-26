@@ -34,7 +34,6 @@ def build_prompt(
     output_ref: str,
     manifest_ref: str,
 ):
-    extra_inputs, extra_task = (), ""
     return build_specialist_assembly(
         workdir=workdir,
         decision=decision,
@@ -42,10 +41,7 @@ def build_prompt(
         output_ref=output_ref,
         manifest_ref=manifest_ref,
         role_ref="survey/role.md",
-        extra_refs=(),
-        extra_inputs=extra_inputs,
-        extra_task=extra_task,
-        delivery_task=build_delivery_instructions(workdir, output_ref),
+        delivery_task=delivery_instruction(workdir, output_ref),
     )
 
 
@@ -53,11 +49,6 @@ def run(*, llm: Any, workdir: Path, **kwargs):
     from pace.agents.director.dispatch import run_specialist
 
     return run_specialist(llm=llm, workdir=workdir, agent_id="survey", **kwargs)
-
-
-def build_delivery_instructions(workdir: Path, output_ref: str) -> str:
-    common = delivery_instruction(workdir, output_ref, with_delta=False)
-    return common
 
 
 def retrieval_instruction(workdir: Path, *, enabled: bool) -> str:

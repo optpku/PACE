@@ -19,6 +19,32 @@ def prompt_root(workdir: Path) -> Path:
     return Path(workdir).resolve() / work_ref(workdir, "resources") / "prompts"
 
 
+def standard_workflow(workdir: Path, *, turn_id: str | None = None) -> bool:
+    """Select the complete protocol frozen by the owning turn."""
+    path = Path(workdir) / work_ref(workdir, "resources/manifest.json", turn_id=turn_id)
+    if not path.is_file():
+        return False
+    return _standard_manifest(json.loads(path.read_text(encoding="utf-8")))
+
+
+def _standard_manifest(manifest: dict) -> bool:
+    if not isinstance(manifest, dict):
+        raise ValueError("resource snapshot manifest must be a JSON object")
+    variant = manifest.get("resource_variant")
+    standard = variant == "standard"
+    if (
+        variant not in {"standard", "weak"}
+        or manifest.get("verification_policy")
+        != ("on_demand/v1" if standard else "detailed/v1")
+        or manifest.get("workflow_profile") != ("compact/v1" if standard else None)
+        or manifest.get("kernel_receipt") != ("concise/v1" if standard else None)
+    ):
+        raise ValueError(
+            "unsupported resource snapshot protocol; start a new turn with current resources"
+        )
+    return standard
+
+
 def skill_index_ref(workdir: Path) -> str | None:
     """Locate the current turn's shared method catalog."""
 
@@ -115,13 +141,18 @@ def materialize_run_resources(
         manifest = {
             "schema_version": "resource_snapshot/v1",
             "resource_variant": resource_variant,
-            "skill_layout": "shared/v1",
             "files": sorted(
                 path.relative_to(temporary).as_posix()
                 for path in temporary.rglob("*")
                 if path.is_file()
             ),
         }
+        manifest["verification_policy"] = (
+            "on_demand/v1" if resource_variant == "standard" else "detailed/v1"
+        )
+        if resource_variant == "standard":
+            manifest["workflow_profile"] = "compact/v1"
+            manifest["kernel_receipt"] = "concise/v1"
         (temporary / "manifest.json").write_text(
             json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
         )
@@ -138,9 +169,14 @@ def validate_resource_snapshot(destination: Path, *, resource_variant: str) -> N
         "prompts/orientation/extraction.md",
         "prompts/orientation/assessment.md",
         "prompts/director/role.md",
+        "prompts/director/calling/planner.md",
+        "prompts/kernel/role.md",
+        "prompts/kernel/receipt_correction.md",
+        "prompts/kernel/publication.md",
         "templates/neurips2026/neurips_2026.sty",
         "skills/direct-proving-and-gap-closure/SKILL.md",
     }
+    _standard_manifest(manifest)
     required.update(
         {
             "skills/README.md",

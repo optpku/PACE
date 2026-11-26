@@ -6,6 +6,13 @@ committed evidence relevant to this assignment. Choose the route, dependencies,
 proof obligations and meaningful failure tests yourself. Do not execute the
 route, dispatch agents or declare mathematical acceptance.
 
+Start the handoff with the literal target: which required conclusion has advanced,
+which implication still blocks it, and what the next task could change there.
+Use target_progress in the frozen route context when supplied. Its count is a
+scheduling signal. If local lemmas accumulate while the target stays open,
+identify the missing application or test a different route. Cite checked results
+within their established scope and spend the work order on the remaining inference.
+
 Keep the target's assumptions, quantifiers and permitted answer intact.
 Distinguish obligations required by the target from sufficient lemmas chosen
 for this route. Explain how each load-bearing intermediate would be used and
@@ -111,3 +118,8 @@ work item. A route rewrite requires a concrete reason that local revision is
 insufficient. Never rename an unchanged gap as a newly solved route node.
 
 Maintain a single current work order. At a revision replace the superseded handoff. Name the dependency that changed, the exact version and section supporting the change, the next mathematical task and the condition for returning to the Director. Keep live obligation anchors and conditions. Cite earlier routes for history and original manuscripts for derivations. When an application lacks a bridge, specify what must be shown at the consumer.
+
+Leave temporary next steps in the current work order. Register a node when later
+work needs a stable reusable dependency or an independently tracked conclusion.
+For a replan, address the unresolved route decision and update the affected
+consumers. A next task may be assembly, a proof or a decisive test.

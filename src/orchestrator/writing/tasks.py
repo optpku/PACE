@@ -9,6 +9,12 @@ from typing import Any
 
 from pace.artifacts.results import relocate_links
 from pace.artifacts.workspace import _write_json_atomic, _write_text_atomic, work_ref
+from pace.runtime.math_format import require_math_format
+from pace.runtime.semantic import (
+    ArtifactCallHandle,
+    commit_artifact_call_failure,
+    commit_artifact_call_success,
+)
 
 
 def read_state(root: Path, ref: str) -> dict[str, Any]:
@@ -16,15 +22,83 @@ def read_state(root: Path, ref: str) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
 
 
-def checkpoint_writing_source(root, state_ref, state, source_ref, handle):
-    state["accepted_source_ref"] = source_ref
-    state["accepted_call"] = {**asdict(handle), "response_text": ""}
-    _write_json_atomic(root / state_ref, state)
+def read_selected_outline(root, outline, default_ref, state_ref, message):
+    """Inherit instructions only from the request that produced the selected outline."""
+    source = (root / outline).resolve()
+    parent = read_state(root, state_ref)
+    current = (root / default_ref).resolve()
+    saved = parent.get("outline_ref")
+    if source == current and parent and not saved:
+        raise ValueError("The current outline request has not delivered an outline")
+    body = source.read_text(encoding="utf-8")
+    if not body.strip():
+        raise ValueError("Selected outline is empty")
+    if saved and source in (current, (root / saved).resolve()):
+        original = (root / parent["request_ref"]).read_text(encoding="utf-8")
+    elif message.strip():
+        original = ""
+    else:
+        raise ValueError("Supply --message with a standalone outline")
+    return source, body, original
+
+
+def run_writing_author(
+    writer,
+    llm,
+    prompt,
+    *,
+    workdir,
+    state_ref,
+    state,
+    output_ref,
+    diagnostic_ref,
+    outline,
+    input_refs,
+    metadata,
+):
+    """Accept a valid source at transport completion, before local publication."""
+
+    def accept(delivery: ArtifactCallHandle) -> None:
+        source = workdir / output_ref
+        try:
+            body = source.read_text(encoding="utf-8")
+            if not body.strip():
+                raise ValueError(f"Writing output is empty: {output_ref}")
+            require_math_format(body, markdown=source.suffix != ".tex")
+        except (OSError, ValueError):
+            commit_artifact_call_failure(
+                delivery,
+                workdir=workdir,
+                failure_class="REPRESENTATION",
+                retry_class="MODEL_REPRESENTATION",
+                diagnostics_ref=diagnostic_ref,
+            )
+            raise
+        state["accepted_source_ref"] = output_ref
+        state["accepted_call"] = asdict(delivery)
+        _write_json_atomic(workdir / state_ref, state)
+
+    handle = writer(
+        llm,
+        prompt,
+        workdir=workdir,
+        outline=outline,
+        input_refs=input_refs,
+        metadata=metadata,
+        on_transport_success=accept,
+    )
+    if handle.transport_status != "SUCCESS":
+        commit_artifact_call_failure(
+            handle,
+            workdir=workdir,
+            failure_class="INTERFACE",
+            retry_class=handle.retry_class,
+            diagnostics_ref=diagnostic_ref,
+        )
+        raise ValueError(f"Writing transport failed: {handle.error_code}")
 
 
 def settle_writing_call(root, state):
-    from pace.runtime.semantic import ArtifactCallHandle, commit_artifact_call_success
-
     if saved := state.get("accepted_call"):
         commit_artifact_call_success(
             ArtifactCallHandle(**saved),
@@ -104,7 +178,7 @@ def pending_writing_request(root: Path) -> dict[str, Any]:
 
 
 def complete_writing(ws, action, llm):
-    from .paper import PAPER_OUTLINE_REF, PAPER_SOURCE_REF, TheoryPaperWriter
+    from .paper import PAPER_OUTLINE_REF, TheoryPaperWriter, paper_artifacts
     from .report import (
         RESEARCH_OUTLINE_REF,
         RESEARCH_REPORT_REF,
@@ -128,10 +202,9 @@ def complete_writing(ws, action, llm):
             PAPER_OUTLINE_REF,
         )
     elif action == "paper":
-        completed, output = (
-            TheoryPaperWriter(llm=llm, workdir=ws.root).update(),
-            PAPER_SOURCE_REF,
-        )
+        completed = TheoryPaperWriter(llm=llm, workdir=ws.root).update()
+        if completed:
+            return ws.root / paper_artifacts(ws.root)["paper_source"]
     else:
         raise ValueError(f"Unknown writing action: {action}")
     if not completed:
@@ -139,8 +212,8 @@ def complete_writing(ws, action, llm):
     return ws.root / output
 
 
-def request_writing(
-    ws, problem, *, action, outline_ref, requirements, resource_variant, llm
+def prepare_writing_request(
+    ws, problem, *, action, outline_ref, requirements, resource_variant
 ):
     from .paper import (
         PAPER_OUTLINE_REF,
@@ -157,12 +230,12 @@ def request_writing(
     )
 
     if action == "outline":
-        ResearchReportOutliner(llm=llm, workdir=ws.root).request(
+        ResearchReportOutliner(llm=None, workdir=ws.root).request(
             problem.text, requirements=requirements, resource_variant=resource_variant
         )
         state_ref = outline_state_ref(ws.root)
     elif action == "report":
-        ResearchReportWriter(llm=llm, workdir=ws.root).request(
+        ResearchReportWriter(llm=None, workdir=ws.root).request(
             outline=outline_ref or RESEARCH_OUTLINE_REF,
             message=problem.text,
             requirements=requirements,
@@ -170,12 +243,12 @@ def request_writing(
         )
         state_ref = report_state_ref(ws.root)
     elif action == "paper-outline":
-        TheoryPaperWriter(llm=llm, workdir=ws.root).request_outline(
+        TheoryPaperWriter(llm=None, workdir=ws.root).request_outline(
             problem.text, requirements=requirements, resource_variant=resource_variant
         )
         state_ref = paper_outline_state_ref(ws.root)
     elif action == "paper":
-        TheoryPaperWriter(llm=llm, workdir=ws.root).request(
+        TheoryPaperWriter(llm=None, workdir=ws.root).request(
             outline=outline_ref or PAPER_OUTLINE_REF,
             message=problem.text,
             requirements=requirements,
@@ -185,4 +258,4 @@ def request_writing(
     else:
         raise ValueError(f"Unknown writing action: {action}")
     select_writing_task(ws.root, action, state_ref)
-    return complete_writing(ws, action, llm)
+    return read_state(ws.root, state_ref)["request_ref"]

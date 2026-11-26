@@ -21,12 +21,14 @@ class RciTransport(RoundLimitTransport):
         probe=None,
         interrupt_review=False,
         resolve=False,
+        local_gaps=(),
     ):
         super().__init__("rci")
         self.decisions = iter(decisions)
         self.mechanism_count = mechanism_count
         self.probe = probe
         self.interrupt_review = interrupt_review
+        self.local_gaps = iter(local_gaps)
         self.resolve = resolve
         self.records = []
         self.mechanisms = []
@@ -86,7 +88,11 @@ class RciTransport(RoundLimitTransport):
                 if self.interrupt_review:
                     self.interrupt_review = False
                     raise KeyboardInterrupt
-                payload = {}
+                if "LOCAL_REPAIR" in prompt:
+                    gap = next(self.local_gaps, None)
+                    payload = {"action": "LOCAL_REPAIR", "gap_id": gap} if gap else {"action": "ROUTE_DECISION"}
+                else:
+                    payload = {}
             elif role == "rci_conjecture_explorer":
                 assert any(
                     DIAGNOSIS in (root / ref).read_text() for ref in inputs["EVIDENCE"]
@@ -267,7 +273,9 @@ def test_cli_resumes_interrupted_review_after_committed_mechanism(
     root = tmp_path / "resume-rci"
     mechanism = root / transport.mechanisms[0]
     original = mechanism.read_bytes()
-    assert (mechanism.parent / "completed_phase.json").is_file()
+    checkpoint = json.loads((mechanism.parent / "completed_phase.json").read_text())
+    assert set(checkpoint) == {"outputs"}
+    assert str((mechanism.parent / "output.json").relative_to(root)) in checkpoint["outputs"]
 
     assert cli.main(["resume", "--run-dir", str(root), "--json"]) == 0
     assert [role for role, _, _ in transport.records] == [
@@ -278,6 +286,9 @@ def test_cli_resumes_interrupted_review_after_committed_mechanism(
     ]
     assert transport.records[1][1] == transport.records[2][1]
     assert mechanism.read_bytes() == original
+    traces = list((root / "work/turn001").rglob("interface_result.json"))
+    successful = [t for path in traces if (t := json.loads(path.read_text()))["host"]["semantic_status"] == "PASS"]
+    assert successful and all("payload" not in t and (root / t["host"]["response_ref"]).is_file() for t in successful)
 
 
 def test_call_budget_preserves_original_mechanism_and_review(tmp_path, monkeypatch):
@@ -306,3 +317,41 @@ def test_resolved_question_has_one_original_for_independent_review(
     assert request["manuscript_refs"] == [ref]
     assert ref in request["required_refs"]
     assert [role for role, _, _ in transport.records] == ["rci_mechanism_explorer"]
+
+
+def test_local_repair_replays_committed_critic_and_escalates_recurring_gap(tmp_path, monkeypatch):
+    from pace.agents.rci.phase_runner import BudgetedPhaseRunner
+
+    transport = RciTransport(["HANDOFF"], mechanism_count=2, local_gaps=["tail-bound", "tail-bound"])
+    run_phase = BudgetedPhaseRunner.run
+    def interrupt(self, **kw):
+        if kw["phase"] == "MECHANISM_EXPLORER" and kw["input_refs"]["BASE_MECHANISM"]:
+            raise KeyboardInterrupt
+        return run_phase(self, **kw)
+    with monkeypatch.context() as patch:
+        patch.setattr(BudgetedPhaseRunner, "run", interrupt)
+        patch.setattr("pace.agents.director.harness.build_llm", lambda **_: transport)
+        question = tmp_path / "problem.md"
+        question.write_text("Investigate convergence of the bounded sequence.\n")
+        assert cli.main(["run", "--problem", str(question), "--output", str(tmp_path),
+                         "--problem-id", "rci", "--resource-variant", "standard",
+                         "--max-rounds", "1", "--json"]) == 130
+    root = tmp_path / "rci"
+    monkeypatch.setattr("pace.agents.director.harness.build_llm", lambda **_: transport)
+    assert cli.main(["resume", "--run-dir", str(root), "--json"]) == 0
+    names = [name for name, _, _ in transport.records]
+    assert names == ["rci_mechanism_explorer", "rci_mechanism_critic",
+                     "rci_mechanism_explorer", "rci_mechanism_critic", "rci_conjecture_explorer"]
+    _, review_dir, _ = transport.records[1]
+    _, _, inputs = transport.records[2]
+    assert inputs["BASE_MECHANISM"] == transport.mechanisms[:1]
+    assert (review_dir / "review.md").relative_to(root).as_posix() in inputs["EVIDENCE"]
+    assert (review_dir / "review.md").read_text() == DIAGNOSIS
+
+
+def test_weak_rci_uses_the_original_critic_receipt(tmp_path, monkeypatch):
+    transport = RciTransport(["HANDOFF"], mechanism_count=1)
+    run_rci(tmp_path, monkeypatch, transport, "--resource-variant", "weak")
+    roles = [name for name, _, _ in transport.records]
+    assert roles == ["rci_mechanism_explorer", "rci_mechanism_critic", "rci_conjecture_explorer"]
+    assert "action" not in json.loads((transport.records[1][1] / "output.json").read_text())

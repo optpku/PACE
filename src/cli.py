@@ -19,6 +19,7 @@ from pace.orchestrator.writing.paper import (
 from pace.orchestrator.writing.report import RESEARCH_OUTLINE_REF
 from pace.orchestrator.writing.tasks import pending_writing_request
 from pace.pipeline_types import DEFAULT_CALL_TIMEOUT_SECONDS, PipelineConfig
+from pace.runtime.sessions import saved_execution_config
 from pace.reporting.postmortem import postmortem_rescan
 
 from .pipeline import ProofPipeline
@@ -107,7 +108,11 @@ def _main(argv: list[str] | None = None) -> int:
     )
     add_execution_args(resume_parser)
     resume_parser.set_defaults(
-        provider=None, model=None, reasoning_effort=None, web_search_mode=None
+        provider=None,
+        model=None,
+        reasoning_effort=None,
+        web_search_mode=None,
+        timeout_seconds=None,
     )
 
     outline_parser = sub.add_parser(
@@ -284,21 +289,22 @@ def _main(argv: list[str] | None = None) -> int:
             ws = RunWorkspace.open_existing(run_dir)
             with ws.execution_lock():
                 writing = pending_writing_request(ws.root)
-                saved_path = ws.path(ws.work_ref("config.json"))
-                saved = (
-                    json.loads(saved_path.read_text()) if saved_path.is_file() else {}
+                saved = saved_execution_config(
+                    ws.root, writing["request"]["request_ref"] if writing else ""
                 )
-                sessions_path = ws.path(ws.work_ref("state/sessions.json"))
-                if sessions_path.is_file():
-                    sessions = json.loads(sessions_path.read_text())
-                    saved = next(
-                        (
-                            row["effective_config"]
-                            for row in reversed(sessions)
-                            if row.get("effective_config")
-                        ),
-                        saved,
-                    )
+                if args.provider in (None, saved.get("provider")):
+                    # An explicit Survey override stays pinned. Inherited settings
+                    # follow the primary model and effort selected for this resume.
+                    for survey, primary in (
+                        ("web_search_model", "model"),
+                        ("web_search_reasoning_effort", "reasoning_effort"),
+                    ):
+                        if getattr(args, survey) is None and saved.get(
+                            survey
+                        ) != saved.get(primary):
+                            setattr(args, survey, saved.get(survey))
+                if args.timeout_seconds is None:
+                    args.timeout_seconds = saved.get("timeout_seconds")
                 args.provider = args.provider or saved.get("provider", "codex")
                 args.model = args.model or saved.get("model", "gpt-5.6-sol")
                 args.reasoning_effort = args.reasoning_effort or saved.get(
@@ -447,7 +453,7 @@ def add_execution_args(parser: argparse.ArgumentParser) -> None:
         "--web-search-mode",
         choices=["off", "on"],
         default="on",
-        help="on allows every role to search as needed (default); off disables external retrieval",
+        help="on enables external retrieval for Survey only (default); off disables it for all roles",
     )
     parser.add_argument(
         "--web-search-model",

@@ -11,15 +11,25 @@ promoted to a deliverable.
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
 from pace.agents.prompt_composer import compose_prompt
-from pace.artifacts.workspace import is_call_path, path_has_symlink_component, work_ref
+from pace.artifacts.workspace import (
+    _write_json_atomic,
+    _write_text_atomic,
+    is_call_path,
+    path_has_symlink_component,
+    work_ref,
+)
+from pace.contracts.research.memory import binding as memory_binding
+from pace.contracts.research.memory import (
+    check_binding,
+    enabled,
+    repair_route_references,
+)
 from pace.contracts.research.director_protocol import (
     DISPATCHABLE_AGENT_IDS,
     specialist_spec,
@@ -47,10 +57,6 @@ class SpecialistAdapterResult:
     reason_code: str = ""
     diagnostics_ref: str = ""
     response_ref: str = ""
-
-    @property
-    def succeeded(self) -> bool:
-        return self.status == "SUCCEEDED" and bool(self.deliverable_ref)
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -213,37 +219,24 @@ def run_specialist(
             call_id="",
         )
     metadata["output_ref"] = requested_ref
-    from pace.agents.director.context import task_context
+    from pace.agents.director.context import (
+        route_base,
+        task_context,
+        validate_research_delivery,
+    )
 
     frozen = task_context(root, requested_ref)
     metadata["archive_refs"] = frozen.get("archive_refs", [])
+    sidecars = {
+        "planner": ("route_relations.json", "revision.json", "memory_note.md"),
+        "survey": ("source_manifest.json", "memory_note.md"),
+        "framer": ("memory_note.md",),
+    }
     metadata["output_refs"] = [
         requested_ref,
-        *(
-            str(destination.with_name(name).relative_to(root))
-            for name in (
-                "revision.json",
-                "memory_note.md",
-                "route_relations.json",
-                "research_delta.json",
-                "source_manifest.json",
-                "catalogue_request.json",
-            )
-        ),
+        *(str(Path(requested_ref).with_name(name)) for name in sidecars.get(normalized_agent, ())),
     ]
     metadata["output_dirs"] = [str((destination.parent / "findings").relative_to(root))]
-    from pace.contracts.research.memory import reporter_owned
-
-    if reporter_owned(root):
-        metadata["output_refs"] = [
-            r
-            for r in metadata["output_refs"]
-            if Path(r).name != "research_delta.json"
-            and (
-                Path(r).name != "memory_note.md"
-                or normalized_agent not in {"research", "prover", "rci"}
-            )
-        ]
     if normalized_agent == "survey":
         metadata["output_dirs"].append(
             str((destination.parent / "sources").relative_to(root))
@@ -261,16 +254,44 @@ def run_specialist(
         )
 
     call_name = f"director_led_{normalized_agent}_{max(1, int(round_index or 1)):02d}"
-    from dataclasses import asdict
+    memory_enabled = enabled(root)
+    base_ref = route_base(root, requested_ref) if normalized_agent == "planner" else ""
+    patch = destination.with_name("revision.json")
+    saved_revision = None
+    rendered_revision = None
 
-    from pace.artifacts.workspace import _write_json_atomic
-    from pace.contracts.research.memory import binding as memory_binding
-    from pace.contracts.research.memory import check_binding
+    def checkpoint_author(handle: ArtifactCallHandle) -> None:
+        nonlocal saved_revision, rendered_revision
+        if not validate_specialist_output(
+            destination, allow_json=normalized_agent == "framer"
+        ):
+            delivered = {"manuscript": memory_binding(root, requested_ref)}
+        elif base_ref and patch.is_file() and not destination.exists():
+            from pace.runtime.text_revisions import render_revision
+
+            patch_ref = patch.relative_to(root).as_posix()
+            try:
+                version = memory_binding(root, patch_ref)
+                rendered_revision = render_revision(root, patch_ref, base_ref=base_ref)
+            except (OSError, ValueError, KeyError, TypeError):
+                return  # The ordinary Planner validation reports the invalid patch.
+            saved_revision = version
+            delivered = {"revision": version}
+        else:
+            return
+        _write_json_atomic(author_delivery, {"handle": asdict(handle), **delivered})
 
     try:
         if author_delivery.is_file():
             saved = json.loads(author_delivery.read_text())
-            check_binding(root, saved["manuscript"])
+            saved_revision = saved.get("revision")
+            delivery = saved_revision or saved["manuscript"]
+            expected = (
+                patch.relative_to(root).as_posix() if saved_revision else requested_ref
+            )
+            if delivery["ref"] != expected:
+                raise ValueError("saved author delivery belongs to another task")
+            check_binding(root, delivery)
             handle = ArtifactCallHandle(**saved["handle"])
         else:
             handle = begin_artifact_call(
@@ -282,6 +303,7 @@ def run_specialist(
                 stage=SPECIALIST_STAGE,
                 input_refs=reading_refs,
                 metadata=metadata,
+                on_transport_success=checkpoint_author if memory_enabled else None,
             )
     except (
         Exception
@@ -309,20 +331,40 @@ def run_specialist(
         )
 
     if normalized_agent == "planner":
-        from pace.agents.director.context import route_base
-
-        base_ref = route_base(root, requested_ref)
-        patch = destination.parent / "revision.json"
-        if patch.is_file() and base_ref and not destination.is_file():
-            from pace.runtime.text_revisions import apply_revision
+        if saved_revision or (
+            patch.is_file() and base_ref and not destination.is_file()
+        ):
+            from pace.runtime.text_revisions import render_revision
 
             try:
-                apply_revision(
-                    root,
-                    patch.relative_to(root).as_posix(),
-                    base_ref=base_ref,
-                    output_ref=requested_ref,
+                patch_ref = patch.relative_to(root).as_posix()
+                if not base_ref or (root / base_ref).resolve() == destination.resolve():
+                    raise ValueError("revision requires a separate frozen base")
+                rendered = (
+                    rendered_revision
+                    if rendered_revision is not None
+                    else render_revision(root, patch_ref, base_ref=base_ref)
                 )
+                if not destination.exists():
+                    _write_text_atomic(destination, rendered)
+                elif destination.read_text(encoding="utf-8") != rendered:
+                    raise ValueError(
+                        "materialized Planner route differs from its saved revision"
+                    )
+                relations = destination.with_name("route_relations.json")
+                if (
+                    frozen
+                    and not relations.exists()
+                    and json.loads(patch.read_text()).get("relations_unchanged") is True
+                ):
+                    _write_json_atomic(
+                        relations,
+                        {
+                            "schema_version": "route_relations/v1",
+                            "change_ref": requested_ref,
+                            "obligations": [],
+                        },
+                    )
                 metadata["revision_base_ref"] = base_ref
             except (OSError, ValueError, KeyError, TypeError) as exc:
                 return _commit_failure_result(
@@ -351,44 +393,31 @@ def run_specialist(
             metadata=metadata,
         )
 
-    from pace.agents.director.context import validate_research_delivery
-    from pace.contracts.research.memory import enabled, repair_route_references
-
-    if enabled(root):
-        if not author_delivery.is_file():
-            _write_json_atomic(
-                author_delivery,
-                {
-                    "handle": asdict(handle),
-                    "manuscript": memory_binding(root, requested_ref),
-                },
-            )
+    if memory_enabled and (saved_revision is not None or not author_delivery.is_file()):
+        _write_json_atomic(
+            author_delivery,
+            {"handle": asdict(handle), "manuscript": memory_binding(root, requested_ref)},
+        )
+    if normalized_agent == "planner" and frozen:
         result_stub = {"agent_id": normalized_agent, "deliverable_ref": requested_ref}
         assignment_ref = str(
             destination.parent.relative_to(root) / "assignment/task.json"
         )
+        relations_ref = str(Path(requested_ref).with_name("route_relations.json"))
         try:
-            if normalized_agent == "planner":
-                repair_route_references(
-                    root,
-                    str(destination.parent.relative_to(root) / "route_relations.json"),
-                )
+            repair_route_references(root, relations_ref)
             validate_research_delivery(
-                root, result_stub, assignment_ref, author_only=True
+                root, result_stub, assignment_ref
             )
         except (ValueError, OSError, KeyError, TypeError) as exc:
             # One bounded correction of sidecars; never repeat the mathematical author.
-            repair_refs = [
-                str(
-                    destination.parent.relative_to(root)
-                    / (
-                        "route_relations.json"
-                        if normalized_agent == "planner"
-                        else "research_delta.json"
-                    )
-                )
-            ]
+            repair_refs = [relations_ref]
             repair_metadata = {k: v for k, v in metadata.items() if k != "prompt_ref"}
+            repair_archive = [
+                ref
+                for ref in _unique_strings((*frozen["required_refs"], frozen["route_context"]["ref"]))
+                if ref not in (requested_ref, assignment_ref, relations_ref)
+            ]
             repair = begin_artifact_call(
                 llm,
                 render_prompt_template(
@@ -410,7 +439,7 @@ def run_specialist(
                     **repair_metadata,
                     "parent_call_id": handle.call_id,
                     "read_scope": "declared",
-                    "archive_refs": [],
+                    "archive_refs": repair_archive,
                     "protected_input_refs": reading_refs,
                     "output_refs": repair_refs,
                     "output_dirs": [],
@@ -422,10 +451,9 @@ def run_specialist(
                 check_binding(
                     root, json.loads(author_delivery.read_text())["manuscript"]
                 )
-                if normalized_agent == "planner":
-                    repair_route_references(root, repair_refs[0])
+                repair_route_references(root, relations_ref)
                 validate_research_delivery(
-                    root, result_stub, assignment_ref, author_only=True
+                    root, result_stub, assignment_ref
                 )
             except (ValueError, OSError, KeyError, TypeError) as repair_error:
                 return _commit_failure_result(
@@ -441,10 +469,6 @@ def run_specialist(
             commit_artifact_call_success(
                 repair, workdir=root, artifact_ref=requested_ref, metadata=metadata
             )
-    elif normalized_agent == "planner":
-        _write_json_atomic(
-            root / work_ref(root, "state/current_route.json"), {"ref": requested_ref}
-        )
     response_ref = handle.response_ref
     result = SpecialistAdapterResult(
         agent_id=normalized_agent,
@@ -468,9 +492,6 @@ def run_specialist(
             for path in sorted((destination.parent / "sources").rglob("*"))
             if path.is_file()
         )
-    request = destination.parent / "catalogue_request.json"
-    if request.is_file():
-        result["catalogue_request_ref"] = request.relative_to(root).as_posix()
     if published:
         result["published_refs"] = published
     # Persist the caller's validated handoff before publishing call success.
@@ -482,7 +503,7 @@ def run_specialist(
         handle,
         workdir=root,
         artifact_ref=requested_ref,
-        metadata={**metadata, "response_ref": response_ref},
+        metadata=metadata,
     )
     return result
 
@@ -605,12 +626,12 @@ def _write_failure(
         "authority": "SEARCH_CONTEXT_ONLY",
     }
     path = root / ref
-    _atomic_write_text(
-        root,
-        path,
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-        label="specialist failure path",
-    )
+    if path_has_symlink_component(root, path):
+        raise ValueError("specialist failure path must not contain a symlink")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path_has_symlink_component(root, path):
+        raise ValueError("specialist failure path must not contain a symlink")
+    _write_json_atomic(path, payload)
     return SpecialistAdapterResult(
         agent_id=agent_id,
         status="INTERFACE_FAILED",
@@ -619,39 +640,6 @@ def _write_failure(
         reason_code=reason_code,
         diagnostics_ref=ref,
     ).to_json()
-
-
-def _atomic_write_text(
-    root: Path,
-    path: Path,
-    content: str,
-    *,
-    label: str,
-) -> None:
-    """Atomically write one Host artifact without following lexical aliases."""
-
-    root_path = Path(root)
-    target = Path(path)
-    if path_has_symlink_component(root_path, target):
-        raise ValueError(f"{label} must not contain a symlink")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    if path_has_symlink_component(root_path, target):
-        raise ValueError(f"{label} must not contain a symlink")
-    descriptor, temporary = tempfile.mkstemp(
-        dir=target.parent,
-        prefix=target.name + ".",
-        suffix=".tmp",
-    )
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
-            output.write(content)
-        os.replace(temporary, target)
-    except BaseException:
-        try:
-            os.unlink(temporary)
-        except OSError:
-            pass
-        raise
 
 
 def _safe_output_path(root: Path, output_ref: str) -> Path:

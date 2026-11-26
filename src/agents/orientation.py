@@ -16,6 +16,7 @@ from pace.contracts.problem.target import (
 )
 from pace.contracts.problem.target import target_contract_id
 from pace.runtime.json_values import dict_rows as _rows
+from pace.runtime.prompts import standard_workflow
 from pace.runtime.schema import (
     INTEGER,
     STRING,
@@ -86,10 +87,15 @@ def run_problem_orientation(
             workspace.write_json(ref, payload)
 
     recommend = state["requested_mode"] is None
+    combined = standard_workflow(root)
     extraction_role = replace(
         _PROBLEM_EXTRACTION_ROLE,
-        schema=lambda: problem_extraction_output_schema(recommend_mode=recommend),
-        host_schema_version="target_locations/v2",
+        schema=lambda: problem_extraction_output_schema(
+            recommend_mode=recommend, combined=combined
+        ),
+        host_schema_version="target_and_brief/v1"
+        if combined
+        else "target_locations/v2",
     )
 
     def accept_extraction(payload):
@@ -102,7 +108,10 @@ def run_problem_orientation(
         extraction = run_semantic_role(
             llm,
             build_problem_extraction_prompt(
-                text, workdir=root, recommend_mode=recommend
+                text,
+                workdir=root,
+                recommend_mode=recommend,
+                requested_mode=state["requested_mode"],
             ),
             workdir=root,
             call_name="problem_orientation_extract",
@@ -166,19 +175,62 @@ def run_problem_orientation(
     assessment_ref = work_ref(root, "orientation/assessment.json")
     brief_ref = work_ref(root, "input/problem_brief.md")
 
+    # Supplementary context is validated after the literal spans are committed.
+    # A malformed budget or brief can then be repaired without another extraction.
+    if combined and state["phase"] == "ASSESSMENT":
+        supplement = state["extraction"].get("initial_context", {})
+        if isinstance(supplement, dict):
+            markdown = supplement.get("brief_markdown")
+            if isinstance(markdown, str):
+                title, _, body = markdown.strip().partition("\n")
+                if title.startswith("# ") and title[2:].strip() and body.strip():
+                    markdown = markdown.strip() + "\n"
+                    path = root / brief_ref
+                    if path_has_symlink_component(root, path):
+                        raise ValueError("unsafe problem brief")
+                    if path.exists() and path.read_text() != markdown:
+                        raise ValueError("committed problem brief changed")
+                    if not path.exists():
+                        workspace.write_text_atomic(brief_ref, markdown)
+                    state["brief"] = {"brief_ref": brief_ref}
+            budget = supplement.get("proof_assessment")
+            if not proof_brief and not validate_json_instance(
+                budget, proof_assessment_schema()
+            ):
+                state["assessment"] = {"proof_assessment": budget}
+            if "brief" in state and (proof_brief or "assessment" in state):
+                state.update(phase="ASSESSMENT_RESULT", diagnostic={})
+            save()
+
+    brief_only = proof_brief or "assessment" in state
+    budget_only = not proof_brief and "brief" in state
+
     def accept_brief(payload):
-        state["brief" if proof_brief else "assessment"] = payload
+        state["brief" if brief_only else "assessment"] = payload
         state.update(phase="ASSESSMENT_RESULT", diagnostic={})
         save()
 
     brief_role = replace(
-        _PROOF_BRIEF_ROLE if proof_brief else _RESEARCH_DECISION_ROLE,
+        _PROOF_BRIEF_ROLE if brief_only else _RESEARCH_DECISION_ROLE,
         on_accept=accept_brief,
     )
     if state["phase"] == "ASSESSMENT":
+        prompt = build_research_decision_prompt(workdir=root, proof_brief=proof_brief)
+        if budget_only:
+            prompt = (
+                "The Host has already saved the brief and literal target. Read the original "
+                "problem and target and return only proof_assessment with difficulty and "
+                "the two structural levels (1 compact, 2 substantial, 3 research-scale). "
+                "Leave all files untouched."
+            )
+        elif brief_only and not proof_brief:
+            prompt += (
+                "\nThe Host already accepted the budget. Only write the missing brief "
+                f"and return its brief_ref: {brief_ref}."
+            )
         assessment = run_semantic_role(
             llm,
-            build_research_decision_prompt(workdir=root, proof_brief=proof_brief),
+            prompt,
             workdir=root,
             call_name="problem_research_decision",
             role=brief_role,
@@ -196,13 +248,16 @@ def run_problem_orientation(
                     ]
                 )
             )
-            if proof_brief
+            if brief_only
             else None,
             input_refs=(work_ref(root, "input/problem.md"), target_ref),
             semantic_call_fn=semantic_call,
             host_metadata={
-                "output_ref": brief_ref,
-                "output_refs": [brief_ref],
+                **(
+                    {"output_refs": [], "output_dirs": [], "read_scope": "declared"}
+                    if budget_only
+                    else {"output_ref": brief_ref, "output_refs": [brief_ref]}
+                ),
                 "task_id": "orientation",
                 "stage_ref": work_ref(root, "orientation"),
             },
@@ -218,7 +273,7 @@ def run_problem_orientation(
                 ),
             }
         elif isinstance(assessment, SemanticRepresentationFailure):
-            if proof_brief:
+            if brief_only:
                 return {
                     "stage_status": "SEMANTIC_FAILED",
                     "semantic_failure": representation_failure_payload(
@@ -317,6 +372,7 @@ def build_problem_extraction_prompt(
     *,
     workdir: Path,
     recommend_mode: bool = False,
+    requested_mode: str | None = None,
 ) -> str:
     context = {
         "recommend_mode": recommend_mode,
@@ -327,6 +383,8 @@ def build_problem_extraction_prompt(
             )
         ],
     }
+    if standard_workflow(workdir):
+        context["requested_mode"] = requested_mode
     return render_role_task(
         "orientation/extraction.md",
         workdir=workdir,
@@ -334,7 +392,9 @@ def build_problem_extraction_prompt(
     )
 
 
-def problem_extraction_output_schema(*, recommend_mode: bool = False) -> dict[str, Any]:
+def problem_extraction_output_schema(
+    *, recommend_mode: bool = False, combined: bool = False
+) -> dict[str, Any]:
     locator = {
         "start_line": INTEGER,
         "end_line": INTEGER,
@@ -350,6 +410,10 @@ def problem_extraction_output_schema(*, recommend_mode: bool = False) -> dict[st
     schema = open_object(fields)
     if recommend_mode:
         schema["required"] = list(fields)
+    if combined:
+        # Only literal target and mode are acceptance-critical. Each supplementary
+        # field is validated independently from the committed extraction.
+        schema["properties"]["initial_context"] = open_object()
     return schema
 
 

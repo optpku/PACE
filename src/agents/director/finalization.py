@@ -31,6 +31,7 @@ from pace.contracts.proof.binding import (
     resolve_verification,
 )
 from pace.pipeline_types import PipelineResult
+from pace.orchestrator.writing.tasks import writing_artifacts
 from pace.reporting.terminal_report import (
     FINAL_REPORT_SCHEMA_VERSION,
     FinalReportEnvelope,
@@ -255,15 +256,10 @@ def finalize_director_led(
         "target_contract_id": target_id,
         "target_contract_unavailable": not target_available,
         "proof_binding": proof_binding,
-        "research_binding": {},
-        "literal_resolution_ref": "",
-        "routing_decision_ref": "",
-        "orientation_routing_requested": False,
         "execution_mode": "research",
         "mode_source": execution_policy["mode_source"],
         "mode_reason": execution_policy["mode_reason"],
         "artifact_refs": artifact_refs,
-        "final_provenance_valid": bool(chain_is_complete),
         "director_state": {
             "phase": state_phase,
             "round_index": state.round_index,
@@ -336,8 +332,10 @@ def finalize_director_led(
         final_report=report,
     )
 
+    visible_refs = {**envelope.artifact_refs, **writing_artifacts(root)}
+
     def resolve_artifact(name: str) -> Path | None:
-        ref = str(envelope.artifact_refs.get(name) or "")
+        ref = str(visible_refs.get(name) or "")
         if not ref or not _existing_safe_ref(root, ref):
             return None
         return _safe_existing_path(root, ref)

@@ -26,8 +26,21 @@ def record_model_failure(root: Path, error) -> None:
         cancel_model_calls(root)
 
 
+def saved_execution_config(root: Path, writing_request_ref: str = "") -> dict:
+    """Read the last execution settings for this turn or this writing request."""
+    path = root / work_ref(root, "state/sessions.json")
+    if path.is_file():
+        for row in reversed(json.loads(path.read_text())):
+            if row.get(
+                "writing_request_ref", writing_request_ref
+            ) == writing_request_ref and row.get("effective_config"):
+                return row["effective_config"]
+    path = root / work_ref(root, "config.json")
+    return json.loads(path.read_text()) if path.is_file() else {}
+
+
 @contextmanager
-def run_session(root: Path, *, profile=False, config=None):
+def run_session(root: Path, *, config=None, writing_request_ref: str = ""):
     root = root.resolve()
     ref = root / work_ref(root, "state/sessions.json")
     rows = json.loads(ref.read_text()) if ref.is_file() else []
@@ -40,6 +53,7 @@ def run_session(root: Path, *, profile=False, config=None):
     row = {
         "started_at": datetime.now(timezone.utc).isoformat(),
         "status": "running",
+        "writing_request_ref": writing_request_ref,
         "elapsed_seconds": 0,
         "os_exit_code": None,
         "exit_code_note": "Host session record; OS exit code is not observed in-process.",
@@ -52,7 +66,6 @@ def run_session(root: Path, *, profile=False, config=None):
             for key, value in asdict(config).items()
         }
     for name, key in (
-        ("config.json", "config"),
         ("state/research_execution_policy.json", "policy"),
         ("resources/manifest.json", "resources"),
     ):
@@ -70,7 +83,12 @@ def run_session(root: Path, *, profile=False, config=None):
     rows.append(row)
     _write_json_atomic(ref, rows)
     started = time.monotonic()
-    _ACTIVE[str(root)] = (started, sum(x.get("elapsed_seconds", 0) for x in rows[:-1]))
+    previous_math_time = sum(
+        x.get("elapsed_seconds", 0)
+        for x in rows[:-1]
+        if not x.get("writing_request_ref")
+    )
+    _ACTIVE[str(root)] = (started, previous_math_time)
     try:
         yield
         failure = model_failure(root)
@@ -102,6 +120,7 @@ def run_session(root: Path, *, profile=False, config=None):
 
 
 def budget_exhausted(root: Path) -> str:
+    root = root.resolve()
     policy_path = root / work_ref(root, "state/research_execution_policy.json")
     if not policy_path.is_file():
         return ""
@@ -109,8 +128,18 @@ def budget_exhausted(root: Path) -> str:
     if policy.get("max_calls"):
         from pace.artifacts.events import read_events
 
+        writing_calls = {
+            "research_report_outline",
+            "research_report_writer",
+            "theory_paper_outline",
+            "theory_paper_writer",
+        }
         if (
-            sum(x["event_kind"] == "SEMANTIC_CALL_STARTED" for x in read_events(root))
+            sum(
+                event["event_kind"] == "SEMANTIC_CALL_STARTED"
+                and event.get("call_name") not in writing_calls
+                for event in read_events(root)
+            )
             >= policy["max_calls"]
         ):
             return "TOTAL_CALL_BUDGET_EXHAUSTED"

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from test_research_memory import ws, task
+from test_research_memory import ws, task, record_report
 from pace.agents.director.context import freeze_context, validate_context
 from pace.artifacts.workspace import work_ref
 from pace.agents.director.loop import DirectorLedEngine
@@ -57,7 +57,7 @@ def test_parallel_inputs_frozen_before_planner_finishes(ws, monkeypatch):
         return {'agent_id':kw['agent_id'],'status':'SUCCEEDED','deliverable_ref':kw['output_ref']}
     engine=DirectorLedEngine(workdir=ws.root,director=lambda **_:decision,
         composer=lambda **_:PromptComposerResult('Task',''),specialists={'planner':author,'research':author},
-        target_contract_id='TARGET',max_rounds=2, commit_memory=commit_round_memory, commit_results=publish_stage_findings)
+        reporter=lambda ref: record_report(ws, ref), target_contract_id='TARGET',max_rounds=2, commit_memory=commit_round_memory, commit_results=publish_stage_findings)
     def interrupt_after_parent_commit(state):
         assert state.phase == 'DIRECTOR' and state.last_batch_result_ref
         raise KeyboardInterrupt
@@ -86,10 +86,15 @@ def test_parallel_inputs_frozen_before_planner_finishes(ws, monkeypatch):
     # Both batch members, including a rejection with no published finding,
     # must be visible at the next scheduling boundary.
     reviews = [ws.work_ref(f"round{i}/findings/local.verification.json") for i in (1, 2, 3)]
-    for ref in reviews:
-        ws.write_text(ref.replace(".verification.json", ".md"),
-                      "The original manuscript with a rejected application.")
+    for index, ref in enumerate(reviews, 1):
+        source = ref.replace(".verification.json", ".md")
+        ws.write_text(source, "The original manuscript with a rejected application.")
         ws.write_json(ref, {"verdict": {"stage_status": "MATH_FAIL"}})
+        if index == 1:
+            result = json.loads(ws.path(refs[0]).read_text())
+            ws.write_json(refs[0], {**result, "published_refs": [source]})
+        elif index == 2:
+            record_report(ws, refs[1], [source])
     inputs = engine._director_input_refs(engine._load_state())
     assert all(ref in inputs for ref in [*refs, *reviews[:2]])
     assert reviews[2] not in inputs
@@ -227,7 +232,7 @@ def test_survey_informs_the_next_work_order_without_closing_obligation(ws, hypot
         return {"agent_id": kw["agent_id"], "status": "SUCCEEDED", "deliverable_ref": kw["output_ref"]}
     engine = DirectorLedEngine(workdir=ws.root, director=director,
                                composer=lambda **_: PromptComposerResult("Inspect the stated gap.", "composer"),
-                               specialists={"survey": author, "research": author}, max_rounds=2, commit_memory=commit_round_memory, commit_results=publish_stage_findings)
+                               specialists={"survey": author, "research": author}, reporter=lambda ref: record_report(ws, ref), max_rounds=2, commit_memory=commit_round_memory, commit_results=publish_stage_findings)
     assert engine.run().phase == "FINALIZE"
     assignment = json.loads(ws.path(ws.work_ref("round2/assignment/task.json")).read_text())
     assert assignment["prompt_brief"] == gap and survey_ref in assignment["input_refs"]

@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from pace.artifacts.workspace import _write_json_atomic, is_rci_critic_material
-from pace.runtime.prompts import render_prompt_template
+from pace.runtime.prompts import standard_workflow, render_prompt_template
 
 from .phase_runner import BudgetedPhaseRunner, RciBudgetExhausted, RciPhaseError
 from .roles import AUTHORS, PHASE_ACTIONS
@@ -43,6 +43,8 @@ class RciPipeline:
         candidate = research_problem_ref
         draft = ""
         base = ""
+        repaired = set()
+        compact = standard_workflow(root)
         next_phase = (
             "MECHANISM_EXPLORER"
             if research_operation == "CONTINUE_PROBLEM"
@@ -103,6 +105,8 @@ class RciPipeline:
             }
 
         def review_mechanism(ref, *, previous=""):
+            identity = (candidate, mechanisms[ref])
+            previous_gaps = sorted(gap for key, gap in repaired if key == identity)
             review = call(
                 "MECHANISM_CRITIC",
                 {
@@ -111,9 +115,20 @@ class RciPipeline:
                     "PREVIOUS_MECHANISM": previous,
                     "RELATED_MECHANISM": [item for item in mechanisms if item != ref],
                 },
-                routing={"candidate_ref": candidate, "mechanism_ref": ref},
+                actions=("LOCAL_REPAIR", "ROUTE_DECISION") if compact else (),
+                routing={
+                    "candidate_ref": candidate,
+                    "mechanism_ref": ref,
+                    **({"previous_local_gaps": previous_gaps} if compact else {}),
+                },
             )
             evidence.append(review["review_ref"])
+            if review.get("action") == "LOCAL_REPAIR":
+                key = (identity, review["gap_id"].strip().casefold())
+                if key not in repaired:
+                    repaired.add(key)
+                    return ref
+            return ""
 
         status = "HANDOFF"
         reason = "research_handoff"
@@ -148,9 +163,12 @@ class RciPipeline:
                             if value != identity
                         }
                         mechanisms[ref] = identity
-                        review_mechanism(
+                        repair = review_mechanism(
                             ref, previous=proposal.get("base_mechanism_ref", "")
                         )
+                        if repair:
+                            base = repair
+                            continue
                     next_phase = "CONJECTURE_EXPLORER"
                     base = ""
                     continue
@@ -209,7 +227,9 @@ class RciPipeline:
                     base = decision.get("mechanism_ref", "")
                     next_phase = "MECHANISM_EXPLORER"
                 elif action == "REVIEW_MECHANISM":
-                    review_mechanism(decision["mechanism_ref"])
+                    base = review_mechanism(decision["mechanism_ref"])
+                    if base:
+                        next_phase = "MECHANISM_EXPLORER"
                 else:
                     phase = (
                         "BLIND_PROVER_PROBE"

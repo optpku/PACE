@@ -254,12 +254,9 @@ def run_batch(engine, state, *, control_context):
         },
     )
     winner = next((item for item in results if item.terminal_result == "PASS"), None)
-    from pace.contracts.research.memory import reporter_owned
 
     # A winning proof does not discard a sibling's required reporting handoff.
-    if any(item.phase == "FAILED" for item in results) and (
-        winner is None or reporter_owned(engine.workdir)
-    ):
+    if any(item.phase == "FAILED" for item in results):
         return engine._fail_round(
             state,
             state.round_index,

@@ -1,2 +1,5 @@
 {{brief}}
 For each DISPATCH, including each entry in parallel_tasks, provide its own obligation_ids, branch_id, archive_refs, next_step_kind and change_refs. Use obligation target and branch b-target before a route exists. Planner explicitly chooses INITIAL_PLAN or REPLAN. REPLAN requires change_refs. Other roles use CONTINUE for ordinary work, APPLY_EXISTING for applying an existing result, or REASSESS for reassessing a line of work. STOP leaves dispatch fields empty.
+Use existing obligation IDs for temporary tasks and put the specific gap in prompt_brief. Use Planner for a shared dependency or route decision, not to create a name for a task.
+
+Use target_progress to assess the literal goal across branches. When local work accumulates, name the missing inference to a required conclusion. Dispatch that bridge directly when clear. Ask Planner only for a consequential unresolved route choice. An advisory count alone never schedules a call.

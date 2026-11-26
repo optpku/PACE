@@ -130,9 +130,20 @@ class DirectorDecision:
 class DirectorProtocolError(ValueError):
     """Raised when a Director response violates the Host protocol."""
 
-    def __init__(self, message: str, *, field: str = "") -> None:
+    def __init__(
+        self, message: str, *, field: str = "", related_fields: tuple[str, ...] = ()
+    ) -> None:
         super().__init__(message)
         self.field = field
+        self.related_fields = related_fields
+
+    def for_companion(self, index: int) -> "DirectorProtocolError":
+        prefix = f"parallel_tasks/{index}"
+        return DirectorProtocolError(
+            str(self),
+            field=f"{prefix}/{self.field}".rstrip("/"),
+            related_fields=tuple(f"{prefix}/{field}" for field in self.related_fields),
+        )
 
 
 def director_decision_schema(
@@ -232,148 +243,138 @@ def specialist_spec(agent_id: str) -> SpecialistSpec:
         ) from exc
 
 
-def parse_director_decision(payload: Mapping[str, Any]) -> DirectorDecision:
+def parse_director_decision(
+    payload: Mapping[str, Any], *, errors: list[DirectorProtocolError] | None = None
+) -> DirectorDecision:
     """Parse one scheduling response; agents choose mathematical guidance."""
 
     if not isinstance(payload, Mapping):
         raise DirectorProtocolError("director decision must be a JSON object")
     allowed_fields = DIRECTOR_FIELDS | MEMORY_DIRECTOR_FIELDS | {"stop_reason"}
-    if not DIRECTOR_REQUIRED_FIELDS.issubset(payload) or set(payload) - allowed_fields:
-        missing = sorted(DIRECTOR_REQUIRED_FIELDS.difference(payload))
-        extra = sorted(set(payload).difference(allowed_fields))
-        details = []
-        if missing:
-            details.append(f"missing fields: {missing}")
-        if extra:
-            details.append(f"unexpected fields: {extra}")
-        raise DirectorProtocolError(
-            "director decision fields are closed"
-            + (" (" + "; ".join(details) + ")" if details else "")
+    missing = sorted(DIRECTOR_REQUIRED_FIELDS.difference(payload))
+    extra = sorted(set(payload).difference(allowed_fields))
+    if missing or extra:
+        invalid = (*missing, *extra)
+        exc = DirectorProtocolError(
+            f"director decision fields are closed (missing {missing}, unexpected {extra})",
+            field=invalid[0],
+            related_fields=invalid[1:],
         )
+        if errors is None:
+            raise exc
+        errors.append(exc)
 
     action_value = payload.get("action")
     if not isinstance(action_value, str) or action_value not in DIRECTOR_ACTIONS:
         raise DirectorProtocolError("action must be DISPATCH or STOP", field="action")
     action = DirectorAction(action_value)
 
-    agent_id = _text(payload.get("agent_id", ""), "agent_id")
-    prompt_brief = _text(payload.get("prompt_brief", ""), "prompt_brief")
-    rationale = _text(payload.get("rationale", ""), "rationale")
-    input_refs = _string_tuple(payload.get("input_refs", []), "input_refs")
+    def read(field, convert, default):
+        try:
+            return convert(payload.get(field, default), field)
+        except DirectorProtocolError as exc:
+            if errors is None:
+                raise
+            errors.append(exc)
+            return convert(default, field)
+
     companions = payload.get("parallel_tasks", [])
     if not isinstance(companions, list) or len(companions) > 1:
-        raise DirectorProtocolError(
-            "parallel_tasks permits at most one independent companion"
+        exc = DirectorProtocolError(
+            "parallel_tasks permits at most one independent companion",
+            field="parallel_tasks",
         )
+        if errors is None:
+            raise exc
+        errors.append(exc)
+        companions = []
     tasks = []
     for index, task in enumerate(companions):
-        if (
-            not isinstance(task, Mapping)
-            or not DIRECTOR_REQUIRED_FIELDS <= set(task)
-            or set(task) - (DIRECTOR_FIELDS | MEMORY_DIRECTOR_FIELDS)
-            or "parallel_tasks" in task
-        ):
-            raise DirectorProtocolError(
-                "parallel task must be a single dispatch, without nested tasks"
-            )
         try:
-            parsed = parse_director_decision(task)
+            if errors is not None and isinstance(task, Mapping):
+                # Diagnose an extra or missing field without losing unrelated
+                # controls in this companion's otherwise readable receipt.
+                unexpected = set(task) - (
+                    (DIRECTOR_FIELDS | MEMORY_DIRECTOR_FIELDS) - {"parallel_tasks"}
+                )
+                for field in sorted(unexpected):
+                    errors.append(
+                        DirectorProtocolError(
+                            "unexpected field in a parallel dispatch",
+                            field=f"parallel_tasks/{index}/{field}",
+                        )
+                    )
+                task = {
+                    key: value for key, value in task.items() if key not in unexpected
+                }
+            elif (
+                not isinstance(task, Mapping)
+                or not DIRECTOR_REQUIRED_FIELDS <= set(task)
+                or set(task) - (DIRECTOR_FIELDS | MEMORY_DIRECTOR_FIELDS)
+                or "parallel_tasks" in task
+            ):
+                raise DirectorProtocolError(
+                    "parallel task must be a single dispatch, without nested tasks"
+                )
+            task_errors = [] if errors is not None else None
+            parsed = parse_director_decision(task, errors=task_errors)
+            if parsed.action is not DirectorAction.DISPATCH:
+                raise DirectorProtocolError(
+                    "parallel task must DISPATCH", field="action"
+                )
         except DirectorProtocolError as exc:
-            raise DirectorProtocolError(
-                str(exc), field=f"parallel_tasks/{index}/{exc.field}"
-            ) from exc
-        if parsed.action is not DirectorAction.DISPATCH:
-            raise DirectorProtocolError("parallel task must DISPATCH")
+            if errors is None:
+                raise exc.for_companion(index) from exc
+            errors.append(exc.for_companion(index))
+            continue
+        if errors is not None:
+            errors.extend(exc.for_companion(index) for exc in task_errors)
         tasks.append(parsed)
 
     decision = DirectorDecision(
         action=action,
-        agent_id=agent_id,
-        prompt_brief=prompt_brief,
-        input_refs=input_refs,
-        rationale=rationale,
+        agent_id=read("agent_id", _text, ""),
+        prompt_brief=read("prompt_brief", _text, ""),
+        input_refs=read("input_refs", _string_tuple, []),
+        rationale=read("rationale", _text, ""),
         parallel_tasks=tuple(tasks),
-        obligation_ids=_string_tuple(
-            payload.get("obligation_ids", []), "obligation_ids"
-        ),
-        branch_id=_text(payload.get("branch_id", ""), "branch_id"),
-        archive_refs=_string_tuple(payload.get("archive_refs", []), "archive_refs"),
-        next_step_kind=_text(payload.get("next_step_kind", ""), "next_step_kind"),
-        change_refs=_string_tuple(payload.get("change_refs", []), "change_refs"),
-        stop_reason=_text(payload.get("stop_reason", ""), "stop_reason"),
-        research_operation=_text(
-            payload.get("research_operation", ""), "research_operation"
-        ),
-        research_problem_ref=_text(
-            payload.get("research_problem_ref", ""), "research_problem_ref"
-        ),
+        obligation_ids=read("obligation_ids", _string_tuple, []),
+        branch_id=read("branch_id", _text, ""),
+        archive_refs=read("archive_refs", _string_tuple, []),
+        next_step_kind=read("next_step_kind", _text, ""),
+        change_refs=read("change_refs", _string_tuple, []),
+        stop_reason=read("stop_reason", _text, ""),
+        research_operation=read("research_operation", _text, ""),
+        research_problem_ref=read("research_problem_ref", _text, ""),
     )
-    validate_director_decision(decision)
+    issues = _decision_errors(decision)
+    if errors is None:
+        error = next(issues, None)
+        if error is not None:
+            raise error
+    else:
+        errors.extend(issues)
     return decision
 
 
 def validate_director_decision(decision: DirectorDecision) -> None:
     """Check only Host-owned scheduling invariants."""
-
     if not isinstance(decision, DirectorDecision):
         raise DirectorProtocolError("decision must be a DirectorDecision")
-    if decision.next_step_kind:
-        if decision.next_step_kind not in NEXT_STEP_KINDS:
-            raise DirectorProtocolError(
-                "unsupported next_step_kind", field="next_step_kind"
-            )
-        if not decision.obligation_ids or not decision.branch_id.strip():
-            raise DirectorProtocolError(
-                "memory dispatch requires obligation_ids and branch_id",
-                field="obligation_ids",
-            )
-        if (
-            decision.next_step_kind in {"INITIAL_PLAN", "REPLAN"}
-            and decision.agent_id != "planner"
-        ):
-            raise DirectorProtocolError(
-                "planning purpose requires Planner", field="next_step_kind"
-            )
-        if decision.agent_id == "planner" and decision.next_step_kind not in {
-            "INITIAL_PLAN",
-            "REPLAN",
-        }:
-            raise DirectorProtocolError(
-                "Planner requires INITIAL_PLAN or REPLAN", field="next_step_kind"
-            )
-        if decision.next_step_kind == "REPLAN" and not decision.change_refs:
-            raise DirectorProtocolError(
-                "REPLAN requires concrete change_refs", field="change_refs"
-            )
-    if sum(t.agent_id == "planner" for t in (decision, *decision.parallel_tasks)) > 1:
-        raise DirectorProtocolError("a batch can have at most one Planner")
-    if decision.action is DirectorAction.DISPATCH:
-        specialist_spec(decision.agent_id)
-    if decision.agent_id == "rci" and decision.action is DirectorAction.DISPATCH:
-        if decision.research_operation not in {"NEW_PROBLEM", "CONTINUE_PROBLEM"}:
-            raise DirectorProtocolError(
-                "RCI requires an explicit research operation",
-                field="research_operation",
-            )
-        if (
-            decision.research_operation == "CONTINUE_PROBLEM"
-            and not decision.research_problem_ref
-        ):
-            raise DirectorProtocolError(
-                "continued RCI requires research_problem_ref",
-                field="research_problem_ref",
-            )
-    elif decision.research_operation or decision.research_problem_ref:
-        raise DirectorProtocolError(
-            "research operation fields are only for RCI; "
-            "omit or clear both research_operation and research_problem_ref for other agents",
-            field="research_operation"
-            if decision.research_operation
-            else "research_problem_ref",
-        )
+    error = next(_decision_errors(decision), None)
+    if error is not None:
+        raise error
+    for index, task in enumerate(decision.parallel_tasks):
+        try:
+            validate_director_decision(task)
+        except DirectorProtocolError as exc:
+            raise exc.for_companion(index) from exc
+
+
+def _decision_errors(decision: DirectorDecision):
     if decision.action is DirectorAction.STOP:
         if decision.stop_reason and decision.stop_reason not in DIRECTOR_STOP_REASONS:
-            raise DirectorProtocolError("unsupported stop_reason", field="stop_reason")
+            yield DirectorProtocolError("unsupported stop_reason", field="stop_reason")
         for field in (
             "agent_id",
             "prompt_brief",
@@ -384,32 +385,95 @@ def validate_director_decision(decision: DirectorDecision) -> None:
             "archive_refs",
             "next_step_kind",
             "change_refs",
+            "research_operation",
+            "research_problem_ref",
         ):
             if getattr(decision, field):
-                raise DirectorProtocolError(
+                yield DirectorProtocolError(
                     "STOP must not dispatch an agent or select inputs", field=field
                 )
         return
 
+    if decision.action is not DirectorAction.DISPATCH:
+        yield DirectorProtocolError("unsupported Director action", field="action")
+        return
+
+    if decision.next_step_kind:
+        if decision.next_step_kind not in NEXT_STEP_KINDS:
+            yield DirectorProtocolError(
+                "unsupported next_step_kind", field="next_step_kind"
+            )
+        if not decision.obligation_ids:
+            yield DirectorProtocolError(
+                "memory dispatch requires obligation_ids", field="obligation_ids"
+            )
+        if not decision.branch_id.strip():
+            yield DirectorProtocolError(
+                "memory dispatch requires branch_id", field="branch_id"
+            )
+        if (
+            decision.next_step_kind in {"INITIAL_PLAN", "REPLAN"}
+            and decision.agent_id != "planner"
+        ):
+            yield DirectorProtocolError(
+                "planning purpose requires Planner", field="next_step_kind"
+            )
+        if decision.agent_id == "planner" and decision.next_step_kind not in {
+            "INITIAL_PLAN",
+            "REPLAN",
+        }:
+            yield DirectorProtocolError(
+                "Planner requires INITIAL_PLAN or REPLAN", field="next_step_kind"
+            )
+        if decision.next_step_kind == "REPLAN" and not decision.change_refs:
+            yield DirectorProtocolError(
+                "REPLAN requires concrete change_refs", field="change_refs"
+            )
+
+    if len(decision.parallel_tasks) > 1:
+        yield DirectorProtocolError(
+            "at most two tasks may run concurrently", field="parallel_tasks"
+        )
+    for index, companion in enumerate(decision.parallel_tasks):
+        if companion.action is not DirectorAction.DISPATCH or companion.parallel_tasks:
+            yield DirectorProtocolError(
+                "parallel tasks must be non-nested dispatches",
+                field=f"parallel_tasks/{index}",
+            )
+        if decision.agent_id == companion.agent_id == "planner":
+            yield DirectorProtocolError(
+                "a batch can have at most one Planner", field=f"parallel_tasks/{index}"
+            )
+    try:
+        specialist_spec(decision.agent_id)
+    except DirectorProtocolError as exc:
+        yield exc
+    if decision.agent_id == "rci":
+        if decision.research_operation not in {"NEW_PROBLEM", "CONTINUE_PROBLEM"}:
+            yield DirectorProtocolError(
+                "RCI requires an explicit research operation",
+                field="research_operation",
+            )
+        if (
+            decision.research_operation == "CONTINUE_PROBLEM"
+            and not decision.research_problem_ref
+        ):
+            yield DirectorProtocolError(
+                "continued RCI requires research_problem_ref",
+                field="research_problem_ref",
+            )
+    else:
+        for field in ("research_operation", "research_problem_ref"):
+            if getattr(decision, field):
+                yield DirectorProtocolError(
+                    "research operation fields are only for RCI", field=field
+                )
     if decision.stop_reason:
-        raise DirectorProtocolError(
+        yield DirectorProtocolError(
             "DISPATCH must not carry a stop_reason", field="stop_reason"
         )
-    if decision.action is not DirectorAction.DISPATCH:
-        raise DirectorProtocolError("unsupported Director action", field="action")
-    if len(decision.parallel_tasks) > 1:
-        raise DirectorProtocolError("at most two tasks may run concurrently")
-    for index, task in enumerate(decision.parallel_tasks):
-        if task.action is not DirectorAction.DISPATCH or task.parallel_tasks:
-            raise DirectorProtocolError("parallel tasks must be non-nested dispatches")
-        try:
-            validate_director_decision(task)
-        except DirectorProtocolError as exc:
-            raise DirectorProtocolError(
-                str(exc), field=f"parallel_tasks/{index}/{exc.field}".rstrip("/")
-            ) from exc
     if not decision.prompt_brief.strip():
-        raise DirectorProtocolError(
+        yield DirectorProtocolError(
             "DISPATCH requires a non-empty prompt_brief", field="prompt_brief"
         )
 
@@ -422,17 +486,23 @@ def validate_director_stop(
 ) -> None:
     if decision.action is not DirectorAction.STOP:
         return
-    if not decision.stop_reason or not decision.rationale.strip():
-        raise DirectorProtocolError(
-            "STOP requires a structured stop_reason and a concrete rationale",
-            field="action",
-        )
     if decision.stop_reason == "BUDGET_EXHAUSTED" and not (
         proof_states_remaining == 0 or research_rounds_remaining == 0
     ):
         raise DirectorProtocolError(
             "Host budget is not exhausted; choose a bounded DISPATCH using the committed evidence.",
             field="action",
+        )
+    missing = tuple(
+        field
+        for field in ("stop_reason", "rationale")
+        if not getattr(decision, field).strip()
+    )
+    if missing:
+        raise DirectorProtocolError(
+            "STOP requires a structured stop_reason and a concrete rationale",
+            field=missing[0],
+            related_fields=missing[1:],
         )
 
 
@@ -444,48 +514,66 @@ def validate_director_reference_bindings(
     Reading suggestions are advisory; the continuation pointer is executable
     input and must be checked before committing a dispatch.
     """
+    error = next(director_reference_errors(decision, workdir), None)
+    if error is not None:
+        raise error
+
+
+def director_reference_errors(
+    decision: DirectorDecision, workdir: Path, *, require_bindings: bool = False
+):
     from pace.artifacts.workspace import is_call_path, path_has_symlink_component
+    from pace.contracts.research.memory import binding, check_source_ownership
 
     root = Path(workdir).resolve()
+    checked = {}
     for index, task in enumerate((decision, *decision.parallel_tasks)):
-        if task.next_step_kind:
-            from pace.contracts.research.memory import binding, check_source_ownership
-
-            for item in (*task.input_refs, *task.archive_refs, *task.change_refs):
-                check_source_ownership(root, binding(root, item))
+        prefix = "" if index == 0 else f"parallel_tasks/{index - 1}/"
+        if require_bindings or task.next_step_kind:
+            for field in ("input_refs", "archive_refs", "change_refs"):
+                for ref in getattr(task, field):
+                    if ref not in checked:
+                        try:
+                            check_source_ownership(root, binding(root, ref))
+                        except (OSError, ValueError) as exc:
+                            checked[ref] = str(exc)
+                        else:
+                            checked[ref] = ""
+                    if checked[ref]:
+                        yield DirectorProtocolError(checked[ref], field=prefix + field)
         ref = task.research_problem_ref
         if not ref:
             continue
         path = Path(ref)
-        field = (
-            "research_problem_ref"
-            if index == 0
-            else f"parallel_tasks/{index - 1}/research_problem_ref"
-        )
+        field = prefix + "research_problem_ref"
         if (
-            ref not in task.input_refs
-            or ref != ref.strip()
+            ref != ref.strip()
             or path.is_absolute()
             or PureWindowsPath(ref).drive
             or "\\" in ref
-            or any(part in {".", ".."} for part in ref.split("/"))
+            or any(part in {".", "..", ""} for part in ref.split("/"))
             or is_call_path(path)
             or path.name.startswith("private_")
         ):
-            raise DirectorProtocolError(
-                "research_problem_ref must be an exact run-relative question file "
-                "listed in input_refs; put question descriptions in prompt_brief",
+            yield DirectorProtocolError(
+                "research_problem_ref must be an exact run-relative question file",
                 field=field,
+                related_fields=(prefix + "input_refs",),
             )
-        candidate = root / path
-        if (
-            path_has_symlink_component(root, candidate)
-            or not candidate.resolve().is_relative_to(root)
-            or not candidate.is_file()
+        elif (
+            path_has_symlink_component(root, root / path)
+            or not (root / path).resolve().is_relative_to(root)
+            or not (root / path).is_file()
         ):
-            raise DirectorProtocolError(
+            yield DirectorProtocolError(
                 f"research_problem_ref does not name an existing workspace file: {ref}",
                 field=field,
+                related_fields=(prefix + "input_refs",),
+            )
+        elif ref not in task.input_refs:
+            yield DirectorProtocolError(
+                "include the exact research_problem_ref in input_refs",
+                field=prefix + "input_refs",
             )
 
 

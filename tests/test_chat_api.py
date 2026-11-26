@@ -98,7 +98,7 @@ def test_kernel_native_writable_paths_match_prompt_without_host_receipt(ws, monk
             assert note in system and receipt not in system
             return NativeFixture.tool('write_file', {'path':note,'content':'The target still needs a connecting argument.'})
         assert 'error' not in json.loads(messages[-1]['content'])
-        return NativeFixture.tool('submit_result', {'stage_status':'MATH_FAIL','gap':'Missing connection.'})
+        return NativeFixture.tool('submit_result', {'stage_status':'MATH_FAIL','summary':'Missing connection.','proof_location':'Final inference.'})
     monkeypatch.setattr(llm, '_request', reply)
     result = run_math_verifier_kernel(proof_id='P1',proof_ref=proof,target_contract_id='TARGET',
         relation_llm=llm,workdir=ws.root,artifact_refs={'proof_file':proof},output_ref=receipt)
@@ -362,8 +362,7 @@ def test_specialist_uses_frozen_archive_even_when_live_navigation_changes(ws, mo
     from pace.agents.director.dispatch import run_specialist
     from pace.agents.director.context import freeze_context
     from test_research_memory import task
-    from test_research_reporter import NativeFixture, use_reporter
-    use_reporter(ws)
+    from test_research_reporter import NativeFixture
     ws.write_text('memory/optional.md', 'Saved task-specific context.')
     decision = replace(task(agent), archive_refs=('memory/optional.md',))
     assignment = ws.work_ref('round1/assignment/task.json')
@@ -401,8 +400,7 @@ def test_reporter_can_read_request_context_and_optional_archive(ws, monkeypatch)
     from pace.agents.reporter import run_research_reporter
     from pace.agents.director.context import freeze_context
     from test_research_memory import task
-    from test_research_reporter import NativeFixture, use_reporter
-    use_reporter(ws)
+    from test_research_reporter import NativeFixture
     archive = ws.work_ref('orientation/source.md'); ws.write_text(archive, 'Optional source.')
     assignment = ws.work_ref('round1/assignment/task.json')
     frozen = freeze_context(ws.root, assignment, replace(task(),archive_refs=(archive,)), [ws.work_ref('input/problem.md')])

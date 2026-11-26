@@ -8,6 +8,7 @@ from typing import Any
 from pace.agents.prompt_composer import render_role_task
 from pace.agents.roles import SemanticRoleSpec, run_semantic_role
 from pace.artifacts.workspace import work_ref
+from pace.runtime.prompts import standard_workflow
 from pace.runtime.json_values import as_dict as _as_dict
 from pace.runtime.semantic import (
     SemanticInterfaceFailure,
@@ -149,7 +150,12 @@ def build_proof_contract_auditor_prompt(
             ),
         ),
         ("problem orientation", artifact_refs.get("problem_brief_file", "")),
-        ("read completely: current proof", artifact_refs.get("proof_file", "")),
+        (
+            "locate the claimed result, assumptions and target coverage"
+            if standard_workflow(workdir)
+            else "read completely: current proof",
+            artifact_refs.get("proof_file", ""),
+        ),
         (
             "current source authority bundle",
             artifact_refs.get("source_file", "memory/plan_source_bundle.json"),

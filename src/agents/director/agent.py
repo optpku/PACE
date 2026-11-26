@@ -18,13 +18,13 @@ from pace.agents.roles import SemanticRoleSpec
 from pace.artifacts.workspace import work_ref
 from pace.contracts.research.director_protocol import (
     DIRECTOR_PROTOCOL_SCHEMA_VERSION,
-    DISPATCHABLE_AGENT_IDS,
     DirectorProtocolError,
     director_decision_schema,
+    director_reference_errors,
     parse_director_decision,
-    validate_director_reference_bindings,
     validate_director_stop,
 )
+from pace.contracts.research.memory import digest
 from pace.runtime.prompts import (
     load_prompt_template,
     render_prompt_template,
@@ -33,7 +33,9 @@ from pace.runtime.prompts import (
 from pace.runtime.semantic import (
     SemanticCallResult,
     SemanticRepresentationFailure,
+    recover_rejected_receipt,
     semantic_call,
+    validate_semantic_payload,
 )
 
 GLOBAL_DIRECTOR_ROLE = "global_research_director"
@@ -148,67 +150,82 @@ def run_global_director(
         "director/budget.md", workdir=workdir, proof_states=proof_states, rounds=rounds
     )
 
+    schema = director_decision_schema(
+        survey_calls_remaining=survey_remaining, memory_enabled=memory_enabled
+    )
+
     def validate(payload: dict[str, Any]) -> list[dict[str, Any]]:
+        issues = []
         try:
-            decision = parse_director_decision(payload)
-            validate_director_stop(
-                decision,
-                proof_states_remaining=proof_states_remaining,
-                research_rounds_remaining=research_rounds_remaining,
-            )
+            decision = parse_director_decision(payload, errors=issues)
+        except DirectorProtocolError as exc:
+            issues.append(exc)
+        else:
+            try:
+                validate_director_stop(
+                    decision,
+                    proof_states_remaining=proof_states_remaining,
+                    research_rounds_remaining=research_rounds_remaining,
+                )
+            except DirectorProtocolError as exc:
+                issues.append(exc)
             if memory_enabled:
-                for index_in_batch, task in enumerate(
-                    (decision, *decision.parallel_tasks)
-                ):
-                    prefix = (
-                        ""
-                        if index_in_batch == 0
-                        else f"parallel_tasks/{index_in_batch - 1}/"
-                    )
-                    if task.action.value == "DISPATCH" and not task.next_step_kind:
-                        raise DirectorProtocolError(
-                            "new memory protocol requires next_step_kind, obligation_ids and branch_id",
-                            field=prefix + "next_step_kind",
-                        )
-                    if task.action.value == "DISPATCH":
-                        if any(
-                            i not in decision_inputs["obligation_versions"]
-                            for i in task.obligation_ids
-                        ):
-                            raise DirectorProtocolError(
-                                "task references an unknown obligation; Planner must first declare it",
+                for index, task in enumerate((decision, *decision.parallel_tasks)):
+                    if task.action.value != "DISPATCH":
+                        continue
+                    prefix = "" if index == 0 else f"parallel_tasks/{index - 1}/"
+                    if not task.next_step_kind.strip():
+                        missing = ["next_step_kind"]
+                        if not task.obligation_ids:
+                            missing.append("obligation_ids")
+                        if not task.branch_id.strip():
+                            missing.append("branch_id")
+                        for field in missing:
+                            issues.append(
+                                DirectorProtocolError(
+                                    "new memory protocol requires next_step_kind, obligation_ids and branch_id",
+                                    field=prefix + field,
+                                )
+                            )
+                    if any(
+                        i not in decision_inputs["obligation_versions"]
+                        for i in task.obligation_ids
+                    ):
+                        issues.append(
+                            DirectorProtocolError(
+                                "use the closest registered obligation or target within the assigned branch",
                                 field=prefix + "obligation_ids",
                             )
-                        if (
-                            task.next_step_kind == "INITIAL_PLAN"
-                            and decision_inputs["route"]
-                        ):
-                            raise DirectorProtocolError(
-                                "a committed route already exists; use evidence-bound REPLAN for Planner",
+                        )
+                    if (
+                        task.agent_id == "planner"
+                        and task.next_step_kind != "REPLAN"
+                        and decision_inputs["route"]
+                    ):
+                        issues.append(
+                            DirectorProtocolError(
+                                "a committed route already exists; use REPLAN with concrete change_refs",
                                 field=prefix + "next_step_kind",
+                                related_fields=(prefix + "change_refs",),
                             )
-        except ValueError as exc:
-            return [
-                {
-                    "stage": "director_protocol",
-                    "json_pointer": "/" + str(getattr(exc, "field", "")),
-                    "reason_code": "director_decision_invalid",
-                    "message": str(exc),
-                }
-            ]
-        try:
-            validate_director_reference_bindings(decision, Path(workdir))
-        except ValueError as exc:
-            return [
-                {
-                    "stage": "director_protocol",
-                    "json_pointer": "/"
-                    + str(getattr(exc, "field", "research_problem_ref")),
-                    "reason_code": "director_reference_invalid",
-                    "message": str(exc),
-                }
-            ]
-        return []
+                        )
+            issues.extend(
+                director_reference_errors(
+                    decision, Path(workdir), require_bindings=memory_enabled
+                )
+            )
+        diagnostics = []
+        for issue in issues:
+            for field in (issue.field, *issue.related_fields):
+                diagnostics.append(
+                    {
+                        "stage": "director_protocol",
+                        "json_pointer": "/" + field,
+                        "reason_code": "director_decision_invalid",
+                        "message": str(issue),
+                    }
+                )
+        return diagnostics
 
     metadata = {
         "target_contract_id": str(target_contract_id or ""),
@@ -223,25 +240,47 @@ def run_global_director(
     spec = SemanticRoleSpec(
         role=GLOBAL_DIRECTOR_ROLE,
         on_accept=on_accept,
-        schema=lambda: director_decision_schema(
-            survey_calls_remaining=survey_remaining, memory_enabled=memory_enabled
-        ),
+        schema=lambda: schema,
         host_schema_version="research_director_decision/v3"
         if memory_enabled
         else DIRECTOR_PROTOCOL_SCHEMA_VERSION,
         authority="SEARCH_CONTEXT_ONLY",
         fatal_scope="CALL",
+        retain_schema_rejected_payload=True,
     )
     normalizer = _normalize_parallel_purpose if memory_enabled else None
-    result = semantic_call_fn(
-        llm,
-        final_prompt,
-        workdir=Path(workdir),
-        call_name=str(call_name or GLOBAL_DIRECTOR_ROLE),
-        spec=spec.call_spec(normalizer=normalizer, validator=validate),
-        input_refs=refs,
-        host_metadata=metadata,
-    )
+    call_name = str(call_name or GLOBAL_DIRECTOR_ROLE)
+    result = None
+    if on_accept is not None and metadata.get("task_id"):
+        # The round freezes the route, obligation versions, budgets and reads.
+        # A rejected receipt may be reused only for this exact scheduling request.
+        metadata["director_request_digest"] = digest(
+            {
+                "prompt": final_prompt,
+                "schema": schema,
+                "decision_inputs": decision_inputs,
+                "required_refs": refs,
+                "archive_refs": metadata["archive_refs"],
+                "target_contract_id": metadata["target_contract_id"],
+            }
+        )
+        result = recover_rejected_receipt(
+            Path(workdir),
+            call_name=call_name,
+            role=GLOBAL_DIRECTOR_ROLE,
+            metadata=metadata,
+            binding_fields=("task_id", "director_request_digest"),
+        )
+    if result is None:
+        result = semantic_call_fn(
+            llm,
+            final_prompt,
+            workdir=Path(workdir),
+            call_name=call_name,
+            spec=spec.call_spec(normalizer=normalizer, validator=validate),
+            input_refs=refs,
+            host_metadata=metadata,
+        )
     if not isinstance(result, SemanticRepresentationFailure):
         return result
     from pace.runtime.sessions import budget_exhausted
@@ -250,7 +289,17 @@ def run_global_director(
         row.get("stage") == "acceptance" for row in result.diagnostics
     ):
         return result
-    invalid = {str(row.get("json_pointer") or "/") for row in result.diagnostics}
+    diagnostics = list(result.diagnostics)
+    if result.payload:
+        # Transport/schema rejection can precede cross-field validation.
+        # Diagnose both before choosing which original fields to protect.
+        for row in (
+            *validate_semantic_payload(result.payload, schema),
+            *validate(result.payload),
+        ):
+            if row not in diagnostics:
+                diagnostics.append(row)
+    invalid = {row["json_pointer"] for row in diagnostics if row.get("json_pointer")}
     rejected_stop = result.payload.get("action") == "STOP" and "/action" in invalid
     false_budget_stop = (
         rejected_stop
@@ -287,21 +336,10 @@ def run_global_director(
                     "next_step_kind",
                     "change_refs",
                     "stop_reason",
+                    "input_refs",
+                    "archive_refs",
                 )
             )
-            if before.get("agent_id") in DISPATCHABLE_AGENT_IDS - {"rci"}:
-                # These fields have no scheduling meaning for this selected role.
-                # Removing both must not freeze the second one merely because
-                # validation reported the first inapplicable field.
-                keys = tuple(
-                    key
-                    for key in keys
-                    if key
-                    not in {
-                        "research_operation",
-                        "research_problem_ref",
-                    }
-                )
             for key in keys:
                 if key not in before:
                     continue
@@ -328,6 +366,10 @@ def run_global_director(
                     for index, (old, new) in enumerate(zip(value, current)):
                         if isinstance(old, dict) and isinstance(new, dict):
                             preserve(old, new, path + "/" + str(index))
+                    continue
+                if key in {"input_refs", "archive_refs", "change_refs"} and any(
+                    bad.startswith(path + "/") for bad in invalid
+                ):
                     continue
                 if current != value:
                     diagnostics.append(
@@ -358,9 +400,9 @@ def run_global_director(
         )
     return semantic_call_fn(
         llm,
-        correction + json.dumps(list(result.diagnostics), ensure_ascii=False),
+        correction + json.dumps(diagnostics, ensure_ascii=False),
         workdir=Path(workdir),
-        call_name=str(call_name or GLOBAL_DIRECTOR_ROLE) + "_receipt_correction",
+        call_name=call_name + "_receipt_correction",
         spec=spec.call_spec(normalizer=normalizer, validator=validate_correction),
         input_refs=(*refs, raw_ref),
         host_metadata={

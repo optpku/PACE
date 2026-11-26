@@ -680,12 +680,11 @@ class AssignmentExecutor:
             # Commit only a valid Host-bound handoff. Survey acquisition can
             # then resume from it without repeating the model call.
             _write_json(self.workdir / result_ref, result_record)
-            from pace.contracts.research.memory import reporter_owned
 
             if (
                 succeeded
                 and decision.agent_id in {"research", "prover", "rci"}
-                and reporter_owned(self.workdir)
+                and research_memory_enabled(self.workdir)
             ):
                 if self.reporter is None:
                     raise DirectorLedEngineError(
@@ -957,7 +956,7 @@ class AssignmentExecutor:
             )
             return PromptComposerResult(
                 final_prompt=prompt,
-                call_id=manifest["composer_call_id"],
+                call_id=manifest.get("composer_call_id", ""),
             )
 
         from pace.agents.prompt_composer import append_skill_catalog
@@ -992,17 +991,6 @@ class AssignmentExecutor:
                 ),
                 call_id=composer_record.call_id,
             )
-        # Add discovery after composition so it reaches the actual specialist,
-        # even when the Composer condenses its inputs. Committed prompts above
-        # are restored byte-for-byte; RCI owns its phase-specific resources.
-        if decision.agent_id != "rci":
-            composer_record = PromptComposerResult(
-                final_prompt=append_skill_catalog(
-                    composer_record.final_prompt,
-                    workdir=self.workdir,
-                ),
-                call_id=composer_record.call_id,
-            )
         _validate_composer_prompt(composer_record.final_prompt, source="task prompt")
         _write_text(prompt_path, composer_record.final_prompt)
         _write_json(
@@ -1011,7 +999,11 @@ class AssignmentExecutor:
                 "schema_version": DIRECTOR_LED_ROUND_SCHEMA_VERSION,
                 "round_index": round_index,
                 "agent_id": decision.agent_id,
-                "composer_call_id": composer_record.call_id,
+                **(
+                    {"composer_call_id": composer_record.call_id}
+                    if composer_record.call_id
+                    else {}
+                ),
                 "final_prompt_ref": prompt_ref,
                 "director_decision_ref": self._round_ref(
                     round_index, "director_decision.json"

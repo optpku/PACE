@@ -6,8 +6,18 @@ are trimmed or deduplicated; those differences are part of persisted behavior.
 
 from __future__ import annotations
 
-from typing import Any
 import json
+import re
+from typing import Any
+
+
+def unwrap_json_response(text: str) -> str:
+    """Remove one complete JSON fence from provider output."""
+    text = text.strip()
+    fenced = re.fullmatch(
+        r"```(?:json)?\s*\n(.*)\n```", text, re.DOTALL | re.IGNORECASE
+    )
+    return fenced.group(1).strip() if fenced else text
 
 
 def load_model_json(text: str) -> tuple[Any, tuple[int, ...]]:

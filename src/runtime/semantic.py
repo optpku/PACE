@@ -12,12 +12,21 @@ from pace.artifacts.calls import begin_call, call_directory, finish_call
 from pace.artifacts.events import (
     append_event,
     initialize_events,
+    read_events,
     write_call_summary,
 )
-from pace.artifacts.workspace import _write_json_atomic
+from pace.artifacts.workspace import (
+    _write_json_atomic,
+    path_has_symlink_component,
+    stage_ref,
+)
 from pace.runtime.agent_environment import call_environment
 from pace.runtime.json_values import as_dict as _as_dict
-from pace.runtime.json_values import decode_structured_fields
+from pace.runtime.json_values import (
+    decode_structured_fields,
+    load_model_json,
+    unwrap_json_response,
+)
 from pace.runtime.prompts import render_prompt_template
 from pace.runtime.schema import (
     validate_json_instance as _validate_json_instance,
@@ -36,6 +45,7 @@ class SemanticCallSpec:
     normalizer: Callable[[dict[str, Any]], dict[str, Any]] | None = None
     validator: Callable[[dict[str, Any]], list[dict[str, Any]]] | None = None
     on_accept: Callable[[dict[str, Any]], object] | None = None
+    retain_schema_rejected_payload: bool = False
 
 
 @dataclass(frozen=True)
@@ -72,7 +82,6 @@ class ArtifactCallHandle:
     call_ref: str
     response_ref: str
     invocation_id: str
-    response_text: str
     transport_status: str
     error_code: str = ""
     retry_class: str = "NONE"
@@ -90,6 +99,7 @@ def begin_artifact_call(
     input_refs: Iterable[str | Path],
     metadata: dict[str, Any] | None = None,
     on_started: Callable[[str], None] | None = None,
+    on_transport_success: Callable[[ArtifactCallHandle], None] | None = None,
 ) -> ArtifactCallHandle:
     """Run transport only; the artifact owner must commit one terminal outcome."""
 
@@ -146,7 +156,7 @@ def begin_artifact_call(
         },
     )
     failed = isinstance(result, TransportFailure)
-    return ArtifactCallHandle(
+    handle = ArtifactCallHandle(
         call_id=call_id,
         call_name=call_name,
         role=role,
@@ -156,12 +166,14 @@ def begin_artifact_call(
         .relative_to(root)
         .as_posix(),
         invocation_id=str(getattr(result, "invocation_id", "") or ""),
-        response_text="" if failed else str(getattr(result, "text", "") or ""),
         transport_status="FAILED" if failed else "SUCCESS",
         error_code=str(getattr(result, "error_code", "") or ""),
         retry_class=str(getattr(result, "retry_class", "NONE") or "NONE"),
         suppressed=bool(getattr(result, "suppressed", False)),
     )
+    if on_transport_success is not None and not failed:
+        on_transport_success(handle)
+    return handle
 
 
 def commit_artifact_call_success(
@@ -461,6 +473,18 @@ def _semantic_call_once(
             }
         )
         representation_failed = transport.retry_class == RETRY_MODEL_REPRESENTATION
+        if (
+            spec.retain_schema_rejected_payload
+            and representation_failed
+            and transport.error_code == "output_instance_schema_invalid"
+        ):
+            # Keep parseable fields for the role's correction. A transport
+            # rejection still cannot enter the ordinary acceptance path.
+            try:
+                decoded, _ = load_model_json(unwrap_json_response(raw))
+                payload, _ = decode_structured_fields(decoded, spec.semantic_schema)
+            except ValueError:
+                pass
     else:
         try:
             payload, repairs = decode_structured_fields(
@@ -530,14 +554,7 @@ def _semantic_call_once(
                 **dict(host_metadata or {}),
             },
         }
-        _write_trace(
-            trace_dir,
-            spec=spec,
-            host=host,
-            diagnostics=[],
-            payload=payload,
-            attempt_count=1,
-        )
+        _write_json_atomic(trace_dir / "interface_result.json", {"host": host, "diagnostics": []})
         finish_call(
             root,
             call_ref,
@@ -593,14 +610,12 @@ def _semantic_call_once(
             **dict(host_metadata or {}),
         },
     }
-    _write_trace(
-        trace_dir,
-        spec=spec,
-        host=host,
-        diagnostics=diagnostics,
-        payload=payload,
-        attempt_count=1,
-    )
+    # A failed handoff may need its decoded fields to resume a local correction.
+    # Successful calls already committed the accepted receipt in their owning stage.
+    trace = {"host": host, "diagnostics": diagnostics}
+    if representation_failed or acceptance_failed:
+        trace["payload"] = payload
+    _write_json_atomic(trace_dir / "interface_result.json", trace)
     finish_call(
         root,
         call_ref,
@@ -642,11 +657,89 @@ def _semantic_call_once(
     write_call_summary(root)
     if representation_failed:
         return SemanticRepresentationFailure(
-            payload=dict(payload),
+            payload=_as_dict(payload),
             host=host,
             diagnostics=tuple(diagnostics),
         )
     return SemanticInterfaceFailure(host=host, diagnostics=tuple(diagnostics))
+
+
+def recover_rejected_receipt(
+    root: Path,
+    *,
+    call_name: str,
+    role: str,
+    metadata: dict[str, Any],
+    binding_fields: tuple[str, ...],
+) -> SemanticRepresentationFailure | None:
+    """Resume correction from the latest rejected receipt bound to this task."""
+    stage = metadata.get("stage_ref") or stage_ref(
+        int(metadata.get("round_index") or 0), workdir=root
+    )
+    calls = Path(stage) / "calls"
+    if not (root / calls).is_dir():
+        return None
+    for event in reversed(read_events(root)):
+        if (
+            event.get("event_kind") != "SEMANTIC_CALL_STARTED"
+            or event.get("role") != role
+            or event.get("call_name") != call_name
+        ):
+            continue
+        record_ref = Path(event.get("call_ref") or "")
+        if record_ref.parent.parent != calls:
+            continue
+        call_id = event.get("call_id")
+        record_path = root / record_ref
+        trace_path = record_path.with_name("interface_result.json")
+        if (
+            record_ref.name != "record.json"
+            or record_ref.parent.name != call_id
+            or ".." in record_ref.parts
+            or any(
+                path_has_symlink_component(root, path)
+                for path in (record_path, trace_path)
+            )
+            or not record_path.is_file()
+            or not trace_path.is_file()
+        ):
+            return None
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+        trace = json.loads(trace_path.read_text(encoding="utf-8"))
+        host = trace["host"]
+        previous = host["host_metadata"]
+        response = Path(host["response_ref"])
+        if (
+            record.get("status") not in {"STARTED", "REPRESENTATION_FAILED"}
+            or host.get("interface_status") != "OK"
+            or host.get("semantic_status") != "FAILED"
+            or host.get("retry_owner") == "HOST"
+            or host.get("call_id") != call_id
+            or host.get("call_ref") != record_ref.as_posix()
+            or any(previous.get(key) != metadata[key] for key in binding_fields)
+            or not response.is_relative_to(record_ref.parent / "attempts")
+            or ".." in response.parts
+            or path_has_symlink_component(root, root / response)
+            or not (root / response).is_file()
+        ):
+            return None  # An older attempt cannot replace the latest one.
+        if record["status"] == "STARTED":
+            finish_call(
+                root,
+                record_ref.as_posix(),
+                status="REPRESENTATION_FAILED",
+                response_ref=response.as_posix(),
+                invocation_ids=host["invocation_ids"],
+                error={"diagnostics": trace["diagnostics"]},
+            )
+        elif record.get("response_ref") != response.as_posix():
+            return None
+        return SemanticRepresentationFailure(
+            payload=_as_dict(trace["payload"]),
+            host=host,
+            diagnostics=tuple(trace["diagnostics"]),
+        )
+    return None
 
 
 def validate_semantic_payload(
@@ -721,24 +814,3 @@ def diagnostic_messages(value: Any) -> list[str]:
     if value.get("receipt_corrections"):
         messages.append(f"局部回执纠正已用 {value['receipt_corrections']}/1")
     return list(dict.fromkeys(messages))
-
-
-def _write_trace(
-    trace_dir: Path,
-    *,
-    spec: SemanticCallSpec,
-    host: dict[str, Any],
-    diagnostics: list[dict[str, Any]],
-    payload: dict[str, Any],
-    attempt_count: int,
-) -> None:
-    _write_json_atomic(
-        trace_dir / "interface_result.json",
-        {
-            "host": host,
-            "role": spec.role,
-            "attempt_count": attempt_count,
-            "diagnostics": diagnostics,
-            "payload": payload,
-        },
-    )

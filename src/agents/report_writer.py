@@ -46,7 +46,9 @@ def build_prompt(
     )
 
 
-def run(llm, prompt, *, workdir, outline: bool, input_refs, metadata):
+def run(
+    llm, prompt, *, workdir, outline: bool, input_refs, metadata, on_transport_success=None
+):
     name = "research_report_outline" if outline else "research_report_writer"
     stage = (
         "HOST_RESEARCH_REPORT_OUTLINE" if outline else "HOST_RESEARCH_REPORT_WRITING"
@@ -60,4 +62,5 @@ def run(llm, prompt, *, workdir, outline: bool, input_refs, metadata):
         stage=stage,
         input_refs=input_refs,
         metadata=metadata,
+        on_transport_success=on_transport_success,
     )

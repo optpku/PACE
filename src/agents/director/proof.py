@@ -16,6 +16,7 @@ from pace.runtime.prompts import (
     render_prompt_template,
     validate_resource_snapshot,
 )
+from pace.runtime.sessions import budget_exhausted
 
 
 def initialize_proof_state(ws, *, max_loops, resource_variant):
@@ -62,11 +63,12 @@ def run_proof(pipeline, ws, problem):
         materialize_run_resources(ws.root, resource_variant=state["resource_variant"])
     validate_resource_snapshot(resources, resource_variant=state["resource_variant"])
     target_id = load_active_target(ws.root)["contract_id"]
-    from pace.runtime.sessions import budget_exhausted
-
-    if state["phase"] in {"SURVEY", "PROVE"} and budget_exhausted(ws.root):
-        state.update(phase="FINALIZE", stop_reason=budget_exhausted(ws.root))
-        save()
+    if state["phase"] == "SURVEY" and not ws.path(
+        ws.work_ref("orientation/final_prompt.md")
+    ).is_file():
+        if reason := budget_exhausted(ws.root):
+            state.update(phase="FINALIZE", stop_reason=reason)
+            save()
     if state["phase"] == "SURVEY":
         output = ws.work_ref("orientation/survey.md")
         _run_task(
@@ -83,19 +85,18 @@ def run_proof(pipeline, ws, problem):
         state["phase"] = "PROVE"
         save()
     while state["phase"] in {"PROVE", "VERIFY"}:
-        from pace.runtime.sessions import budget_exhausted
-
-        if state["phase"] == "PROVE" and budget_exhausted(ws.root):
-            state.update(phase="FINALIZE", stop_reason=budget_exhausted(ws.root))
-            save()
-            break
         index = state["loop_index"]
         directory = ws.work_ref(f"round{index}")
         output = f"{directory}/proof.md"
         result_ref = f"{directory}/agent_result.json"
         if state["phase"] == "PROVE":
-            state["loops_started"] = index
-            save()
+            if index > state["loops_started"]:
+                if reason := budget_exhausted(ws.root):
+                    state.update(phase="FINALIZE", stop_reason=reason)
+                    save()
+                    break
+                state["loops_started"] = index
+                save()
             _run_task(
                 pipeline,
                 ws,
@@ -196,8 +197,6 @@ def _run_task(pipeline, ws, state, agent, output, index, brief, target_id):
         archive.mkdir(exist_ok=True)
         saved = archive / f"partial-{len(list(archive.iterdir())) + 1:04d}.md"
         ws.path(output).replace(saved)
-        state["completed_refs"].append(saved.relative_to(ws.root).as_posix())
-        ws.write_json(ws.work_ref("state/proof_state.json"), state)
     survey_sources = ()
     if agent == "prover" and state.get("survey_ref"):
         survey_result = ws.path(
@@ -263,9 +262,7 @@ def _run_task(pipeline, ws, state, agent, output, index, brief, target_id):
             "output_ref": output,
         },
     )
-    from pace.contracts.research.memory import reporter_owned
-
-    if agent == "prover" and reporter_owned(ws.root):
+    if agent == "prover":
         from pace.agents.director.context import freeze_context
         from pace.contracts.research.director_protocol import (
             DirectorAction,

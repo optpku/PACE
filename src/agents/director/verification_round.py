@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import copy
 import json
-import os
-import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,6 +17,7 @@ from pace.agents.kernel import (
 from pace.artifacts.calls import update_agent_call_deliverable
 from pace.artifacts.events import publish_progress
 from pace.artifacts.workspace import (
+    _write_json_atomic,
     is_call_path,
     path_has_symlink_component,
     work_ref,
@@ -32,6 +31,7 @@ from pace.runtime.json_values import (
 from pace.runtime.json_values import (
     one_or_many_dict_rows as _rows,
 )
+from pace.runtime.prompts import standard_workflow
 
 VERIFICATION_AUTHORITY_SCHEMA_VERSION = "verification_authority/v1"
 
@@ -168,13 +168,6 @@ def run_verification_round(ctx: VerificationContext) -> dict[str, Any]:
             stage="auditor",
             status="completed" if audit_status == "PASS" else "needs_work",
         )
-    publish_progress(
-        ctx.workdir,
-        **progress_context,
-        task_id=kernel_task,
-        stage="kernel",
-        status="started",
-    )
     audit_digest = digest(auditor)
 
     kernel = None
@@ -183,6 +176,7 @@ def run_verification_round(ctx: VerificationContext) -> dict[str, Any]:
         nonlocal kernel
         report = attach_math_verifier_metadata(
             payload,
+            compact=standard_workflow(ctx.workdir),
             proof_id=proof_id,
             proof_ref=proof_ref,
             target_contract_id=target_contract_id,
@@ -197,7 +191,26 @@ def run_verification_round(ctx: VerificationContext) -> dict[str, Any]:
     kernel = saved_report(
         ctx.kernel_artifact_ref, "stage_status", {"PASS", "MATH_FAIL"}
     )
-    if audit_status not in {"PASS", "FAIL"}:
+    return_for_scope = standard_workflow(
+        ctx.workdir
+    ) and verification_decision.requires_scope_repair(auditor)
+    if return_for_scope and kernel is None:
+        # Keep the existing candidate binding and repair entry points. This is
+        # a Host scheduling record, never a mathematical verdict by the Kernel.
+        kernel = {
+            "stage_status": "NOT_RUN",
+            "authority": "Host",
+            "reason": "structural_repair_required",
+            "auditor_digest": audit_digest,
+            "proof_id": proof_id,
+            "proof_ref": proof_ref,
+            "target_contract_id": target_contract_id,
+        }
+        if ctx.kernel_artifact_ref:
+            _write_workspace_json(
+                ctx.workdir, ctx.kernel_artifact_ref, kernel, "kernel_artifact_ref"
+            )
+    elif audit_status not in {"PASS", "FAIL"}:
         accept_kernel(
             {
                 "stage_status": "VERIFIER_ERROR",
@@ -210,6 +223,13 @@ def run_verification_round(ctx: VerificationContext) -> dict[str, Any]:
         != audit_digest
     ):
         kernel = None
+        publish_progress(
+            ctx.workdir,
+            **progress_context,
+            task_id=kernel_task,
+            stage="kernel",
+            status="started",
+        )
         response = _run_kernel(
             ctx, target_contract_id=target_contract_id, on_accept=accept_kernel
         )
@@ -226,7 +246,9 @@ def run_verification_round(ctx: VerificationContext) -> dict[str, Any]:
             **progress_context,
             task_id=kernel_task,
             stage="kernel",
-            status="completed"
+            status="skipped"
+            if kernel.get("stage_status") == "NOT_RUN"
+            else "completed"
             if kernel.get("stage_status") == "PASS"
             else "needs_work",
         )
@@ -382,8 +404,12 @@ def build_repair_progress(
         previous_kernel or {},
         proof_id=previous_id,
     )
-    current_ids = {str(row.get("relation_id") or "") for row in verified}
-    previous_ids = {str(row.get("relation_id") or "") for row in previous_verified}
+    current_ids = {
+        str(row["relation_id"]) for row in verified if row.get("relation_id")
+    }
+    previous_ids = {
+        str(row["relation_id"]) for row in previous_verified if row.get("relation_id")
+    }
     blockers = _rows(final_result.get("canonical_blockers"))
     blocker = blockers[0] if blockers else {}
     previous_blockers = _rows((previous_kernel or {}).get("canonical_blocker")) + _rows(
@@ -456,18 +482,4 @@ def _write_workspace_json(
     target.parent.mkdir(parents=True, exist_ok=True)
     if path_has_symlink_component(root_path, target):
         raise ValueError(f"{field} must not contain a symlink: {normalized}")
-    descriptor, temporary = tempfile.mkstemp(
-        dir=target.parent,
-        prefix=target.name + ".",
-        suffix=".tmp",
-    )
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            handle.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
-        os.replace(temporary, target)
-    except BaseException:
-        try:
-            os.unlink(temporary)
-        except OSError:
-            pass
-        raise
+    _write_json_atomic(target, payload)

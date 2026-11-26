@@ -8,17 +8,24 @@ recovery share the same literal-target and independent-verdict checks.
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from pace.artifacts.workspace import path_has_symlink_component, work_ref
+from pace.artifacts.workspace import (
+    _write_json_atomic,
+    path_has_symlink_component,
+    work_ref,
+)
 from pace.contracts.problem.target import (
     target_contract_text,
     validate_target_contract,
 )
-from pace.contracts.verification.decision import decide_final_result
+from pace.contracts.verification.decision import (
+    COMPACT_KERNEL_VERSION,
+    decide_final_result,
+)
+from pace.runtime.prompts import standard_workflow
 
 MISSING_AUTHORITY_ARTIFACT = "MISSING_AUTHORITY_ARTIFACT"
 MALFORMED_AUTHORITY_ARTIFACT = "MALFORMED_AUTHORITY_ARTIFACT"
@@ -169,7 +176,7 @@ def write_proof_manifest(
                 code=IDENTITY_MISMATCH,
             )
     else:
-        _write_json(manifest_path, manifest)
+        _write_json_atomic(manifest_path, manifest)
     return manifest_ref
 
 
@@ -274,6 +281,32 @@ def resolve_verification_binding(
         _resolve_relative_path(root, binding["kernel_ref"], "kernel_ref"),
         "Kernel report",
     )
+    parts = Path(binding["kernel_ref"]).parts
+    turn = (
+        parts[1]
+        if len(parts) >= 3
+        and parts[0] == "work"
+        and parts[1].startswith("turn")
+        and parts[1][4:].isdigit()
+        else None
+    )
+    status = kernel.get("stage_status")
+    try:
+        concise_turn = turn is not None and standard_workflow(root, turn_id=turn)
+    except ValueError as exc:
+        raise ProofBindingError(str(exc)) from exc
+    if status in {"PASS", "MATH_FAIL"}:
+        if concise_turn != (kernel.get("schema_version") == COMPACT_KERNEL_VERSION):
+            raise ProofBindingError("Kernel receipt differs from its turn's protocol")
+    if status == "NOT_RUN":
+        from pace.contracts.research.memory import digest
+
+        if (
+            not concise_turn
+            or kernel.get("auditor_digest") != digest(auditor)
+            or kernel.get("reason") != "structural_repair_required"
+        ):
+            raise ProofBindingError("invalid deferred Kernel record for this turn")
     _validate_verifier_bindings(
         auditor=auditor,
         kernel=kernel,
@@ -321,28 +354,26 @@ def resolve_verification_binding(
         ),
         "source authority",
     )
-    input_ref = binding.get("verification_inputs_ref") or str(
-        Path(binding["verification_ref"]).with_name("verification_inputs.json")
+    frozen = _read_object(
+        _resolve_relative_path(
+            root, binding.get("verification_inputs_ref"), "verification_inputs_ref"
+        ),
+        "verification input snapshot",
     )
-    if binding.get("verification_inputs_ref") or (Path(root) / input_ref).is_file():
-        frozen = _read_object(
-            _resolve_relative_path(root, input_ref, "verification_inputs_ref"),
-            "verification input snapshot",
+    proof_text = _resolve_relative_path(
+        root, binding["proof_ref"], "proof_ref"
+    ).read_text(encoding="utf-8")
+    if (
+        frozen.get("proof_id") != binding["proof_id"]
+        or frozen.get("proof_ref") != binding["proof_ref"]
+        or frozen.get("proof_text") != proof_text
+        or frozen.get("target") != load_active_target(root)
+        or frozen.get("authority") != source
+    ):
+        raise ProofBindingError(
+            "current proof, target or dependencies differ from the verified input version",
+            code=IDENTITY_MISMATCH,
         )
-        proof_text = _resolve_relative_path(
-            root, binding["proof_ref"], "proof_ref"
-        ).read_text(encoding="utf-8")
-        if (
-            frozen.get("proof_id") != binding["proof_id"]
-            or frozen.get("proof_ref") != binding["proof_ref"]
-            or frozen.get("proof_text") != proof_text
-            or frozen.get("target") != load_active_target(root)
-            or frozen.get("authority") != source
-        ):
-            raise ProofBindingError(
-                "current proof, target or dependencies differ from the verified input version",
-                code=IDENTITY_MISMATCH,
-            )
     proof_binding = {
         name: binding[name]
         for name in (
@@ -574,13 +605,3 @@ def _read_object(path: Path, label: str) -> dict[str, Any]:
             code=MALFORMED_AUTHORITY_ARTIFACT,
         )
     return value
-
-
-def _write_json(path: Path, value: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(path.name + ".tmp")
-    temporary.write_text(
-        json.dumps(value, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    os.replace(temporary, path)

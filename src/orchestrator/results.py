@@ -155,52 +155,23 @@ def publish_terminal_report(ws: RunWorkspace, report: dict[str, Any]) -> dict[st
     )
     if report["result"] == "PASS":
         try:
-            from pace.contracts.proof.binding import (
-                load_active_target,
-                resolve_verification_binding,
-            )
+            from pace.contracts.proof.binding import resolve_verification_binding
 
-            binding_ref = refs.get("verification_binding") or report.get(
-                "proof_binding", {}
-            ).get("verification_binding_ref")
+            binding_ref = refs.get("verification_binding")
             if not binding_ref:
-                sibling = Path(refs["verification"]).with_name(
-                    "verification_binding.json"
-                )
-                if ws.path(sibling.as_posix()).is_file():
-                    binding_ref = sibling.as_posix()
-            if binding_ref:
-                resolved = resolve_verification_binding(
-                    ws.root,
-                    verification_binding_ref=binding_ref,
-                    proof_ref=refs["proof"],
-                    verification_ref=refs["verification"],
-                    target_contract_id=load_active_target(ws.root)["contract_id"],
-                )
-                if (
-                    resolved["status"] != "PASS"
-                    or resolved["artifact_refs"]["kernel"] != refs["kernel"]
-                ):
-                    raise ValueError(
-                        "terminal publication differs from the verified proof"
-                    )
-                kernel = resolved["kernel"]
-            else:
-                # Older terminal records identify the exact proof and Kernel in the verifier report.
-                verifier = json.loads(ws.path(refs["verification"]).read_text())
-                if (
-                    verifier["proof_ref"] != refs["proof"]
-                    or verifier["kernel_ref"] != refs["kernel"]
-                ):
-                    raise ValueError(
-                        "terminal publication references another proof or Kernel"
-                    )
-                kernel = json.loads(ws.path(refs["kernel"]).read_text())
+                raise ValueError("terminal publication requires the verification binding")
+            resolved = resolve_verification_binding(
+                ws.root,
+                verification_binding_ref=binding_ref,
+                proof_ref=refs["proof"],
+                verification_ref=refs["verification"],
+            )
             if (
-                kernel.get("stage_status") != "PASS"
-                or kernel.get("publication_eligible") is not True
+                resolved["status"] != "PASS"
+                or resolved["artifact_refs"]["kernel"] != refs["kernel"]
+                or resolved["proof_binding"] != report.get("proof_binding")
             ):
-                raise ValueError("Kernel did not authorize terminal publication")
+                raise ValueError("terminal publication differs from the verified proof")
             published_ref = publish_finding(
                 ws.root,
                 source_ref=refs["proof"],
@@ -208,7 +179,7 @@ def publish_terminal_report(ws: RunWorkspace, report: dict[str, Any]) -> dict[st
                 round_index=report.get("director_state", {}).get(
                     "round_index", report.get("proof_loops_used", 0)
                 ),
-                publication=kernel["publication"],
+                publication=resolved["kernel"]["publication"],
             )
             report["publication_status"] = (
                 "PUBLISHED" if published_ref else "NO_PUBLICATION"

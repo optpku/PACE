@@ -19,7 +19,7 @@ from pace.orchestrator.results import publish_stage_findings, publish_terminal_r
 from pace.orchestrator.writing.tasks import (
     active_writing_request,
     complete_writing,
-    request_writing,
+    prepare_writing_request,
 )
 from pace.pipeline_types import PipelineConfig, PipelineResult
 from pace.runtime.llm import build_llm
@@ -104,16 +104,16 @@ class ProofPipeline:
         )
         with ws.execution_lock():
             if writing_action:
-                with self._session(ws):
-                    return request_writing(
-                        ws,
-                        problem,
-                        action=writing_action,
-                        outline_ref=outline_ref,
-                        requirements=additional_requirements,
-                        resource_variant=self.config.resource_variant,
-                        llm=self._writing_llm(),
-                    )
+                request_ref = prepare_writing_request(
+                    ws,
+                    problem,
+                    action=writing_action,
+                    outline_ref=outline_ref,
+                    requirements=additional_requirements,
+                    resource_variant=self.config.resource_variant,
+                )
+                with self._session(ws, writing_request_ref=request_ref):
+                    return complete_writing(ws, writing_action, self._writing_llm())
             if run_dir is not None:
                 from pace.runtime.input_protection import (
                     recover_open_input_snapshots,
@@ -154,14 +154,10 @@ class ProofPipeline:
                 research_context=research_context,
                 source_turn_id=source_turn_id,
             )
-            if on_started is not None:
-                try:
-                    on_started(ws)
-                except BaseException:
-                    ws.finish_turn("interrupted")
-                    raise
             try:
                 with self._session(ws):
+                    if on_started is not None:
+                        on_started(ws)
                     result = self.director.run(ws, problem, setup)
             except BaseException:
                 ws.finish_turn("interrupted")
@@ -182,17 +178,19 @@ class ProofPipeline:
         with workspace.execution_lock():
             if continuation_action == "WRITING":
                 recover_open_input_snapshots(workspace.root)
-                with self._session(workspace):
-                    if finalize:
-                        raise RecoveryError(
-                            "finalization_requires_research_boundary",
-                            "--finalize requires a research turn",
-                        )
-                    if checkpoint != active_writing_request(workspace.root):
-                        raise RecoveryError(
-                            "invalid_writing_checkpoint",
-                            "the writing request changed before resume",
-                        )
+                if finalize:
+                    raise RecoveryError(
+                        "finalization_requires_research_boundary",
+                        "--finalize requires a research turn",
+                    )
+                if checkpoint != active_writing_request(workspace.root):
+                    raise RecoveryError(
+                        "invalid_writing_checkpoint",
+                        "the writing request changed before resume",
+                    )
+                with self._session(
+                    workspace, writing_request_ref=checkpoint["request"]["request_ref"]
+                ):
                     return complete_writing(
                         workspace, checkpoint["action"], self._writing_llm()
                     )
@@ -222,10 +220,12 @@ class ProofPipeline:
         return self._writing_llm_instance
 
     @contextmanager
-    def _session(self, workspace: RunWorkspace):
+    def _session(self, workspace: RunWorkspace, *, writing_request_ref: str = ""):
         try:
             with run_session(
-                workspace.root, profile=self.config.profile, config=self.config
+                workspace.root,
+                config=self.config,
+                writing_request_ref=writing_request_ref,
             ):
                 yield
         finally:

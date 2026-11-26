@@ -10,7 +10,6 @@ from pace.agents.prompt_composer import (
     delivery_instruction,
     specialist_instructions,
 )
-from pace.contracts.research.memory import reporter_owned
 from pace.runtime.prompts import render_prompt_template
 
 
@@ -34,7 +33,6 @@ def build_prompt(
     output_ref: str,
     manifest_ref: str,
 ):
-    extra_inputs, extra_task = (), ""
     from pace.agents.director.context import task_context
 
     frozen = task_context(workdir, output_ref)
@@ -42,9 +40,8 @@ def build_prompt(
         workdir=workdir,
         output_ref=output_ref,
         target_contract_id=target_contract_id,
-        selected_dependencies=frozen["selected_dependencies"] if frozen else None,
+        selected_dependencies=frozen["selected_dependencies"] if frozen else (),
     )
-    extra_inputs = (ref,)
     return build_specialist_assembly(
         workdir=workdir,
         decision=decision,
@@ -52,11 +49,9 @@ def build_prompt(
         output_ref=output_ref,
         manifest_ref=manifest_ref,
         role_ref="prover/research.md",
-        extra_refs=(),
-        extra_inputs=extra_inputs,
+        extra_inputs=(ref,),
         extra_task=extra_task,
-        delivery_task=build_delivery_instructions(workdir, output_ref),
-        separate_reporter=reporter_owned(workdir),
+        delivery_task=delivery_instruction(workdir, output_ref, with_reporter=True),
     )
 
 
@@ -82,11 +77,6 @@ def compose_dependency_task(**kwargs: Any) -> tuple[str, str]:
         table="\n".join(rows),
         manifest_ref=ref,
     )
-
-
-def build_delivery_instructions(workdir: Path, output_ref: str) -> str:
-    common = delivery_instruction(workdir, output_ref, with_delta=True)
-    return common
 
 
 def build_proof_prompt(

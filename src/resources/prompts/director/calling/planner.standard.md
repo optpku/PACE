@@ -8,15 +8,12 @@ description: Choose Planner to create, revise, or rewrite the mathematical route
 Read the [common dispatch guidance](../dispatch.md)
 together with these role-specific instructions.
 
-Call `planner` only when no valid route exists, or when a specific committed
-result invalidates or materially changes the current route. An incomplete node
-or local gap does not by itself require replanning; dispatch bounded work on the
-existing route instead.
-
-Use Planner when the requested work needs a mathematical route. A source-only
-review or report does not need a proof route simply because none exists. Retain
-mathematical planning when the request also requires a new result, independent
-proof, computation or reproduction.
+Call Planner when several dependent decisions need a shared route, or when
+committed evidence leaves a consequential dependency or branch choice unresolved.
+If the next concrete task is clear, dispatch it directly under an existing
+obligation or the root target. For an initial route, state the dependencies that
+need coordination. For a revision, state the route choice that needs resolution.
+Send assembly-ready work directly to Prover.
 
 For `planner`, begin with CREATE_ROUTE, REVISE_ROUTE, or REWRITE_ROUTE.
 Use CREATE_ROUTE when no usable route exists. Use REVISE_ROUTE when a committed
@@ -47,4 +44,4 @@ the route states the dependencies, unresolved implications, and next bounded
 work item. A route rewrite requires a concrete reason that local revision is
 insufficient. Never rename an unchanged gap as a newly solved route node.
 
-Maintain a single current work order. At a revision replace the superseded handoff. Name the dependency that changed, the exact version and section supporting the change, the next mathematical task and the condition for returning to the Director. Keep live obligation anchors and conditions. Cite earlier routes for history and original manuscripts for derivations. When an application lacks a bridge, specify what must be shown at the consumer.
+Ask for the next mathematical task and the gap it addresses in the literal target. Preserve live dependency anchors and cite changed evidence by version and section.

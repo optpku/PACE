@@ -211,6 +211,14 @@ class DirectorLedEngine(AssignmentExecutor):
             from pace.runtime.sessions import budget_exhausted
 
             reason = budget_exhausted(self.workdir)
+            if reason and resume:
+                # Replay an accepted dispatch even if its Director call used the
+                # last allowance before the parent could commit the assignment.
+                next_decision = self._round_ref(
+                    state.round_index + 1, "director_decision.json"
+                )
+                if (self.workdir / next_decision).is_file():
+                    reason = ""
             if self.max_rounds is not None and state.round_index >= self.max_rounds:
                 reason = "RESEARCH_ROUND_LIMIT_REACHED"
             if reason:
@@ -564,6 +572,8 @@ class DirectorLedEngine(AssignmentExecutor):
                     self.workdir,
                     self._director_input_refs(state),
                     state.completed_result_refs,
+                    assembling=proof_states_remaining == 0
+                    or bool(state.last_verification_ref),
                 )
                 inputs.update(
                     proof_states_remaining=proof_states_remaining,

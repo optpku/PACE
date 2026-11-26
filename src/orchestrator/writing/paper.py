@@ -18,18 +18,15 @@ from pace.artifacts.workspace import (
     work_ref,
 )
 from pace.orchestrator.writing.tasks import (
-    checkpoint_writing_source,
+    run_writing_author,
     project_accepted_text,
     read_state,
+    read_selected_outline,
     settle_writing_call,
 )
 from pace.runtime.agent_environment import prepare_role_environment
-from pace.runtime.math_format import require_math_format
 from pace.runtime.paper import build_paper
 from pace.runtime.prompts import materialize_run_resources
-from pace.runtime.semantic import (
-    commit_artifact_call_failure,
-)
 
 logger = logging.getLogger(__name__)
 PAPER_OUTLINE_REF = "results/paper_outline.md"
@@ -56,14 +53,22 @@ def paper_artifacts(root: Path, *, snapshots: bool = False) -> dict[str, str]:
     state = read_state(root, paper_state_ref(root))
     if not state.get("paper_ref"):
         return {}
-    ref = state["paper_ref"] if snapshots else PAPER_SOURCE_REF
+    status = (
+        read_state(root, state["build_ref"]).get("status")
+        if state.get("build_ref")
+        else None
+    )
+    retained_previous_pdf = status != "COMPLETE" and _built_pdf(
+        (root / PAPER_SOURCE_REF).parent
+    )
+    ref = state["paper_ref"] if snapshots or retained_previous_pdf else PAPER_SOURCE_REF
     source = Path(root) / ref
     if not source.is_file():
         return {}
     result = {"paper_source": ref}
     if source.with_name("references.bib").is_file():
         result["paper_bibliography"] = str(Path(ref).with_name("references.bib"))
-    if paper_build_status(root) == "COMPLETE" and source.with_suffix(".pdf").is_file():
+    if status == "COMPLETE" and source.with_suffix(".pdf").is_file():
         result["paper_pdf"] = str(Path(ref).with_suffix(".pdf"))
     if snapshots:
         result["paper_used_outline"] = state["outline_ref"]
@@ -113,7 +118,6 @@ class TheoryPaperWriter:
             self.workdir / paper_outline_state_ref(self.workdir),
             {"request_ref": request_ref, "resources_ref": resources, "outline_ref": ""},
         )
-        (self.workdir / paper_state_ref(self.workdir)).unlink(missing_ok=True)
 
     def request(
         self,
@@ -123,24 +127,13 @@ class TheoryPaperWriter:
         requirements: str = "",
         resource_variant: str,
     ) -> None:
-        parent = read_state(self.workdir, paper_outline_state_ref(self.workdir))
-        if outline == PAPER_OUTLINE_REF and parent and (not parent["outline_ref"]):
-            raise ValueError(
-                "The current paper outline request has not delivered an outline"
-            )
-        source = (self.workdir / outline).resolve()
-        body = source.read_text(encoding="utf-8")
-        if not body.strip():
-            raise ValueError("Selected paper outline is empty")
-        original = (
-            (self.workdir / parent["request_ref"]).read_text(encoding="utf-8")
-            if parent
-            else ""
+        source, body, original = read_selected_outline(
+            self.workdir,
+            outline,
+            PAPER_OUTLINE_REF,
+            paper_outline_state_ref(self.workdir),
+            message,
         )
-        if not original and (not message.strip()):
-            raise ValueError(
-                "Paper writing needs a user request; supply --message for a standalone outline"
-            )
         attempt = self._attempt("paper")
         frozen_ref = f"{attempt}/paper_outline.md"
         _write_text_atomic(
@@ -168,9 +161,6 @@ class TheoryPaperWriter:
             {
                 "request_ref": request_ref,
                 "outline_ref": frozen_ref,
-                "outline_source": source.relative_to(self.workdir.resolve()).as_posix()
-                if source.is_relative_to(self.workdir.resolve())
-                else str(source),
                 "resources_ref": resources,
                 "paper_ref": "",
                 "build_ref": "",
@@ -270,7 +260,6 @@ class TheoryPaperWriter:
             status="started",
             final=True,
         )
-        handle = None
         try:
             composed = compose_prompt(
                 resource_root=self.workdir / resources / "prompts",
@@ -290,11 +279,16 @@ class TheoryPaperWriter:
             _write_text_atomic(
                 self.workdir / attempt / "final_prompt.md", composed.final_prompt
             )
-            handle = paper_writer.run(
+            run_writing_author(
+                paper_writer.run,
                 self.llm,
                 composed.final_prompt,
                 workdir=self.workdir,
                 input_refs=refs,
+                state=state,
+                state_ref=state_ref,
+                output_ref=output_ref,
+                diagnostic_ref=f"{attempt}/failure.json",
                 metadata={
                     "agent_id": name,
                     "output_refs": [output_ref],
@@ -304,21 +298,9 @@ class TheoryPaperWriter:
                     "protected_input_refs": refs,
                     "stage_ref": stage_ref(workdir=self.workdir, final=True),
                     "request_ref": state["request_ref"],
-                    "composer_call_id": composed.call_id,
                 },
                 outline=outline,
             )
-            if handle.transport_status != "SUCCESS":
-                raise ValueError(f"Paper transport failed: {handle.error_code}")
-            source = self.workdir / output_ref
-            body = source.read_text(encoding="utf-8")
-            require_math_format(body, markdown=outline)
-            if not body.strip():
-                raise ValueError("Paper output file is empty")
-            checkpoint_writing_source(
-                self.workdir, state_ref, state, output_ref, handle
-            )
-            handle = None
             if outline:
                 project_accepted_text(
                     self.workdir, state_ref, "outline_ref", PAPER_OUTLINE_REF
@@ -340,18 +322,6 @@ class TheoryPaperWriter:
                 self.workdir / diagnostic,
                 {"reason": str(exc), "request_ref": state["request_ref"]},
             )
-            if handle is not None:
-                commit_artifact_call_failure(
-                    handle,
-                    workdir=self.workdir,
-                    failure_class="INTERFACE"
-                    if handle.transport_status != "SUCCESS"
-                    else "REPRESENTATION",
-                    retry_class=handle.retry_class
-                    if handle.transport_status != "SUCCESS"
-                    else "MODEL_REPRESENTATION",
-                    diagnostics_ref=diagnostic,
-                )
             publish_progress(
                 self.workdir,
                 task_id=task_id,
@@ -372,11 +342,28 @@ class TheoryPaperWriter:
 
     def _build_delivery(self, source_ref: str, state: dict[str, Any]) -> None:
         directory = (self.workdir / source_ref).parent
-        build_paper(directory)
+        build_ref = f"{Path(source_ref).parent}/build.json"
+        if state.get("build_ref") != build_ref:
+            # The author can write throughout the source bundle. Only trust a
+            # build receipt produced after the Host takes ownership of this draft.
+            (self.workdir / build_ref).unlink(missing_ok=True)
+            state["build_ref"] = build_ref
+            _write_json_atomic(self.workdir / paper_state_ref(self.workdir), state)
+        if not _built_pdf(directory):
+            build_paper(directory)
+        state["paper_ref"] = source_ref
         destination = (self.workdir / PAPER_SOURCE_REF).parent
+        if _built_pdf(destination) and not _built_pdf(directory):
+            return  # Keep the last successful reader bundle; the new source is in its attempt.
         if destination.exists():
             shutil.rmtree(destination)
         shutil.copytree(directory, destination)
-        state.update(
-            paper_ref=source_ref, build_ref=f"{Path(source_ref).parent}/build.json"
-        )
+
+
+def _built_pdf(directory: Path) -> bool:
+    pdf = directory / "main.pdf"
+    return (
+        pdf.is_file()
+        and pdf.stat().st_size > 0
+        and read_state(directory, "build.json").get("status") == "COMPLETE"
+    )

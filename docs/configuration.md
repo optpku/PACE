@@ -24,7 +24,7 @@ In research mode, each Research or RCI dispatch consumes one proof state when re
 
 Mode selection is committed with target extraction before budget allocation. Invalid routing receipts or service failures pause initialization without starting Survey, research or terminal writing. An uncertain but valid recommendation selects research. Batch `pipeline.mode` may be omitted or null; only explicit values emit `--mode`. Omitting batch `pipeline.web_search_mode` defaults to `on`, matching the CLI; set `off` to disable external retrieval.
 
-`resume` accepts execution settings but restores the saved workflow/resource snapshot and budget. See `pace resume --help` for its exact options.
+`resume` restores the model, provider, reasoning effort, Survey settings and call timeout for the selected mathematical turn or writing request. Explicit CLI settings take precedence. A dedicated Survey model or effort is retained with the same provider; otherwise Survey follows the primary settings. Writing calls and writing time do not consume the mathematical turn’s call or time budget. See `pace resume --help` for its exact options.
 
 Continued RCI work requires an exact existing question file from the dispatch's
 input list. The Director may correct this reference once before dispatch; the
@@ -43,7 +43,16 @@ These are project guidance choices, not an availability or performance claim:
 | `deepseek-v4-flash` | `none` | `weak` |
 | Any unlisted exact pair | any | `weak` |
 
-`weak` supplies more detailed role prompts. It is a resource bundle name, not an automatic measurement of a model's ability. Both variants use one [shared method library](../src/resources/skills/README.md), including the same mathematical checks and examples. Each run snapshots its selected prompts and the shared Skills under the turn's `resources/` directory. Both prompt variants and the full library ship in the wheel; resume keeps the saved snapshot.
+`weak` supplies more detailed role prompts. It is a resource bundle name, not an automatic measurement of a model's ability. New `standard` turns defer ordinary auxiliary applications and use a coverage-first Auditor. A documented structural failure can return a candidate for repair before Kernel review. A successful candidate always needs independent Kernel approval. `weak` keeps detailed manuscript and applicability checks and both whole-candidate reviews after a completed audit. Both variants use one [shared method library](../src/resources/skills/README.md), including the same mathematical checks and examples. Each run snapshots its selected prompts and the shared Skills under the turn's `resources/` directory. Both prompt variants and the full library ship in the wheel; resume keeps the saved snapshot.
+
+On new `standard` turns the initial target extraction also supplies the short brief
+and, for research, the budget assessment. Recovery can finish a missing part
+from the committed target. Director normally sees the affected obligations and
+latest handoffs; target stagnation or final assembly opens the wider dependency
+view. Reporter still records every mathematical handoff and consults additional
+premises on demand. A Mechanism Critic can return a specific local gap directly
+to its author. A recurring gap on the same candidate and mechanism returns to
+Conjecture Explorer. Each requested application still receives its own verdict.
 
 Director and general research roles receive a compact Skill index and read the relevant entry and supporting material for their task. RCI loads methods for its specific phase; statement-only probes do not receive the general index or investigation history. Manuscript roles load the writing guides, while Auditor/Kernel retain independent verification prompts. Skills guide the mathematical work and do not grant a PASS.
 
@@ -133,8 +142,8 @@ export PACE_REASATLAS_SKILL_DIR="/absolute/path/to/reasatlas-query"
 
 The directory must contain `SKILL.md` and `scripts/query.py`; its supporting
 Markdown, JSON, Python and YAML files must be regular files. PACE copies those
-files into the new turn's resource snapshot. Roles may retrieve sources when `--web-search-mode on` enables it. Without a
-configured Skill, they use other scholarly and web sources. `off` disables
+files into the new turn's resource snapshot. Survey may retrieve sources when `--web-search-mode on` enables it. Without a
+configured Skill, Survey uses its other retrieval tools. `off` disables
 external retrieval even when the Skill is present.
 
 Ordinary `resume` uses the saved snapshot; changing the environment does not

@@ -5,13 +5,18 @@ from pathlib import Path
 from typing import Any
 
 from pace.agents.prompt_composer import render_role_task
-from pace.artifacts.workspace import is_rci_critic_material
 from pace.agents.roles import SemanticRoleSpec, run_semantic_role
+from pace.artifacts.results import FINDINGS_CATALOG_REF
+from pace.artifacts.workspace import _write_text_atomic, is_rci_critic_material
 from pace.contracts.verification.decision import validate_publication
-from pace.runtime.prompts import render_prompt_template
-from pace.runtime.schema import array_of, open_object
+from pace.runtime.prompts import (
+    standard_workflow,
+    render_prompt_template,
+)
+from pace.runtime.schema import array_of, closed_object, open_object
 from pace.runtime.semantic import (
     SemanticCallResult,
+    StructuredSemanticResult,
     semantic_call,
 )
 
@@ -26,11 +31,28 @@ def verify_finding(
     target_contract_id: str,
     application_request: dict | None = None,
     on_accept=None,
+    compact=False,
+    archive_refs=(),
+    checked_premises=None,
 ) -> SemanticCallResult:
     """Check one standalone result without granting whole-target acceptance."""
 
     if is_rci_critic_material(draft_ref):
         raise ValueError("independent review cannot use RCI Critic material")
+    request = application_request
+    if compact or (request and request.get("compact_review")):
+        return _verify_compact(
+            llm=llm,
+            workdir=workdir,
+            draft_ref=draft_ref,
+            refs=input_refs,
+            round_index=round_index,
+            target_id=target_contract_id,
+            request=request,
+            archive_refs=request.get("archive_refs", ()) if request else archive_refs,
+            checked=(request or {}).get("checked_premises", checked_premises) or {},
+            on_accept=on_accept,
+        )
     prompt = render_role_task(
         "finding_verifier/role.md",
         workdir=workdir,
@@ -38,7 +60,6 @@ def verify_finding(
         target_contract_id=target_contract_id,
         input_files="\n".join(f"- `{ref}`" for ref in input_refs),
     )
-    request = application_request
     if request:
         prompt += render_prompt_template(
             "finding_verifier/application_request.md",
@@ -86,21 +107,256 @@ def verify_finding(
     )
 
 
+def _verify_compact(
+    *,
+    llm,
+    workdir,
+    draft_ref,
+    refs,
+    round_index,
+    target_id,
+    request,
+    archive_refs,
+    checked,
+    on_accept,
+):
+    items = (request or {}).get("applications", [])
+    numbered = dict(enumerate(items, 1))
+    publication = request is None or request["publication_requested"]
+    checked_statement = (request or {}).get("checked_statement", "")
+    application_view = [
+        {
+            "application": number,
+            "obligation": item["obligation_id"],
+            "scope": list(
+                dict.fromkeys(
+                    row["ref"] + row.get("locator", "")
+                    for row in item["bindings"]
+                    if row.get("locator")
+                    or (
+                        row["ref"] != draft_ref
+                        and row["ref"] not in item["premise_refs"]
+                    )
+                )
+            ),
+            "premises": item["premise_refs"],
+        }
+        for number, item in numbered.items()
+    ]
+    host_publication = not publication and standard_workflow(workdir)
+    task = (
+        "Review the complete submitted manuscript and decide publication."
+        if publication
+        else "Check the requested applications. Return publication.action=NONE."
+    )
+    if host_publication:
+        task = "Check each numbered application. The Host records publication NONE; omit the publication decision."
+    if checked_statement:
+        task += (
+            "\nThe same manuscript has an accepted review. Use its checked statement and "
+            "conditions below. Read only the new application argument and relevant evidence. "
+            "Open other manuscript sections if a specific issue requires it.\n"
+            f"Prior checked statement: {checked_statement}"
+        )
+    if publication and archive_refs:
+        task += (
+            "\nFor publication, consult the findings catalogue and a related checked original "
+            "only if needed to decide CREATE, UPDATE or NONE."
+        )
+    if checked:
+        scope_files = {
+            row["ref"]
+            for item in items
+            for row in item["bindings"]
+            if row.get("locator") or row["ref"] not in item["premise_refs"]
+        }
+        optional = {
+            ref for source, (receipt, _) in checked.items() for ref in (source, receipt)
+        } - scope_files
+        refs = tuple(ref for ref in refs if ref not in optional)
+        archive_refs = tuple(dict.fromkeys((*archive_refs, *sorted(optional))))
+        task += (
+            "\nPreviously checked premises (original and receipt available on demand):"
+        )
+        for source, (receipt, summary) in checked.items():
+            task += f"\n- `{source}` (review `{receipt}`): {summary}"
+    prompt = render_role_task(
+        "finding_verifier/compact_task.md",
+        workdir=workdir,
+        draft_ref=draft_ref,
+        target_contract_id=target_id,
+        task=task,
+        input_files="\n".join(f"- `{ref}`" for ref in refs if ref != draft_ref),
+        archive_files=(
+            f"`{FINDINGS_CATALOG_REF}` and its linked current findings, original sources and reviews."
+            if FINDINGS_CATALOG_REF in archive_refs
+            else ""
+        ),
+        applications=json.dumps(application_view, ensure_ascii=False),
+    )
+    schema = _finding_receipt_schema()
+    schema["properties"]["summary"] = {"type": "string"}
+    schema["required"].append("summary")
+    if host_publication:
+        schema["properties"]["publication"]["properties"]["action"]["enum"] = ["NONE"]
+    else:
+        schema["required"].append("publication")
+    schema["properties"].pop("application_checks")
+    if numbered:
+        schema["properties"]["application_checks"] = array_of(
+            closed_object(
+                {
+                    "application": {"type": "integer", "enum": list(numbered)},
+                    "status": {
+                        "type": "string",
+                        "enum": ["APPLICABLE", "NOT_ESTABLISHED", "VERIFIER_ERROR"],
+                    },
+                    "reason": {"type": "string"},
+                }
+            )
+        )
+        schema["properties"]["application_checks"].update(
+            minItems=len(numbered), maxItems=len(numbered)
+        )
+        schema["required"].append("application_checks")
+
+    def validate(payload):
+        errors = _validate_finding_receipt(
+            {"publication": {"action": "NONE"}, **payload}
+            if host_publication
+            else payload
+        )
+        checks = payload.get("application_checks", [])
+        if not payload["summary"].strip() or any(
+            not row["reason"].strip() for row in checks
+        ):
+            errors.append(
+                {
+                    "reason_code": "missing_mathematical_reason",
+                    "json_pointer": "/summary",
+                }
+            )
+        if len(checks) != len(numbered) or {
+            row["application"] for row in checks
+        } != set(numbered):
+            errors.append(
+                {
+                    "reason_code": "invalid_application_review",
+                    "json_pointer": "/application_checks",
+                }
+            )
+        if (
+            not publication
+            and payload.get("publication", {"action": "NONE"}).get("action") != "NONE"
+        ):
+            errors.append(
+                {
+                    "reason_code": "application_only_publication",
+                    "json_pointer": "/publication",
+                }
+            )
+        return errors
+
+    def normalize(payload):
+        if host_publication:
+            payload = {**payload, "publication": {"action": "NONE"}}
+        if not numbered:
+            return payload
+        checks = []
+        for row in payload["application_checks"]:
+            item = numbered[row["application"]]
+            checks.append(
+                {
+                    **{
+                        key: item[key]
+                        for key in (
+                            "application_key",
+                            "obligation_id",
+                            "obligation_version",
+                        )
+                    },
+                    "status": row["status"],
+                    "reuse_authorized": row["status"] == "APPLICABLE",
+                    "review_ref": request["review_ref"],
+                    "reason": row["reason"].strip(),
+                }
+            )
+        return {**payload, "application_checks": checks}
+
+    def accept(payload):
+        verdict = normalize(payload)
+        if numbered:
+            from pace.artifacts.workspace import path_has_symlink_component
+
+            review_path = workdir / request["review_ref"]
+            if path_has_symlink_component(workdir, review_path):
+                raise ValueError("unsafe application review path")
+            summary = verdict["summary"].strip()
+            decisions = [
+                f"- **{row['obligation_id']} ({row['status']})**. {row['reason']}"
+                for row in verdict["application_checks"]
+            ]
+            _write_text_atomic(
+                review_path,
+                "\n\n".join(["# Independent review", summary, "\n".join(decisions)])
+                + "\n",
+            )
+            if validate_finding_application(verdict, request, workdir):
+                raise ValueError(
+                    "could not bind the compact review to its application scopes"
+                )
+        if on_accept:
+            on_accept(verdict)
+
+    # Limit read scope to the fixed evidence and related publication sources.
+    result = run_semantic_role(
+        llm,
+        prompt,
+        workdir=workdir,
+        call_name=f"finding_verifier_{round_index:04d}_{Path(draft_ref).stem}",
+        role=SemanticRoleSpec(
+            role="finding_verifier",
+            schema=lambda: schema,
+            host_schema_version="finding_verification",
+            authority="MathVerifierKernel",
+            fatal_scope="CALL",
+            validator=validate,
+            on_accept=accept,
+        ),
+        input_refs=tuple(dict.fromkeys((draft_ref, *refs))),
+        semantic_call_fn=semantic_call,
+        host_metadata={
+            "agent_id": "finding_verifier",
+            "round_index": round_index,
+            "draft_ref": draft_ref,
+            "target_contract_id": target_id,
+            "read_scope": "declared",
+            "archive_refs": archive_refs,
+            "purpose": "APPLICATION" if numbered else "PUBLICATION",
+            **(
+                {"application_keys": [item["application_key"] for item in items]}
+                if numbered
+                else {}
+            ),
+        },
+    )
+    if isinstance(result, StructuredSemanticResult):
+        return StructuredSemanticResult(normalize(result.payload), result.host)
+    return result
+
+
 def _finding_receipt_schema(request=None):
     check = open_object(
         {
             "application_key": {"type": "string"},
             "obligation_id": {"type": "string"},
             "obligation_version": {"type": "string"},
-            "status": {"type": "string", "enum": ["APPLICABLE", "NOT_ESTABLISHED"]},
+            "status": {"type": "string", "enum": ["APPLICABLE", "NOT_ESTABLISHED", "VERIFIER_ERROR"]},
+            "reuse_authorized": {"type": "boolean"},
             "review_ref": {"type": "string"},
         }
     )
     check["required"] = list(check["properties"])
-    if request and request.get("separate_scope_decisions"):
-        check["properties"]["status"]["enum"].append("VERIFIER_ERROR")
-        check["properties"]["reuse_authorized"] = {"type": "boolean"}
-        check["required"].append("reuse_authorized")
     checks = array_of(check)
     if request:
         count = len(request["applications"])
@@ -132,10 +388,6 @@ def validate_finding_application(payload, request, workdir):
         return errors
     checks = payload.get("application_checks", [])
     expected = {item["application_key"]: item for item in request["applications"]}
-    separate = request.get("separate_scope_decisions", False)
-    statuses = {"APPLICABLE", "NOT_ESTABLISHED"} | (
-        {"VERIFIER_ERROR"} if separate else set()
-    )
     seen = set()
     valid = isinstance(checks, list)
     for check in checks if valid else ():
@@ -149,22 +401,10 @@ def validate_finding_application(payload, request, workdir):
             or key in seen
             or check.get("obligation_id") != item["obligation_id"]
             or check.get("obligation_version") != item["obligation_version"]
-            or check.get("status") not in statuses
-            or (separate and type(check.get("reuse_authorized")) is not bool)
-            or (
-                check.get("status") != "APPLICABLE"
-                and check.get("reuse_authorized") is True
-            )
+            or check.get("status") not in {"APPLICABLE", "NOT_ESTABLISHED", "VERIFIER_ERROR"}
+            or not isinstance(check.get("reuse_authorized"), bool)
+            or check["reuse_authorized"] != (check["status"] == "APPLICABLE")
             or check.get("review_ref") != request["review_ref"]
-            or (
-                check.get("status") == "APPLICABLE"
-                and (
-                    check.get("reuse_authorized") is not True
-                    if separate
-                    else payload.get("stage_status") != "PASS"
-                    or payload.get("reuse_authorized") is not True
-                )
-            )
         ):
             valid = False
         seen.add(key)

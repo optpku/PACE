@@ -6,6 +6,7 @@ and provenance; it never decides whether a mathematical statement is true.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -57,24 +58,24 @@ def committed_round_reading_refs(root: Path, result_ref: str) -> tuple[str, ...]
 
 def committed_finding_refs(root: Path, result_ref: str) -> tuple[str, ...]:
     """Read the submitted original manuscripts, without creating proof copies."""
-    folder = (root / result_ref).parent
-    reporter = folder / "reporter_result.json"
-    if reporter.is_file():
+    result = json.loads((root / result_ref).read_text())
+    if result["status"] != "SUCCEEDED":
+        return ()
+    if result["agent_id"] in {"research", "prover", "rci"}:
+        reporter = (root / result_ref).with_name("reporter_result.json")
+        if not reporter.is_file():
+            return ()
+        receipt = json.loads(reporter.read_text())
+        if receipt["result_ref"] != result_ref:
+            raise ValueError("finding nomination belongs to a different handoff")
         return tuple(
-            ref
-            for ref in json.loads(reporter.read_text())["payload"].get(
-                "finding_refs", ()
-            )
+            ref for ref in receipt["payload"].get("finding_refs", ())
             if not is_rci_critic_material(ref)
         )
-    result = json.loads((root / result_ref).read_text())
-    if "manuscript_refs" in result:
-        return tuple(
-            ref for ref in result["manuscript_refs"] if not is_rci_critic_material(ref)
-        )
+    folder = Path(result_ref).parent / "findings"
     return tuple(
-        path.relative_to(root).as_posix()
-        for path in sorted((folder / "findings").glob("*.md"))
+        ref for ref in result.get("published_refs", ())
+        if Path(ref).parent == folder and Path(ref).suffix == ".md"
     )
 
 
@@ -94,7 +95,10 @@ def relocate_links(
         raw = match["inline_target"] or match["reference_target"]
         suffix = match["inline_suffix"] or match["reference_suffix"]
         target = raw[1:-1] if raw.startswith("<") else raw
-        parsed = urlsplit(target)
+        try:
+            parsed = urlsplit(target)
+        except ValueError:
+            return match[0]
         if (
             parsed.scheme
             or parsed.netloc
@@ -254,6 +258,8 @@ def verification_components(root: Path, report: dict) -> dict:
                 "target_contract_id",
                 "stage_status",
                 "target_clause_checks",
+                "summary",
+                "proof_location",
                 "canonical_blockers",
                 "final_assembly",
             )
@@ -267,55 +273,27 @@ def write_dependency_manifest(
     workdir: Path,
     output_ref: str,
     target_contract_id: str,
-    selected_dependencies: Iterable[str] | None = None,
+    selected_dependencies: Iterable[str] = (),
 ) -> tuple[str, list[dict[str, Any]]]:
     """Index exact finding sources and receipts without inventing proof authority."""
 
     entries = []
-    from pace.contracts.research.memory import enabled
-
-    selected = (
-        set(selected_dependencies or ())
-        if enabled(workdir)
-        else None
-        if selected_dependencies is None
-        else set(selected_dependencies)
-    )
-    for row in finding_entries(workdir):
-        if selected is not None and not (
-            {row["source_ref"], row["verification_ref"], row.get("ref", "")} & selected
-        ):
+    selected = set(selected_dependencies)
+    for row in finding_entries(workdir) if selected else ():
+        if not {row["source_ref"], row["verification_ref"], row["ref"]} & selected:
             continue
         source = workdir / row["source_ref"]
-        body = source.read_text(encoding="utf-8")
-        title = next(
-            (line[2:].strip() for line in body.splitlines() if line.startswith("# ")),
-            row["finding_id"],
-        )
-        receipt = json.loads(
-            (workdir / row["verification_ref"]).read_text(encoding="utf-8")
-        )
+        body = source.read_bytes()
         entries.append(
             {
-                **row,
-                "statement_and_assumptions_ref": row["source_ref"],
-                "source_lines": [1, len(body.splitlines())],
-                "source_summary_verbatim": title,
-                **(
-                    {"source_text": body, "verification_receipt": receipt}
-                    if selected is None
-                    else {
-                        "source_sha256": __import__("hashlib")
-                        .sha256(body.encode())
-                        .hexdigest(),
-                        "verification_ref": row["verification_ref"],
-                        "verification_sha256": __import__("hashlib")
-                        .sha256((workdir / row["verification_ref"]).read_bytes())
-                        .hexdigest(),
-                    }
-                ),
-                "current_target_contract_id": target_contract_id,
-                "target_relationship": "To be established explicitly in this candidate; not inferred by the Host.",
+                "finding_id": row["finding_id"],
+                "source_ref": row["source_ref"],
+                "source_lines": [1, len(body.decode("utf-8").splitlines())],
+                "source_sha256": hashlib.sha256(body).hexdigest(),
+                "verification_ref": row["verification_ref"],
+                "verification_sha256": hashlib.sha256(
+                    (workdir / row["verification_ref"]).read_bytes()
+                ).hexdigest(),
             }
         )
     ref = str(Path(output_ref).with_name("dependency_manifest.json"))

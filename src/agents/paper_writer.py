@@ -55,7 +55,9 @@ def build_prompt(
     )
 
 
-def run(llm, prompt, *, workdir, outline: bool, input_refs, metadata):
+def run(
+    llm, prompt, *, workdir, outline: bool, input_refs, metadata, on_transport_success=None
+):
     name = "theory_paper_outline" if outline else "theory_paper_writer"
     stage = "HOST_" + name.upper()
     return begin_artifact_call(
@@ -67,4 +69,5 @@ def run(llm, prompt, *, workdir, outline: bool, input_refs, metadata):
         stage=stage,
         input_refs=input_refs,
         metadata=metadata,
+        on_transport_success=on_transport_success,
     )

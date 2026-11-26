@@ -75,6 +75,9 @@ def validate_receipt(root, directory, phase, payload, *, inputs, routing):
                 "phase_artifact_missing",
             )
 
+    if action == "LOCAL_REPAIR" and not (payload.get("gap_id") or "").strip():
+        error("gap_id", "Name the specific gap; reuse its previous ID when it recurs.")
+
     if phase == "CONJECTURE_EXPLORER":
         selected = payload.get("mechanism_ref")
         if (
