@@ -560,6 +560,21 @@ def run_research_reporter(*, llm, workdir: Path, result_ref: str) -> dict | None
     def accept(payload):
         # Commit before event publication. A replay only restores these exact projections.
         nonlocal accepted
+        delta = payload["delta"]
+        if (
+            request.get("focused")
+            and delta["attempt"]["outcome"] in {"NOT_ESTABLISHED", "CONTEXT_GAP"}
+            and not delta["applications"]
+            and delta["change_ref"] in payload.get("finding_refs", ())
+        ):
+            # Keep the incomplete argument as an original. Other standalone
+            # manuscripts in the same handoff can still be nominated.
+            payload = {
+                **payload,
+                "finding_refs": [
+                    ref for ref in payload["finding_refs"] if ref != delta["change_ref"]
+                ],
+            }
         saved = {
             "schema_version": "research_reporter/v1",
             "result_ref": result_ref,

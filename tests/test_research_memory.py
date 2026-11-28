@@ -251,8 +251,14 @@ def test_planner_work_order_revision_resumes_without_another_call(
     from test_finding_publication import ProofPublicationTransport
 
     first = deliver(ws, 1, agent="planner")
-    commit_research_memory(ws.root, [first])
     base = ws.path(first).with_name("research.md")
+    # The first copy is a Markdown example, not a section to replace.
+    base_content = (
+        "# Route\n\n```md\n## Next work order\nKeep this example.\n\n```\n\n"
+        "## Next work order\nKeep this example.\n\n## Other dependency\nRetain this section.\n"
+    )
+    base.write_text(base_content)
+    commit_research_memory(ws.root, [first])
     old = base.read_text()
     output = ws.work_ref("round2/route.md")
     folder = ws.path(output).parent
@@ -297,7 +303,10 @@ def test_planner_work_order_revision_resumes_without_another_call(
             else:
                 assert call_name == "director_led_planner_02"
                 ws.write_json(patch_ref, {
-                    "edits": [{"old": old, "new": updated}],
+                    "edits": [{
+                        "heading": "## Next work order",
+                        "new": f"## Next work order\n{updated}",
+                    }],
                     "relations_unchanged": not changes_relations,
                 })
             return self._reply(
@@ -336,7 +345,10 @@ def test_planner_work_order_revision_resumes_without_another_call(
     assert result["status"] == "SUCCEEDED"
     assert llm.calls.count("director_led_planner_02") == 1
     assert len(llm.calls) == 1 + changes_relations
-    assert ws.path(output).read_text() == updated
+    prefix, section = old.rsplit("## Next work order\n", 1)
+    assert ws.path(output).read_text() == prefix + "## Next work order\n" + section.replace(
+        "Keep this example.", updated, 1
+    )
     assert base.read_text() == old
     assert json.loads((folder / "route_relations.json").read_text()) == {
         "schema_version": "route_relations/v1", "obligations": relations, "change_ref": output,

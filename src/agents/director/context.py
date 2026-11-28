@@ -7,6 +7,7 @@ from pathlib import Path
 
 from pace.artifacts.results import FINDINGS_INDEX_REF, relocate_links
 from pace.artifacts.workspace import _write_json_atomic, work_ref
+from pace.contracts.research.director_protocol import MAX_SURVEY_CALLS
 from pace.contracts.research.memory import (
     application_is_approved,
     application_review_bindings,
@@ -22,15 +23,28 @@ from pace.runtime.prompts import standard_workflow
 
 
 def load_index(root):
-    path = Path(root) / "memory/research_index.json"
-    return (
+    root = Path(root)
+    path = root / "memory/research_index.json"
+    index = (
         json.loads(path.read_text())
         if path.is_file()
         else {"obligations": {}, "applications": {}, "attempts": []}
     )
+    for attempt in index["attempts"]:
+        if "research_problem_ref" in attempt:
+            continue
+        folder = Path(attempt["result_ref"]).parent
+        outcome = folder / "rci/attempt_001/outcome.json"
+        if (root / outcome).is_file():
+            previous = read_json(root, str(outcome))
+            if previous["outcome"] == "HANDOFF":
+                attempt["research_problem_ref"] = previous["candidate_ref"] or str(
+                    folder / "assignment/task.json"
+                )
+    return index
 
 
-def director_archive_refs(root: Path) -> tuple[str, ...]:
+def director_archive_refs(root: Path, *, index=None) -> tuple[str, ...]:
     """Authorize the sources named by Host navigation, without making them required reading.
 
     Only known Host fields grant access. Links in mathematical manuscripts do not
@@ -49,7 +63,8 @@ def director_archive_refs(root: Path) -> tuple[str, ...]:
                 "problem_brief_ref",
             )
         )
-    index = load_index(root)
+    if index is None:
+        index = load_index(root)
     for obligation in index["obligations"].values():
         refs.extend((obligation["statement_ref"], obligation["scope_ref"]))
     for route in index.get("routes", {}).values():
@@ -59,6 +74,7 @@ def director_archive_refs(root: Path) -> tuple[str, ...]:
             (
                 attempt["change_ref"],
                 attempt["result_ref"],
+                attempt.get("research_problem_ref", ""),
                 attempt["attempt"].get("obstacle_ref", ""),
                 attempt["attempt"].get("reopen_condition_ref", ""),
             )
@@ -86,9 +102,9 @@ def director_decision_inputs(
     from pace.orchestrator.memory import RESEARCH_INDEX_REF, research_brief
 
     required = list(input_refs)
-    archives = list(director_archive_refs(root))
     focused = standard_workflow(root)
     index = load_index(root)
+    archives = list(director_archive_refs(root, index=index))
     expand = (
         assembling
         or focused
@@ -162,13 +178,23 @@ def director_decision_inputs(
         ),
         "memory_enabled": enabled(root),
         "brief": research_brief(
-            root, focused=focused, expand=expand, recent_refs=input_refs
+            root, focused=focused, expand=expand, recent_refs=input_refs, index=index
         ),
         "obligation_versions": {
             key: row["version"] for key, row in index["obligations"].items()
         },
         "route": index.get("current_route", {}),
-        "survey_remaining": max(0, 4 - surveys),
+        "rci_attempts": [
+            {
+                key: attempt[key]
+                for key in (
+                    "research_problem_ref", "branch_id", "obligation_versions", "result_ref"
+                )
+            }
+            for attempt in index["attempts"]
+            if attempt.get("research_problem_ref")
+        ],
+        "survey_remaining": max(0, MAX_SURVEY_CALLS - surveys),
         "latest_survey": latest[-1] if latest else "",
     }
 
@@ -265,11 +291,20 @@ def freeze_context(root: Path, assignment_ref: str, decision, input_refs) -> dic
         elif direct:
             archives.extend(sources)
     attempts = [
-        a for a in index.get("attempts", []) if related & set(a["obligation_ids"])
+        attempt
+        for attempt in index.get("attempts", [])
+        if related & set(attempt["obligation_ids"])
+        or (
+            decision.research_problem_ref
+            and attempt.get("research_problem_ref") == decision.research_problem_ref
+        )
     ]
     # A direct obstacle can outlive a revision. Other branches remain accessible
     # without turning every attempt at a common ancestor into required reading.
+    focused = standard_workflow(root)
     latest_change = ""
+    latest_obstacle = ()
+    latest_failed_obstacle = ()
     for attempt in attempts:
         obligation_ids = set(attempt["obligation_ids"])
         same_task = (
@@ -277,7 +312,25 @@ def freeze_context(root: Path, assignment_ref: str, decision, input_refs) -> dic
             or attempt["branch_id"] == decision.branch_id
         )
         obstacle = attempt["attempt"]["obstacle_ref"]
-        if obstacle:
+        if focused and decision.agent_id in {"rci", "planner"}:
+            reopen = attempt["attempt"].get("reopen_condition_ref", "")
+            notes = tuple(ref for ref in (obstacle, reopen) if ref)
+            archives.extend((*notes, attempt["change_ref"]))
+            if decision.agent_id == "planner":
+                continue  # The dispatch's change_refs already select the reason to replan.
+            if decision.research_problem_ref:
+                same_task = (
+                    attempt.get("research_problem_ref") == decision.research_problem_ref
+                )
+            else:
+                same_task = attempt["branch_id"] == decision.branch_id
+            if same_task:
+                latest_obstacle = notes
+                if notes and attempt["attempt"]["outcome"] in {
+                    "METHOD_OBSTRUCTION", "NOT_ESTABLISHED", "CONTEXT_GAP"
+                }:
+                    latest_failed_obstacle = notes
+        elif obstacle:
             (selected if same_task else archives).append(obstacle)
         versions = attempt.get("obligation_versions", {})
         if same_task and any(
@@ -285,6 +338,7 @@ def freeze_context(root: Path, assignment_ref: str, decision, input_refs) -> dic
             for i in related & obligation_ids
         ):
             latest_change = attempt["change_ref"]
+    selected.extend((*latest_failed_obstacle, *latest_obstacle))
     if latest_change:
         selected.append(latest_change)
     route_path = root / work_ref(root, "state/current_route.json")
@@ -379,10 +433,7 @@ def freeze_context(root: Path, assignment_ref: str, decision, input_refs) -> dic
         },
         "related_attempt_refs": [a["change_ref"] for a in attempts],
     }
-    if (
-        decision.agent_id in {"research", "rci", "prover"}
-        and standard_workflow(root)
-    ):
+    if focused and decision.agent_id in {"research", "rci", "prover"}:
         route_context["review_obligation_ids"] = [
             row["id"]
             for row in route_context["obligations"]
@@ -461,7 +512,8 @@ def validate_research_delivery(
         return payload
     from pace.agents.reporter import restore_reporter_delivery
 
-    restore_reporter_delivery(root, str(folder / "agent_result.json"))
+    result_ref = str(folder / "agent_result.json")
+    restore_reporter_delivery(root, result_ref)
     payload["reporter_ref"] = str(folder / "reporter_result.json")
     if "review_obligation_ids" in frozen:
         payload["review_obligation_ids"] = frozen["review_obligation_ids"]
@@ -473,6 +525,10 @@ def validate_research_delivery(
     ):
         raise ValueError("research delta must retain the assigned branch and obligation identities")
     payload.update(delta=delta, delta_ref=delta_ref)
+    if result["agent_id"] == "rci" and result.get("research_problem_ref"):
+        question = result["research_problem_ref"]
+        check_source_ownership(root, binding(root, question), local_result_ref=result_ref)
+        payload["research_problem_ref"] = question
     if "related_versions" in frozen:
         payload["related_versions"] = frozen["related_versions"]
     return payload

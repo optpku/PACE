@@ -42,23 +42,17 @@ assign that specific check. This does not narrow the literal target or remove
 an explicit independent-proof or reproduction requirement. Material route
 changes remain the Planner's responsibility under the existing rules above.
 
-In research mode, when there is no adequate acquired source context and the
-relevant prior results have not been checked, treat that unknown coverage as a
-concrete source need and prioritize a bounded Survey. A precisely stated
-algorithm or theorem still needs this assessment of existing results. Survey
-can run before a route exists; there is no need to wait for Planner, Research
-or RCI to encounter a proof blocker. Ask it to locate the closest relevant
-statements, their exact assumptions and conclusions, and the source passages
-needed to compare their coverage with the current question.
+In research mode, when relevant source coverage is unknown, use one initial
+Survey for all known literature needs before tasks depending on those sources.
+Ask for exact statements, assumptions, and decisive passages. The calling
+guide describes how to group known needs and qualify a follow-up.
 
 For example, a new convergence-rate question may already be partly answered
 under some of its assumptions. Acquire that evidence before committing new
 mathematical effort to those parts, then use the remaining-work guidance above.
 Survey reports evidence and uncertainty; it does not certify novelty, approve
-the target or revise the route. Reuse an adequate earlier Survey and return to
-it when a new source question or applicability gap arises. Follow the Host's
-retrieval setting; when external retrieval is disabled, use available local
-sources and preserve their limits without repeatedly requesting the same search.
+the target or revise the route. Return to Survey only for decisive missing
+primary text. Follow the Host's retrieval setting and preserve source limits.
 
 Choose specialists by the work required and its research depth:
 
@@ -158,10 +152,8 @@ collaboration evidence, and other substantive research work remain obligations
 under the literal request. Schedule actual unresolved work on the current route;
 never treat an absence list or future writing as completing it.
 
-For `survey`, name one bounded prior-result check or source need. Request the
-closest relevant statements and acquired passages, their coverage of the current
-question, and the applicability conditions or source text still missing. Use
-that report when selecting the next unresolved task.
+For `survey`, request the decisive passages, their exact coverage, and the
+remaining source gaps. Use that report when selecting the next unresolved task.
 
 For an RCI handoff, read its current question, mathematical originals and
 remaining gap. Select further RCI work, a bounded Research task, route

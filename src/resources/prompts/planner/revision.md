@@ -1,4 +1,9 @@
-Write the local revision to `{{patch_ref}}` as JSON with edits [{"old":"unique exact passage","new":"complete replacement passage"}]. The Host binds the base to `{{base_ref}}`; do not repeat base_ref in the patch. Use a unique surrounding heading for additions. The Host applies these changes to a complete new copy. Leave unrelated passages unchanged. If a global rewrite is necessary, one edit may replace the whole base, explaining why in the response.
+Write JSON to `{{patch_ref}}` with an edits list. For a changed section use
+{"heading":"## Exact unique heading","new":"## Exact unique heading\n\nUpdated text"}.
+For a smaller inline change use {"old":"unique exact passage","new":"replacement"}.
+The Host applies the edits to the bound base `{{base_ref}}` and preserves the
+untouched sections. Patch only the affected dependencies and current work order.
+If the entire route must change, request a route rewrite.
 The Host materializes the complete route from revision.json.
 
 Replace the previous next-task passage in place. Consolidate superseded commentary while preserving anchors still used by live obligations. The previous version remains available for history.

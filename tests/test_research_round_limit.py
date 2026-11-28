@@ -253,8 +253,101 @@ def test_cli_whole_acceptance_delivers_without_six_optional_application_reviews(
     assert transport.calls == calls
 
 
+@pytest.mark.parametrize("enabled", [True, False])
+def test_cli_director_passes_survey_retrieval_policy(tmp_path, monkeypatch, enabled):
+    urls = ["https://example.invalid/primary.txt", "https://example.invalid/lemma.txt"]
+    requests = []
+    transports = []
+
+    class SurveyTransport(RoundLimitTransport):
+        def complete_structured_result(self, prompt, *, call_name, **kwargs):
+            assert not self.web_search
+            if call_name.startswith("global_research_director_"):
+                policy = "enabled" if enabled else "disabled"
+                assert f"Host retrieval policy for Survey: {policy}." in prompt
+                if enabled:
+                    assert "The offline restriction applies to this Director call." in prompt
+            return super().complete_structured_result(prompt, call_name=call_name, **kwargs)
+
+        def complete_unstructured_result(self, prompt, *, workdir, call_name, ledger_context):
+            assert call_name == "director_led_survey_01"
+            assert self.web_search is enabled
+            assert f"Host URL retrieval: {'enabled' if enabled else 'disabled'}." in prompt
+            response = super().complete_unstructured_result(
+                prompt, workdir=workdir, call_name=call_name, ledger_context=ledger_context
+            )
+            stage = Path(workdir) / work_ref(workdir, "round1")
+            (stage / "source_manifest.json").write_text(
+                json.dumps({"items": [{"primary_artifact_url": url} for url in urls]}),
+                encoding="utf-8",
+            )
+            return response
+
+    def build(**settings):
+        transport = SurveyTransport()
+        transport.web_search = settings["web_search"]
+        transports.append(transport)
+        return transport
+
+    def fetch(origin):
+        requests.append(origin)
+        return b"Primary source text.", "text/plain", origin
+
+    monkeypatch.setattr("pace.agents.director.harness.build_llm", build)
+    monkeypatch.setattr("pace.runtime.sources._fetch_url", fetch)
+    problem = tmp_path / "problem.md"
+    problem.write_text(f"Prove 2+2=4. Check both sources: {', '.join(urls)}.", encoding="utf-8")
+    assert cli.main([
+        "run", "--problem", str(problem), "--problem-id", "survey-policy",
+        "--output", str(tmp_path), "--max-rounds", "1",
+        "--web-search-mode", "on" if enabled else "off", "--json",
+    ]) == 0
+    root = tmp_path / "survey-policy"
+    stage = root / "work/turn001/round1"
+    result = json.loads((stage / "agent_result.json").read_text(encoding="utf-8"))
+    assert result["status"] == "SUCCEEDED"
+    assert result["external_retrieval_enabled"] is enabled
+    assert requests == (urls if enabled else [])
+    if enabled:
+        acquired = list((stage / "sources").glob("item_*/file_*/primary.txt"))
+        assert len(acquired) == 1 and acquired[0].read_text() == "Primary source text."
+        assert len(list((stage / "sources").glob("item_*/file_*/lemma.txt"))) == 1
+    before = sum(len(transport.calls) for transport in transports)
+    assert cli.main(["resume", "--run-dir", str(root), "--json"]) == 0
+    assert sum(len(transport.calls) for transport in transports) == before
+    assert requests == (urls if enabled else [])
+    assert sum(t.calls.count("director_led_survey_01") for t in transports) == 1
+
+
 def test_cli_stops_uncharged_research_and_saves_limits_per_turn(tmp_path, monkeypatch, capsys):
-    transport = RoundLimitTransport()
+    class FollowupTransport(RoundLimitTransport):
+        def complete_structured_result(
+            self, prompt, *, workdir, call_name, ledger_context, **kwargs
+        ):
+            if call_name == "global_research_director_0002_receipt_correction":
+                assert "The same Survey work order already ran" in prompt
+                assert "missing decisive primary-source passage" in prompt
+                payload = {
+                    "action": "DISPATCH",
+                    "agent_id": "survey",
+                    "prompt_brief": "Locate the missing proof of the second addition lemma.",
+                    "rationale": "The first source lacks the proof of that lemma, which determines "
+                    "whether its hypotheses cover the assigned equality.",
+                    "input_refs": [work_ref(workdir, "round1/survey_deliverable.md")],
+                    "obligation_ids": ["target"],
+                    "branch_id": "b-target",
+                    "next_step_kind": "CONTINUE",
+                }
+                return self._reply(
+                    json.dumps(payload), workdir=workdir, call_name=call_name,
+                    ledger_context=ledger_context, structured=True,
+                )
+            return super().complete_structured_result(
+                prompt, workdir=workdir, call_name=call_name,
+                ledger_context=ledger_context, **kwargs,
+            )
+
+    transport = FollowupTransport()
     monkeypatch.setattr("pace.agents.director.harness.build_llm", lambda **settings: transport)
     problem = tmp_path / "problem.md"
     problem.write_text("Prove 2+2=4.\n")
@@ -273,6 +366,8 @@ def test_cli_stops_uncharged_research_and_saves_limits_per_turn(tmp_path, monkey
     assert view["latest_survey"] in view["required_refs"]
     assert view["latest_survey"] in transport.round_prompts[1] and view["survey_remaining"] == 3
     assert len(transport.round_prompts) == 2
+    assert transport.calls.count("global_research_director_0002_receipt_correction") == 1
+    assert transport.calls.count("director_led_survey_02") == 1
     assert "Remaining research rounds (including the next dispatch): 2" in transport.round_prompts[0]
     final = (root / "work/turn001/final_report.json").read_bytes()
     calls = len(transport.calls)

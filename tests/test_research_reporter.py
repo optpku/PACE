@@ -38,6 +38,52 @@ def test_reporter_replay_never_calls_author_or_reporter_again(ws, agent, monkeyp
     assert 'Do not write a delta' in delivery_instruction(ws.root, str(folder / 'research.md'), with_reporter=True)
 
 
+@pytest.mark.parametrize("ws", ["standard", "weak"], indirect=True)
+def test_defer_only_the_incomplete_standard_manuscript(ws, monkeypatch):
+    from pace.agents.director.findings import check_stage_findings
+    from pace.artifacts.results import committed_finding_refs
+    from pace.runtime.prompts import standard_workflow
+    from pace.runtime.semantic import StructuredSemanticResult
+
+    ref = deliver(ws, 1, reported=False)
+    original = str(Path(ref).with_name("research.md"))
+    standalone = str(Path(ref).parent / "findings/standalone.md")
+    ws.write_text(standalone, "A separate, complete standalone result.")
+    result = json.loads(ws.path(ref).read_text())
+    ws.write_json(ref, {**result, "published_refs": [standalone]})
+    llm = NativeFixture("research")
+    original_request = llm._request
+
+    def reply(messages, tools):
+        response = original_request(messages, tools)
+        function = response["choices"][0]["message"]["tool_calls"][0]["function"]
+        payload = json.loads(function["arguments"])
+        payload["delta"]["attempt"]["outcome"] = "NOT_ESTABLISHED"
+        payload["finding_refs"] = [original, standalone]
+        function["arguments"] = json.dumps(payload)
+        return response
+
+    monkeypatch.setattr(llm, "_request", reply)
+    saved = run_research_reporter(llm=llm, workdir=ws.root, result_ref=ref)
+    expected = (standalone,) if standard_workflow(ws.root) else (original, standalone)
+    assert committed_finding_refs(ws.root, ref) == expected
+    assert saved["payload"]["delta"]["change_ref"] == original
+    verified = []
+
+    def verify(**kwargs):
+        verified.append(kwargs["draft_ref"])
+        return StructuredSemanticResult(payload={
+            "stage_status": "PASS", "reuse_authorized": True, "publication": {"action": "NONE"},
+        }, host={})
+
+    monkeypatch.setattr("pace.agents.director.findings.verify_finding", verify)
+    for _ in range(2):
+        assert check_stage_findings(llm=llm, workdir=ws.root, completed_result_refs=[ref])
+    assert tuple(verified) == expected
+    assert run_research_reporter(llm=llm, workdir=ws.root, result_ref=ref) == saved
+    assert llm.calls == ["research_reporter_round1"]
+
+
 def test_reporter_acceptance_survives_projection_failure(ws, monkeypatch):
     ref = deliver(ws, 1, reported=False)
     llm = ProofPublicationTransport('NONE')

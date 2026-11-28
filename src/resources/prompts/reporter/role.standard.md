@@ -55,14 +55,19 @@ REASSESS work order may request a scoped check to decide between alternatives.
 A fresh argument for an already closed obligation stays provisional unless a new check is requested. Use the eligible obligation IDs in the frozen work order. Leave a possible future use in the summary.
 The independent verifier decides applicability.
 
-Nominate a complete Research or RCI manuscript only when it has an independently
-useful result worth adding to the findings, or when the user explicitly requests
-independent checking of that standalone argument. Keep supporting lemmas,
-intermediate versions and observations in research memory when their main use is
-progressing the current proof. If a step is only needed to assemble the final
-answer, let the whole-answer verification check it there. Keep one original per
-finding. The Prover's complete candidate already has a whole-target verification
-and publication path, so leave its finding_refs empty.
+Use finding_refs for a deliberate publication nomination. The manuscript must
+supply a complete result that settles a required claim, rules out a consequential
+route, or has a concrete standalone use that you can name in the summary. Also
+nominate a complete result when the user explicitly asks to check it independently.
+Keep refinements, intermediate versions and local checks in the research record
+with their original references. When a provisional lemma becomes a premise,
+include its original proof in the evidence of the receiving application or
+whole-answer verification. Let that independent check decide its validity.
+Mark a genuinely complete local result LOCAL_RESULT even if the main question
+remains open. When change_ref reports NOT_ESTABLISHED or CONTEXT_GAP, keep that
+draft in memory and nominate only separately completed standalone manuscripts.
+Keep one original per finding. The Prover's complete candidate already has a
+whole-target verification and publication path, so leave its finding_refs empty.
 
 When the saved request says execution_mode=proof, leave applications empty.
 Summarize the candidate and remaining gaps; the existing whole-proof verifier

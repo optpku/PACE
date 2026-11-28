@@ -250,6 +250,95 @@ def test_probes_run_individually_on_their_own_statement(
     ]
 
 
+def test_cli_continues_saved_rci_question_and_reuses_finished_phase(tmp_path, monkeypatch):
+    from pace.agents.rci import assignment
+    from pace.agents.director.context import load_index
+
+    class ContinuationTransport(RoundLimitTransport):
+        def complete_structured_result(self, prompt, *, workdir, call_name, ledger_context, **kwargs):
+            root = Path(workdir)
+            question = work_ref(root, "round1/assignment/task.json")
+            obstacle = work_ref(root, "round1/rci/attempt_001/001_conjecture_explorer/change.md")
+            role = ledger_context["role"]
+            if call_name.startswith("global_research_director_"):
+                if call_name.endswith("0002"):
+                    assert question in prompt and obstacle in prompt
+                corrected = call_name.endswith("_receipt_correction")
+                if corrected:
+                    assert "This RCI work order already ran" in prompt
+                payload = {
+                    "action": "DISPATCH", "agent_id": "rci",
+                    "next_step_kind": "CONTINUE", "branch_id": "b-target",
+                    "obligation_ids": ["target"], "change_refs": [],
+                    "prompt_brief": (
+                        "Use a block estimate to address the recorded obstacle."
+                        if corrected else "Explore whether a one-step estimate gives convergence."
+                    ),
+                    "research_operation": "CONTINUE_PROBLEM" if corrected else "NEW_PROBLEM",
+                    "research_problem_ref": question if corrected else "",
+                    "input_refs": [question] if corrected else [work_ref(root, "input/problem.md")],
+                }
+            elif role.startswith("rci_"):
+                record = json.loads((root / ledger_context["call_ref"]).read_text())
+                directory = (root / record["source_prompt_ref"]).parent
+                if role == "rci_mechanism_explorer":
+                    inputs = json.loads((directory / "prompt_assembly.json").read_text())[
+                        "phase_inputs"
+                    ]["input_refs"]
+                    assert inputs["CANDIDATE"] == [question]
+                    assert obstacle in inputs["SOURCE"]
+                else:
+                    assert role == "rci_conjecture_explorer"
+                (directory / "change.md").write_text("The estimate leaves a boundedness gap.")
+                payload = {"action": "HANDOFF"}
+            elif role == "RESEARCH_REPORTER":
+                note = next(ref for ref in ledger_context["input_refs"] if ref.endswith("/change.md"))
+                payload = {"summary": "The original boundedness gap remains.", "delta": {
+                    "schema_version": "research_delta/v1", "branch_id": "b-target",
+                    "obligation_ids": ["target"], "change_ref": note, "applications": [],
+                    "attempt": {"outcome": "METHOD_OBSTRUCTION", "obstacle_ref": note,
+                                "reopen_condition_ref": note},
+                }}
+            else:
+                return super().complete_structured_result(
+                    prompt, workdir=workdir, call_name=call_name, ledger_context=ledger_context, **kwargs
+                )
+            return self._reply(
+                json.dumps(payload), workdir=root, call_name=call_name,
+                ledger_context=ledger_context, structured=True,
+            )
+
+    transport = ContinuationTransport("rci")
+    monkeypatch.setattr("pace.agents.director.harness.build_llm", lambda **_: transport)
+    problem = tmp_path / "problem.md"
+    problem.write_text("Investigate convergence of the bounded sequence.\n")
+    write = assignment._write_text_atomic
+
+    def interrupt_handoff(path, text):
+        if path.parent.name == "round2":
+            raise KeyboardInterrupt
+        write(path, text)
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(assignment, "_write_text_atomic", interrupt_handoff)
+        assert cli.main([
+            "run", "--problem", str(problem), "--output", str(tmp_path),
+            "--problem-id", "rci", "--max-rounds", "2", "--resource-variant",
+            "standard", "--json",
+        ]) == 130
+    root = tmp_path / "rci"
+    calls = list(transport.calls)
+    assert sum("conjecture_explorer" in name for name in calls) == 1
+    assert sum("mechanism_explorer" in name for name in calls) == 1
+    assert calls.count("global_research_director_0002_receipt_correction") == 1
+    assert cli.main(["resume", "--run-dir", str(root), "--json"]) == 0
+    assert transport.calls == [*calls, "research_reporter_round2"]
+    question = work_ref(root, "round1/assignment/task.json")
+    assert [a["research_problem_ref"] for a in load_index(root)["attempts"]] == [question, question]
+    assert cli.main(["resume", "--run-dir", str(root), "--json"]) == 0
+    assert transport.calls == [*calls, "research_reporter_round2"]
+
+
 def test_cli_resumes_interrupted_review_after_committed_mechanism(
     tmp_path, monkeypatch
 ):

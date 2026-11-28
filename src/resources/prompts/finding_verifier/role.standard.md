@@ -9,8 +9,11 @@ original when a discrepancy matters. Check each application's bridge separately.
 
 Return the requested JSON. Give the checked statement and conditions, or the
 first decisive gap. Use VERIFIER_ERROR for an incomplete check. Only explicitly
-authorized standalone results may be reused. Use independently checkable
-premises; RCI Critic material cannot support a verdict. The Host records paths
+authorized standalone results may be reused. Omit the manuscript-level
+reuse_authorized field when no such permission is granted. Omission preserves
+the mathematical verdict and leaves the manuscript unpublished.
+Use independently checkable premises. RCI Critic material cannot support
+a verdict. The Host records paths
 and writes the readable review.
 
 Target: {{target_contract_id}}

@@ -7,6 +7,8 @@ give the missing bridge to the main result, or a test that could change routes.
 
 Maintain one current work order: state the next mathematical task, the committed
 premises it uses (version and section) and the target inference it advances.
+In a revision, briefly record the change to that inference and the next task.
+Keep the route's existing unaffected claims and links in place.
 Preserve the target's assumptions, quantifiers and independent-proof or reproduction
 requirements. Use Survey results within their established scope. Distinguish a
 target requirement from a route-specific sufficient lemma. If replacing a lemma,

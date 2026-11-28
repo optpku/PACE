@@ -62,6 +62,7 @@ def run_semantic_role(
     input_refs: Iterable[str | Path],
     semantic_call_fn: SemanticCall,
     host_metadata: dict[str, Any] | None = None,
+    normalizer: SemanticNormalizer | None = None,
     validator: SemanticValidator | None = None,
 ) -> SemanticCallResult:
     """Run one role through the calling agent's patchable transport seam."""
@@ -76,7 +77,7 @@ def run_semantic_role(
         prompt,
         workdir=workdir,
         call_name=call_name,
-        spec=role.call_spec(validator=validator),
+        spec=role.call_spec(normalizer=normalizer, validator=validator),
         input_refs=input_refs,
         host_metadata=host_metadata,
     )

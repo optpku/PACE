@@ -18,6 +18,7 @@ from pace.agents.roles import SemanticRoleSpec
 from pace.artifacts.workspace import work_ref
 from pace.contracts.research.director_protocol import (
     DIRECTOR_PROTOCOL_SCHEMA_VERSION,
+    MAX_SURVEY_CALLS,
     DirectorProtocolError,
     director_decision_schema,
     director_reference_errors,
@@ -86,6 +87,7 @@ def run_global_director(
     control_context: str = "",
     decision_inputs: Mapping[str, Any] | None = None,
     on_accept: Callable[[dict[str, Any]], None] | None = None,
+    survey_retrieval_enabled: bool = False,
     proof_states_remaining: int | None = None,
     research_rounds_remaining: int | None = None,
     call_name: str = "global_research_director",
@@ -126,6 +128,13 @@ def run_global_director(
             "director/memory_task.md", workdir=workdir, brief=decision_inputs["brief"]
         )
 
+    final_prompt += (
+        "\nHost retrieval policy for Survey: enabled. The offline restriction applies "
+        "to this Director call. Ask Survey to acquire missing primary sources needed "
+        "for the task, respecting any source limits in the user's request.\n"
+        if survey_retrieval_enabled
+        else "\nHost retrieval policy for Survey: disabled. Assign local source review.\n"
+    )
     survey_remaining = decision_inputs["survey_remaining"]
     if decision_inputs["latest_survey"]:
         final_prompt += render_prompt_template(
@@ -169,6 +178,43 @@ def run_global_director(
                 )
             except DirectorProtocolError as exc:
                 issues.append(exc)
+            surveys = [
+                (task, "" if index == 0 else f"parallel_tasks/{index - 1}/")
+                for index, task in enumerate((decision, *decision.parallel_tasks))
+                if task.action.value == "DISPATCH" and task.agent_id == "survey"
+            ]
+            if len(surveys) > 1:
+                issues.append(
+                    DirectorProtocolError(
+                        "Combine the source needs into one Survey and remove the second Survey.",
+                        field="parallel_tasks",
+                        related_fields=("prompt_brief", "input_refs", "rationale"),
+                    )
+                )
+            if survey_remaining < MAX_SURVEY_CALLS:
+                for task, prefix in surveys:
+                    repeated = _repeated_survey_assignment(Path(workdir), task)
+                    if repeated or not task.rationale:
+                        repeat_note = (
+                            f"The same Survey work order already ran in {repeated}. "
+                            if repeated
+                            else ""
+                        )
+                        issues.append(
+                            DirectorProtocolError(
+                                repeat_note
+                                + "Identify the missing decisive primary-source passage and the "
+                                "research decision it blocks. If the originals are already "
+                                "available, use them for the next mathematical task.",
+                                field=prefix + "rationale",
+                                related_fields=(
+                                    prefix + "agent_id",
+                                    prefix + "prompt_brief",
+                                    prefix + "input_refs",
+                                    prefix + "change_refs",
+                                ),
+                            )
+                        )
             if memory_enabled:
                 for index, task in enumerate((decision, *decision.parallel_tasks)):
                     if task.action.value != "DISPATCH":
@@ -207,6 +253,25 @@ def run_global_director(
                                 "a committed route already exists; use REPLAN with concrete change_refs",
                                 field=prefix + "next_step_kind",
                                 related_fields=(prefix + "change_refs",),
+                            )
+                        )
+                    if task.agent_id == "rci" and (
+                        repeated := _repeated_rci_assignment(Path(workdir), task, decision_inputs)
+                    ):
+                        issues.append(
+                            DirectorProtocolError(
+                                f"This RCI work order already ran in {repeated}. "
+                                "Use its recorded question and obstacle. Give a different next "
+                                "mathematical step toward the target or cite new evidence that "
+                                "changes this test.",
+                                field=prefix + "prompt_brief",
+                                related_fields=(
+                                    prefix + "agent_id",
+                                    prefix + "research_operation",
+                                    prefix + "research_problem_ref",
+                                    prefix + "input_refs",
+                                    prefix + "change_refs",
+                                ),
                             )
                         )
             issues.extend(
@@ -414,6 +479,51 @@ def run_global_director(
             "output_dirs": [],
         },
     )
+
+
+def _repeated_survey_assignment(root: Path, task) -> str:
+    """An unchanged source request in the same turn provides no new lead."""
+    for result_path in (root / work_ref(root)).glob("round*/agent_result.json"):
+        if json.loads(result_path.read_text(encoding="utf-8")).get("agent_id") != "survey":
+            continue
+        assignment = result_path.with_name("director_decision.json")
+        previous = json.loads(assignment.read_text(encoding="utf-8"))
+        if (
+            task.prompt_brief.split() == previous["prompt_brief"].split()
+            and set(task.input_refs) == set(previous["input_refs"])
+            and set(task.change_refs) == set(previous.get("change_refs", ()))
+        ):
+            return assignment.relative_to(root).as_posix()
+    return ""
+
+
+def _repeated_rci_assignment(root: Path, task, decision_inputs: Mapping) -> str:
+    """Reject exact replays of a completed work order at the same scope."""
+    versions = {
+        ident: decision_inputs["obligation_versions"].get(ident)
+        for ident in task.obligation_ids
+    }
+    for attempt in reversed(decision_inputs.get("rci_attempts", ())):
+        if (
+            attempt["branch_id"] != task.branch_id
+            or attempt["obligation_versions"] != versions
+            or (
+                task.research_problem_ref
+                and task.research_problem_ref != attempt["research_problem_ref"]
+            )
+        ):
+            continue
+        assignment_ref = Path(attempt["result_ref"]).parent / "assignment/task.json"
+        previous = json.loads((root / assignment_ref).read_text(encoding="utf-8"))
+        evidence = set((*task.input_refs, *task.change_refs)) - {
+            task.research_problem_ref, attempt["research_problem_ref"]
+        }
+        if (
+            task.prompt_brief.split() == previous["prompt_brief"].split()
+            and evidence.issubset(previous["input_refs"])
+        ):
+            return attempt["result_ref"]
+    return ""
 
 
 def _normalize_parallel_purpose(payload: dict[str, Any]) -> dict[str, Any]:

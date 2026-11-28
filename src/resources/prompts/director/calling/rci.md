@@ -12,11 +12,18 @@ direction, its first concrete gap, and a useful return condition in
 `prompt_brief`. Use `NEW_PROBLEM` when the question needs formulation or
 the assignment explicitly changes its mathematical statement. Use
 `CONTINUE_PROBLEM` with the exact existing `research_problem_ref` in
-`input_refs` when the statement stays fixed.
+`input_refs` when the statement stays fixed. Use the exact
+`research_problem_ref` recorded for the prior attempt. It may be an accepted
+candidate or the frozen assignment defining the original question. Testing a
+new lemma, parameter range, or method within that question is continuation.
 
-For continued work, send the original mechanism, review and gap files relevant
-to the next attempt. Specify new evidence, a different mathematical move, or a
-relation to test. For new or revised questions, include any directly relevant
+For continued work, read the recorded obstacle and reopening condition. Name
+the next missing implication to the original target and what this attempt would
+decide about it. Reopen a failed mechanism only with new evidence, a changed
+assumption, or a different mathematical move that addresses the obstacle. Use
+Research for a fixed local derivation with a clear method. When an alternative
+only strengthens an auxiliary result and its link to the target is still
+missing, address that link or reassess the route. For new or revised questions, include any directly relevant
 existing candidate statements and acquired source files in `input_refs`.
 Choose whole evidence files with their source locators.
 

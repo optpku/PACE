@@ -87,6 +87,7 @@ def verify_finding(
         ),
         input_refs=input_refs,
         semantic_call_fn=semantic_call,
+        normalizer=_normalize_finding_publication,
         host_metadata={
             "agent_id": "finding_verifier",
             "round_index": round_index,
@@ -325,6 +326,7 @@ def _verify_compact(
         ),
         input_refs=tuple(dict.fromkeys((draft_ref, *refs))),
         semantic_call_fn=semantic_call,
+        normalizer=_normalize_finding_publication,
         host_metadata={
             "agent_id": "finding_verifier",
             "round_index": round_index,
@@ -367,7 +369,13 @@ def _finding_receipt_schema(request=None):
                 "type": "string",
                 "enum": ["PASS", "MATH_FAIL", "VERIFIER_ERROR"],
             },
-            "reuse_authorized": {"type": "boolean"},
+            "reuse_authorized": {
+                "type": "boolean",
+                "description": (
+                    "Optional manuscript-level authorization. Only true permits "
+                    "standalone publication and reuse; omission leaves both unauthorized."
+                ),
+            },
             "publication": open_object(
                 {
                     "action": {"type": "string", "enum": ["CREATE", "UPDATE", "NONE"]},
@@ -453,19 +461,24 @@ def build_instructions(
     )
 
 
-def _validate_finding_receipt(payload):
+def _normalize_finding_publication(payload):
+    """Preserve a mathematical verdict that has no standalone authorization."""
     if (
         payload.get("stage_status") == "PASS"
-        and type(payload.get("reuse_authorized")) is not bool
+        and "reuse_authorized" not in payload
+        and _as_dict(payload.get("publication")).get("action") in ("CREATE", "UPDATE")
     ):
-        return [
-            {
-                "stage": "finding_receipt",
-                "json_pointer": "/reuse_authorized",
-                "reason_code": "finding_authorization_missing",
-                "message": "Explicitly decide whether this independently checked finding is authorized for reuse.",
-            }
-        ]
+        return {
+            **payload,
+            "publication": {
+                "action": "NONE",
+                "reason": "No explicit manuscript-level reuse authorization.",
+            },
+        }
+    return payload
+
+
+def _validate_finding_receipt(payload):
     diagnostics = validate_publication(payload)
     if (
         payload.get("stage_status") == "PASS"

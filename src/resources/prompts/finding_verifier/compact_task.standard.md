@@ -20,8 +20,10 @@ The Host has already recorded paths and versions. Leave hashes and inventories
 to the Host. Return JSON only. The Host writes any readable review from it.
 
 Give a short summary with the exact claim and conditions checked or the first
-material gap. On PASS, explicitly set reuse_authorized. When publication is requested, return
-CREATE, UPDATE or NONE, using the current R path for UPDATE.
+material gap. Manuscript-level reuse_authorized is optional. Set it to true
+only when you authorize reuse of the checked standalone result. When publication
+is requested, return CREATE, UPDATE or NONE, using the current R path for UPDATE.
+Omission preserves the mathematical verdict and leaves the manuscript unpublished.
 For each numbered application return its application number, status
 (APPLICABLE, NOT_ESTABLISHED or VERIFIER_ERROR) and the decisive reason, usually
 one sentence. Expand only where necessary to explain a mathematical issue.

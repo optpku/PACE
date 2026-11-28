@@ -1069,8 +1069,9 @@ def test_declared_frozen_finding_keeps_original_after_update(ws):
 
 
 @pytest.mark.parametrize("ws", ["weak", "standard"], indirect=True)
+@pytest.mark.parametrize("authorize_manuscript", [True, False])
 def test_same_theorem_and_missing_condition_through_both_verifier_interfaces(
-    ws, monkeypatch
+    ws, monkeypatch, authorize_manuscript
 ):
     from test_research_reporter import NativeFixture
 
@@ -1131,6 +1132,8 @@ def test_same_theorem_and_missing_condition_through_both_verifier_interfaces(
                     for n, item in enumerate(request["applications"], 1)
                 ],
             }
+        if not authorize_manuscript:
+            payload.pop("reuse_authorized")
         return transport.tool("submit_result", payload)
 
     monkeypatch.setattr(transport, "_request", model)
@@ -1143,6 +1146,13 @@ def test_same_theorem_and_missing_condition_through_both_verifier_interfaces(
     assert {
         a["obligation_id"]: a["status"] for a in index["applications"].values()
     } == {"target": "APPLICABLE", "lemma-1": "NOT_ESTABLISHED"}
+    receipt = ws.path(manuscript).with_suffix(".verification.json")
+    verdict = json.loads(receipt.read_text())["verdict"]
+    assert verdict["stage_status"] == "PASS"
+    assert verdict.get("reuse_authorized") is (True if authorize_manuscript else None)
+    assert verdict["publication"]["action"] == ("CREATE" if authorize_manuscript else "NONE")
+    publish_stage_findings(workdir=ws.root, completed_result_refs=completed)
+    assert ws.path("results/findings/R0001.md").is_file() is authorize_manuscript
 
 
 def test_application_only_review_omits_publication_without_sharing_verdicts(ws, monkeypatch):
@@ -1154,9 +1164,10 @@ def test_application_only_review_omits_publication_without_sharing_verdicts(ws, 
     def model(messages, tools):
         schema = next(t["function"]["parameters"] for t in tools if t["function"]["name"] == "submit_result")
         assert "publication" not in schema["required"]
+        assert "reuse_authorized" not in schema["required"]
         assert schema["properties"]["publication"]["properties"]["action"]["enum"] == ["NONE"]
         return transport.tool("submit_result", {
-            "stage_status": "PASS", "reuse_authorized": True,
+            "stage_status": "PASS",
             "summary": "The bound holds under its positivity condition.",
             "application_checks": [
                 {"application": 1, "status": "APPLICABLE", "reason": "The premise holds."},

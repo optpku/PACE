@@ -577,6 +577,7 @@ class DirectorHarness:
         target_contract_id: str,
     ) -> DirectorLedEngine:
         llm = self._llm()
+        survey_llm = self._survey_llm()
         max_proof_states = json.loads(
             ws.path(work_ref(ws.root, "state/director_state.json")).read_text(
                 encoding="utf-8"
@@ -595,6 +596,7 @@ class DirectorHarness:
                 decision_inputs=kwargs["decision_inputs"],
                 on_accept=kwargs["on_accept"],
                 control_context=str(kwargs.get("control_context") or ""),
+                survey_retrieval_enabled=bool(getattr(survey_llm, "web_search", False)),
                 proof_states_remaining=kwargs["proof_states_remaining"],
                 research_rounds_remaining=kwargs["research_rounds_remaining"],
                 host_metadata={
@@ -618,7 +620,7 @@ class DirectorHarness:
 
         specialists = build_default_specialist_handlers(llm=llm, workdir=ws.root)
         specialists["survey"] = build_default_specialist_handlers(
-            llm=self._survey_llm(), workdir=ws.root
+            llm=survey_llm, workdir=ws.root
         )["survey"]
 
         from pace.agents.reporter import run_research_reporter

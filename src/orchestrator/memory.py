@@ -367,7 +367,9 @@ def commit_research_memory(root: Path, result_refs=None) -> None:
                 context_ref,
                 *(
                     payload[k]
-                    for k in ("route_ref", "delta_ref", "reporter_ref")
+                    for k in (
+                        "route_ref", "delta_ref", "reporter_ref", "research_problem_ref"
+                    )
                     if k in payload
                 ),
             ]
@@ -455,6 +457,11 @@ def _apply_research_commit(index, record, commit_ref):
                 **delta,
                 "commit_ref": commit_ref,
                 "result_ref": record["result_ref"],
+                **(
+                    {"research_problem_ref": payload["research_problem_ref"]}
+                    if payload.get("research_problem_ref")
+                    else {}
+                ),
                 "related_versions": payload.get(
                     "related_versions", delta["obligation_versions"]
                 ),
@@ -742,13 +749,16 @@ def research_progress(index: dict) -> tuple[dict, dict]:
     }
 
 
-def research_brief(root: Path, *, focused=False, expand=False, recent_refs=()) -> str:
+def research_brief(
+    root: Path, *, focused=False, expand=False, recent_refs=(), index=None
+) -> str:
     """Compact selection prompt; detailed manuscripts remain referenced on demand."""
     from pace.contracts.research.memory import enabled, read_json
 
     if not enabled(root):
         return ""
-    index = read_json(root, RESEARCH_INDEX_REF)
+    if index is None:
+        index = read_json(root, RESEARCH_INDEX_REF)
     counts, target_progress = research_progress(index)
     obligations = index["obligations"]
     attempts = index["attempts"][-6:]
@@ -820,8 +830,10 @@ def research_brief(root: Path, *, focused=False, expand=False, recent_refs=()) -
                             "branch_id",
                             "change_ref",
                             "attempt",
+                            "research_problem_ref",
                             "result_ref",
                         )
+                        if k in a
                     }
                     for a in attempts
                 ],

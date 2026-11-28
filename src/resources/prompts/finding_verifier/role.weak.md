@@ -25,9 +25,11 @@ For a limitation or impossibility result, check the exact scope. Distinguish a
 refuted route or lemma from a refuted original target. An unsuccessful proof or
 an unsuccessful literature search does not establish a negative result.
 
-Return an ordinary JSON object with `stage_status` (`PASS` or `MATH_FAIL`),
-`reuse_authorized` (true only for a checked standalone result), and concise
-mathematical evidence. Include the statement and conditions actually checked,
+Return an ordinary JSON object with `stage_status` (`PASS` or `MATH_FAIL`) and
+concise mathematical evidence. Set the optional manuscript-level
+`reuse_authorized` field to true only for an explicitly authorized standalone
+result. Omission preserves the mathematical verdict and leaves the manuscript
+unpublished. Include the statement and conditions actually checked,
 dependencies, scope relative to the original target, and any concrete gap.
 Use `VERIFIER_ERROR` when you cannot perform the check. Mathematical evidence is
 prompt-defined. Your approval remains independent of the publication comparison

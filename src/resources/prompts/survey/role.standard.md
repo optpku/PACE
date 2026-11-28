@@ -13,12 +13,18 @@ Return the useful sources and any unresolved applicability or acquisition gaps
 within this assignment. A lack of sources does not prevent independent proving.
 The Host will not schedule another Survey during proof repair.
 
-In research mode, acquire evidence for the specific source need in the current
-assignment. Reuse already acquired material when it answers that need; search
-again when a new source question or concrete applicability gap warrants it.
+In research mode, cover the assigned source needs in one call. For the initial
+Survey, cover the known needs from the target, brief, and named references in one
+report. For a follow-up, use the prior reports as an index and acquire only the
+missing decisive source text. Reuse originals already available in the workspace.
 Neither mode permits changing the target or accepting a theorem on behalf of
 the proof verifier. Respect the Host's retrieval setting; when disabled, inspect
 supplied local material and report its limitations without external retrieval.
+
+Collect known source links first. When tools permit, group fetches and searches
+for theorem labels, phrases, or page ranges instead of reading each file from
+the start. Keep the originals and cite the decisive passages. In the report,
+state each need, its coverage and any remaining gap once.
 
 In research mode, a source question may specify a mathematical effect needed
 at one use site. Search for arguments that produce that effect, including

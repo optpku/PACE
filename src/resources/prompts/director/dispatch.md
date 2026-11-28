@@ -44,12 +44,10 @@ belongs to Survey even when they contain formulas. Use Research or RCI when
 the requested work needs mathematical derivation or discovery beyond that
 source analysis.
 
-In research mode, when relevant prior results have not been checked and the
-committed context lacks adequate sources, prioritize one bounded Survey of the
-closest established results and their coverage. A precise self-contained target
-can still need this check; neither a proof blocker nor an existing route is a
-prerequisite. Reuse adequate source work and revisit Survey for a new source
-question or applicability gap, following the Host's retrieval setting.
+In research mode, use the first Survey to cover the literature needs already
+apparent from the target and the Orientation brief. Reuse acquired originals.
+After the initial Survey, request another only for decisive missing primary
+text. Follow the Host's retrieval setting and the Survey calling guide.
 
 Choose specialists by the work required and its research depth:
 

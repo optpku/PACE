@@ -3,6 +3,9 @@
 Develop mathematics for the exact supplied candidate. Preserve its assumptions,
 quantifiers and conclusion. Use the assigned local objective to derive a useful
 intermediate, build a construction, or carry out a decisive calculation.
+If CANDIDATE is a saved assignment, its prompt_brief defines the original
+question. Read the supplied prior gap before proceeding with the current work
+order. The old assignment is research context and confers no proof authority.
 For a repair, preserve the useful parts of the named mechanism and address the
 diagnosis. Identify the first load-bearing step, dependencies and applicability
 conditions. An assumption needed by your route is not a new premise of the task.

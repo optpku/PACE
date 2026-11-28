@@ -98,8 +98,12 @@ def build_rci_handler(*, llm, workdir):
             "Authority: SEARCH_CONTEXT_ONLY",
             f"Outcome: {saved['outcome']} ({saved['reason']})",
         ]
-        if saved["candidate_ref"]:
-            sections.append("## Current question\n" + link(saved["candidate_ref"]))
+        problem_ref = (
+            saved["candidate_ref"]
+            or kwargs["decision"].research_problem_ref
+            or kwargs["context"]["assignment_ref"]
+        )
+        sections.append("## Current question\n" + link(problem_ref))
         if saved["evidence_refs"]:
             latest = saved["evidence_refs"][-1]
             sections.append("## Latest original research note\n" + link(latest))
@@ -121,6 +125,7 @@ def build_rci_handler(*, llm, workdir):
                 reason_code=saved["reason"],
             ).to_json(),
             "published_refs": refs,
+            "research_problem_ref": problem_ref,
             "manuscript_refs": saved["manuscript_refs"],
             "manuscript_dependencies": saved["manuscript_dependencies"],
             "critic_derivations": saved["critic_derivations"],

@@ -28,6 +28,7 @@ MEMORY_DIRECTOR_FIELDS = {
 NEXT_STEP_KINDS = {"INITIAL_PLAN", "CONTINUE", "APPLY_EXISTING", "REPLAN", "REASSESS"}
 DIRECTOR_ACTIONS = frozenset({"DISPATCH", "STOP"})
 DIRECTOR_STOP_REASONS = frozenset({"BUDGET_EXHAUSTED", "NO_ACTIONABLE_TASK"})
+MAX_SURVEY_CALLS = 4
 DISPATCHABLE_AGENT_IDS = frozenset(
     {"framer", "planner", "survey", "rci", "research", "prover"}
 )
@@ -147,7 +148,7 @@ class DirectorProtocolError(ValueError):
 
 
 def director_decision_schema(
-    *, survey_calls_remaining: int = 4, memory_enabled: bool = False
+    *, survey_calls_remaining: int = MAX_SURVEY_CALLS, memory_enabled: bool = False
 ) -> dict[str, Any]:
     """Describe scheduling fields; input paths are reading suggestions."""
 
